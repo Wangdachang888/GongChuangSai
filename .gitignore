@@ -1,0 +1,45 @@
+# ============================================================
+# GongChuangSai  STM32F407 + Keil MDK 工程
+# ============================================================
+
+# ---------- Keil MDK 构建输出目录 ----------
+# 每个工程副本下的构建目录（Objects/Listings/可执行文件）都不入库
+MDK-ARM/*/
+!MDK-ARM/*.uvprojx
+*.uvguix.*
+*.uvoptx
+*.uvopt
+*.dep
+*.lnp
+*.lst
+*.axf
+*.crf
+*.o
+*.d
+*.map
+*.hex
+*.bin
+*.iex
+*.build_log.htm
+build_*.log
+
+# ---------- 手工备份与临时文件 ----------
+_backup_*/
+_tmp_d36a/
+tmp/
+*.bak
+*~
+
+# ---------- 压缩包（内容已由对应目录跟踪，避免重复占空间） ----------
+*.zip
+*.7z
+*.rar
+
+# ---------- 编辑器 / 系统 ----------
+.vscode/
+.idea/
+__pycache__/
+*.pyc
+Thumbs.db
+desktop.ini
+.DS_Store

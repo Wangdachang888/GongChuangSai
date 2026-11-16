@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>Kart S3 日志查看器</title>
+<style>
+:root{--bg:#12141a;--fg:#e6e8ee;--dim:#8b91a1;--acc:#4ea8ff;--warn:#ffb020;--bad:#ff5f56;--ok:#3ddc97}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.5 Consolas,Menlo,monospace}
+header{padding:10px 14px;border-bottom:1px solid #2a2e3a;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+h1{font-size:15px;margin:0;font-weight:600}
+#drop{border:1px dashed #3a4050;padding:6px 12px;border-radius:6px;color:var(--dim);cursor:pointer}
+#drop.on{border-color:var(--acc);color:var(--acc)}
+main{display:grid;grid-template-columns:1fr 350px;gap:12px;padding:12px}
+.card{background:#171a22;border:1px solid #262b36;border-radius:8px;padding:10px}
+canvas{width:100%;display:block;background:#0d0f14;border-radius:6px;cursor:crosshair}
+#slider{width:100%;margin:0 0 8px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+td{padding:2px 4px;border-bottom:1px solid #21252f}
+td:first-child{color:var(--dim);white-space:nowrap}
+td:last-child{text-align:right;font-variant-numeric:tabular-nums}
+#events{max-height:300px;overflow:auto;font-size:12px;margin-top:6px}
+#events div{padding:3px 5px;border-bottom:1px solid #21252f;cursor:pointer;display:flex;justify-content:space-between;gap:8px}
+#events div:hover{background:#20242e}
+.tag{font-size:10px;padding:0 5px;border-radius:3px;background:#2a303c;color:var(--dim)}
+.t-stop{background:#4a2020;color:#ff9a95}
+.t-lost{background:#4a3a10;color:#ffb020}
+.t-lock{background:#123a2a;color:#3ddc97}
+.t-loop{background:#1d2f52;color:#4ea8ff}
+.t-phase{background:#33264a;color:#c6a8ff}
+.t-ovr{background:#4a1520;color:#ff5f56}
+.legend span{margin-right:12px;color:var(--dim)}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px;vertical-align:-1px;margin-right:4px}
+small{color:var(--dim)}
+b{font-size:12px;letter-spacing:.5px}
+</style>
+</head>
+<body>
+<header>
+<h1>Kart S3 日志查看器</h1>
+<label id="drop">把 VOFA 的 .csv 拖进来 / 点击选择<input id="file" type="file" accept=".csv" hidden></label>
+<span id="meta"><small>未加载</small></span>
+</header>
+<main>
+<div>
+<div class="card">
+<div class="legend"><span><i class="sw" style="background:#4ea8ff"></i>跟随(录制)</span><span><i class="sw" style="background:#ff5f56"></i>倒车(复现)</span><span><i class="sw" style="background:#ffb020"></i>满舵</span><span><i class="sw" style="background:#fff"></i>当前时刻</span><span>点图或拖滑块定位</span></div>
+<canvas id="path" height="440"></canvas>
+</div>
+<div class="card" style="margin-top:12px">
+<input id="slider" type="range" min="0" max="0" value="0">
+<canvas id="strip" height="210"></canvas>
+</div>
+</div>
+<div>
+<div class="card"><b>该时刻车辆状态</b><table id="state"></table></div>
+<div class="card" style="margin-top:12px"><b>事件（点击跳转）</b><div id="events"></div></div>
+</div>
+</main>
+<script>
+'use strict';
+// ---- 固定常量：与车上代码一致 ----
+var PV   = 0.073632;   // 脉冲/5ms -> m/s   (KART_PULSE_V_TO_MS)
+var ACK  = 1410.0;     // 转弯半径 R(m) = ACK / 转角counts  (实测回归值, 注释里写的1480偏大)
+var LOCK = 1064;       // 满舵 counts
+var DT   = 0.02;       // VOFA 每帧 20ms (50Hz)
+// VOFA 43 通道里我们要用的那些
+var C = {mode:0,phase:1,flags:2,vseq:3,vage:4,cam_ms:5,vrej:6,ovr:7,exec:8,
+         valid:9,rej:10,bear:11,dist:12,wpx:13,st_tgt:14,st_act:15,yaw:16,
+         yawu:17,yrate:18,v_tgt:19,v_act:20,ox:32,oy:33,odo:34,dL:35,dR:36,
+         drop:37,mark:38,elat:39,k:40,st_cmd:41,herr:42};
+var PH = {0:'跟随/待机',1:'倒车复现',2:'固定动作',4:'完成'};
+
+var rows=[], segs=[], evts=[], cur=0, bb=null;
+
+function parse(txt){
+  var out=[], ls=txt.split(/\r?\n/);
+  for(var i=0;i<ls.length;i++){
+    var s=ls[i]; if(!s) continue;
+    if(s.charCodeAt(0)===73 && /^I\d/.test(s)) continue;      // 表头 I0,I1,...
+    var f=s.split(','), r=new Float64Array(43), ok=1;
+    if(f.length<43) continue;
+    for(var j=0;j<43;j++){ var v=parseFloat(f[j]); if(!isFinite(v)){ok=0;break;} r[j]=v; }
+    if(ok) out.push(r);
+  }
+  return out;
+}
+
+// 分段：ch1==0 既是"待机"也是"跟随"，所以跟随段必须要求里程已经在走
+function segment(R){
+  var s=[], st=-1, lab='';
+  for(var i=0;i<R.length;i++){
+    var p=R[i][C.phase], odo=R[i][C.odo];
+    var L = (p===0 && odo>0.10)?'跟随' : (p===1?'倒车' : (p===2?'固定动作' : (p===4?'完成':'待机')));
+    if(L!==lab){ if(st>=0 && lab!=='待机') s.push({lab:lab,a:st,b:i-1}); lab=L; st=i; }
+  }
+  if(st>=0 && lab!=='待机') s.push({lab:lab,a:st,b:R.length-1});
+  return s.filter(function(x){return x.b-x.a>10;});
+}
+// ---- 事件自动识别。全部只用日志里真有的通道，不做任何猜测 ----
+function events(R){
+  var e=[], i;
+  for(i=0;i<segs.length;i++) e.push({i:segs[i].a,t:'phase',s:'进入 '+segs[i].lab+' 段'});
+  // 1) 目标速度被压到 0（跟随段里几乎全是近距联锁/刹车，不是丢识别）
+  var z=-1;
+  for(i=0;i<R.length;i++){
+    var stop = Math.abs(R[i][C.v_tgt])<0.5 && R[i][C.phase]===0 && R[i][C.odo]>0.10;
+    if(stop && z<0) z=i;
+    if(!stop && z>=0){
+      if(i-z>=5) e.push({i:z,t:'stop',s:'目标速度=0 共 '+((i-z)*DT).toFixed(1)+'s，方位角 '
+        +R[z][C.bear].toFixed(0)+'°，视觉 valid='+R[z][C.valid].toFixed(0)});
+      z=-1;
+    }
+  }
+  // 2) 视觉失效（valid=0 连续 >0.2s）
+  z=-1;
+  for(i=0;i<R.length;i++){
+    var bad = R[i][C.valid]<0.5 && R[i][C.odo]>0.10 && R[i][C.phase]===0;
+    if(bad&&z<0) z=i;
+    if(!bad&&z>=0){ if(i-z>=10) e.push({i:z,t:'lost',s:'视觉丢失 '+((i-z)*DT).toFixed(1)
+      +'s，帧龄 '+(R[i-1][C.vage]*10).toFixed(0)+'ms'}); z=-1; }
+  }
+  // 3) 满舵段（|转角实测| >= 0.94*LOCK 连续 >0.3s）—— 满舵半径只有 1.33m，转不过来就是它
+  z=-1;
+  for(i=0;i<R.length;i++){
+    var lk = Math.abs(R[i][C.st_act])>=LOCK*0.94;
+    if(lk&&z<0) z=i;
+    if(!lk&&z>=0){ if(i-z>=15) e.push({i:z,t:'lock',s:'满舵 '+((i-z)*DT).toFixed(1)+'s，'
+      +(R[z][C.st_act]>0?'左':'右')+'，车速 '+(Math.abs(R[z][C.v_act])*PV).toFixed(2)+' m/s'}); z=-1; }
+  }
+  // 4) 绕桩整圈：同向偏航累计 >=270°
+  for(i=0;i<segs.length;i++) loops(R,segs[i]).forEach(function(L){
+    e.push({i:L.a,t:'loop',s:segs[i].lab+'：绕桩 '+(L.sw>0?'+':'')+L.sw.toFixed(0)
+      +'°，弧长 '+L.arc.toFixed(1)+'m，半径 '+L.R.toFixed(2)+'m，速度 '+L.v.toFixed(2)+' m/s'});
+  });
+  // 5) 实时性：调度超时计数增加
+  for(i=1;i<R.length;i++) if(R[i][C.ovr]>R[i-1][C.ovr])
+    e.push({i:i,t:'ovr',s:'调度超时 +'+(R[i][C.ovr]-R[i-1][C.ovr])+'，单拍最长 '
+      +R[i][C.exec].toFixed(0)+'us / 5000us'});
+  e.sort(function(a,b){return a.i-b.i;});
+  return e;
+}
+// 绕桩识别：对平滑后的展开偏航角找"同向连续摆过 >=270°"的最长段
+function loops(R,sg){
+  var n=sg.b-sg.a+1, y=new Float64Array(n), W=5, i, j;
+  for(i=0;i<n;i++){ var s=0,c=0; for(j=Math.max(0,i-W);j<=Math.min(n-1,i+W);j++){s+=R[sg.a+j][C.yawu];c++;} y[i]=s/c; }
+  var out=[], a=0, sg2=0, acc=0, back=0;
+  for(i=0;i<n-1;i++){
+    var d=y[i+1]-y[i]; if(Math.abs(d)>180) d=0;
+    if(sg2===0){ if(d!==0){sg2=d>0?1:-1;a=i;acc=d;back=0;} }
+    else if(d*sg2>=0){ acc+=d; back=0; }
+    else { acc+=d; back+=-d*sg2; if(back>15){ push(a,i,acc); sg2=0;acc=0;back=0; } }
+  }
+  if(sg2!==0) push(a,n-1,acc);
+  function push(a,b,s){
+    if(Math.abs(s)<270) return;
+    var arc=Math.abs(R[sg.a+b][C.odo]-R[sg.a+a][C.odo]), rad=Math.abs(s)*Math.PI/180, vs=[];
+    for(var q=a;q<=b;q++) vs.push(Math.abs(R[sg.a+q][C.v_act])*PV);
+    vs.sort(function(p,r){return p-r;});
+    out.push({a:sg.a+a,b:sg.a+b,sw:s,arc:arc,R:rad>0?arc/rad:NaN,v:vs[vs.length>>1]||0});
+  }
+  return out;
+}
+
+function bounds(){
+  var lo=[1e9,1e9], hi=[-1e9,-1e9];
+  for(var i=0;i<rows.length;i++){ var x=rows[i][C.ox], y=rows[i][C.oy];
+    if(x<lo[0])lo[0]=x; if(y<lo[1])lo[1]=y; if(x>hi[0])hi[0]=x; if(y>hi[1])hi[1]=y; }
+  var m=Math.max(1,(hi[0]-lo[0])*0.06,(hi[1]-lo[1])*0.06);
+  return {x0:lo[0]-m,y0:lo[1]-m,x1:hi[0]+m,y1:hi[1]+m};
+}
+
+function drawPath(){
+  var cv=document.getElementById('path'), g=cv.getContext('2d');
+  cv.width=cv.clientWidth*2; cv.height=880; cv.style.height='440px';
+  g.setTransform(1,0,0,1,0,0); g.clearRect(0,0,cv.width,cv.height);
+  if(!rows.length) return;
+  // 等比例映射（不能拉伸，否则圆看起来不是圆，半径就读不出来了）
+  var sx=cv.width/(bb.x1-bb.x0), sy=cv.height/(bb.y1-bb.y0), s=Math.min(sx,sy);
+  var ox=(cv.width-(bb.x1-bb.x0)*s)/2, oy=(cv.height-(bb.y1-bb.y0)*s)/2;
+  window.P = function(x,y){ return [ox+(x-bb.x0)*s, cv.height-oy-(y-bb.y0)*s]; };
+  // 1m 网格
+  g.strokeStyle='#1c2029'; g.lineWidth=1;
+  for(var gx=Math.ceil(bb.x0);gx<bb.x1;gx++){var p=P(gx,bb.y0),q=P(gx,bb.y1);
+    g.beginPath();g.moveTo(p[0],p[1]);g.lineTo(q[0],q[1]);g.stroke();}
+  for(var gy=Math.ceil(bb.y0);gy<bb.y1;gy++){var p2=P(bb.x0,gy),q2=P(bb.x1,gy);
+    g.beginPath();g.moveTo(p2[0],p2[1]);g.lineTo(q2[0],q2[1]);g.stroke();}
+  // 轨迹：跟随蓝、倒车红、其它灰
+  for(var si=0;si<segs.length;si++){
+    var sg=segs[si];
+    g.strokeStyle = sg.lab==='跟随'?'#4ea8ff':(sg.lab==='倒车'?'#ff5f56':'#5a6070');
+    g.lineWidth=3; g.beginPath();
+    for(var i=sg.a;i<=sg.b;i++){ var p=P(rows[i][C.ox],rows[i][C.oy]);
+      if(i===sg.a) g.moveTo(p[0],p[1]); else g.lineTo(p[0],p[1]); }
+    g.stroke();
+  }
+  // 满舵点标黄：这些就是几何上转不过来的地方
+  g.fillStyle='#ffb020';
+  for(var i2=0;i2<rows.length;i2++) if(Math.abs(rows[i2][C.st_act])>=LOCK*0.94){
+    var p3=P(rows[i2][C.ox],rows[i2][C.oy]); g.fillRect(p3[0]-2,p3[1]-2,4,4); }
+  // 绕桩圈心 + 半径标注
+  g.font='22px Consolas'; g.textAlign='center';
+  for(var si2=0;si2<segs.length;si2++) loops(rows,segs[si2]).forEach(function(L){
+    var cx=0,cy=0,n=0; for(var q=L.a;q<=L.b;q++){cx+=rows[q][C.ox];cy+=rows[q][C.oy];n++;}
+    var p4=P(cx/n,cy/n);
+    g.strokeStyle=segs[si2].lab==='跟随'?'#4ea8ff':'#ff5f56'; g.lineWidth=2;
+    g.beginPath(); g.arc(p4[0],p4[1],L.R*s,0,6.2832); g.setLineDash([6,6]); g.stroke(); g.setLineDash([]);
+    g.fillStyle=g.strokeStyle;
+    g.fillText('R'+L.R.toFixed(2)+' '+L.v.toFixed(2)+'m/s',p4[0],p4[1]+8);
+  });
+  // 起点 / 终点
+  var st=segs.length?segs[0].a:0, en=segs.length?segs[segs.length-1].b:0;
+  var ps=P(rows[st][C.ox],rows[st][C.oy]), pe=P(rows[en][C.ox],rows[en][C.oy]);
+  g.fillStyle='#3ddc97'; g.beginPath(); g.arc(ps[0],ps[1],9,0,6.3); g.fill();
+  g.fillStyle='#ff5f56'; g.fillRect(pe[0]-8,pe[1]-8,16,16);
+  g.fillStyle='#8b91a1'; g.font='20px Consolas'; g.textAlign='left';
+  g.fillText('发车',ps[0]+12,ps[1]+7); g.fillText('结束',pe[0]+12,pe[1]+7);
+  // 当前时刻：位置 + 车头朝向 + 转角方向
+  var r=rows[cur], pc=P(r[C.ox],r[C.oy]);
+  var th=r[C.yaw]*Math.PI/180;
+  g.strokeStyle='#fff'; g.lineWidth=3; g.beginPath();
+  g.moveTo(pc[0],pc[1]); g.lineTo(pc[0]+Math.cos(th)*40,pc[1]-Math.sin(th)*40); g.stroke();
+  g.fillStyle='#fff'; g.beginPath(); g.arc(pc[0],pc[1],8,0,6.3); g.fill();
+  g.strokeStyle='#000'; g.lineWidth=1.5; g.stroke();
+}
+
+// 点图跳转到最近的一帧
+function pick(mx,my){
+  var best=0, bd=1e18;
+  for(var i=0;i<rows.length;i++){ var p=P(rows[i][C.ox],rows[i][C.oy]);
+    var d=(p[0]-mx)*(p[0]-mx)+(p[1]-my)*(p[1]-my); if(d<bd){bd=d;best=i;} }
+  go(best);
+}
+// ---- 下面的时间条：4 条曲线 + 当前时刻竖线 ----
+var TR=[
+ {n:'目标速度 m/s', c:'#3ddc97', f:function(r){return r[C.v_tgt]*PV;},  lo:-3, hi:3},
+ {n:'实测轮速 m/s', c:'#4ea8ff', f:function(r){return r[C.v_act]*PV;},  lo:-3, hi:3},
+ {n:'转角实测',     c:'#ffb020', f:function(r){return r[C.st_act];},    lo:-1100, hi:1100},
+ {n:'横向误差 m',   c:'#ff5f56', f:function(r){return r[C.elat];},      lo:-2, hi:2}
+];
+function drawStrip(){
+  var cv=document.getElementById('strip'), g=cv.getContext('2d');
+  cv.width=cv.clientWidth*2; cv.height=420; cv.style.height='210px';
+  g.clearRect(0,0,cv.width,cv.height);
+  if(!rows.length) return;
+  var H=cv.height/TR.length, W=cv.width;
+  for(var k=0;k<TR.length;k++){
+    var tr=TR[k], y0=k*H;
+    g.strokeStyle='#242833'; g.lineWidth=1;
+    g.beginPath(); g.moveTo(0,y0+H/2); g.lineTo(W,y0+H/2); g.stroke();
+    g.strokeStyle=tr.c; g.lineWidth=1.6; g.beginPath();
+    for(var i=0;i<rows.length;i++){
+      var v=tr.f(rows[i]);
+      var yy=y0+H-4-((v-tr.lo)/(tr.hi-tr.lo))*(H-8);
+      var xx=i/(rows.length-1)*W;
+      if(i===0) g.moveTo(xx,yy); else g.lineTo(xx,yy);
+    }
+    g.stroke();
+    g.fillStyle=tr.c; g.font='18px Consolas'; g.textAlign='left';
+    g.fillText(tr.n+'  ['+tr.lo+' , '+tr.hi+']',6,y0+18);
+  }
+  // 段分界
+  for(var si=0;si<segs.length;si++){
+    var x=segs[si].a/(rows.length-1)*W;
+    g.strokeStyle='#c6a8ff'; g.lineWidth=1; g.setLineDash([4,4]);
+    g.beginPath(); g.moveTo(x,0); g.lineTo(x,cv.height); g.stroke(); g.setLineDash([]);
+  }
+  var cx=cur/(rows.length-1)*W;
+  g.strokeStyle='#fff'; g.lineWidth=2;
+  g.beginPath(); g.moveTo(cx,0); g.lineTo(cx,cv.height); g.stroke();
+}
+var TRACK = 0.60;   // 后轮轮距(m)，实测卷尺值
+function f(v,n){ return (v===null||v===undefined||!isFinite(v))?'--':v.toFixed(n===undefined?2:n); }
+function drawState(){
+  var r=rows[cur], T=document.getElementById('state'), h='';
+  var v=Math.abs(r[C.v_act])*PV, w=Math.abs(r[C.yrate]), st=Math.abs(r[C.st_act]);
+  var Rkin = st>20 ? ACK/st : null;                       // 运动学：打这么多舵"该"转多小的圈
+  var Ract = (v>0.3&&w>3) ? v/(w*Math.PI/180) : null;     // 实际：偏航角速度反解出来的圈
+  var ratio = (Rkin&&Ract) ? Ract/Rkin : null;            // >1 就是转向不足/推头
+  var dL=r[C.dL], dR=r[C.dR], mean=(Math.abs(dL)+Math.abs(dR))/2;
+  var got  = mean>0.5 ? Math.abs((Math.abs(dR)-Math.abs(dL))/mean) : null;  // 实际左右轮速差
+  var need = Rkin ? TRACK/Rkin : null;                    // 几何要求的左右轮速差
+  function row(k,val,note){ h+='<tr><td>'+k+'</td><td>'+val+(note?' <small>'+note+'</small>':'')+'</td></tr>'; }
+  row('时间',f(cur*DT,2)+' s','帧 '+cur+'/'+(rows.length-1));
+  row('阶段',PH[r[C.phase]]||('?'+r[C.phase]),'mode '+r[C.mode]);
+  row('里程',f(r[C.odo],1)+' m','x '+f(r[C.ox],1)+' y '+f(r[C.oy],1));
+  row('目标速度',f(r[C.v_tgt]*PV)+' m/s', r[C.v_tgt]===0?'← 被压到 0':'');
+  row('实测轮速',f(r[C.v_act]*PV)+' m/s');
+  row('转角 目标',f(r[C.st_tgt],0), Math.abs(r[C.st_tgt])>=LOCK*0.94?'满舵':'');
+  row('转角 实测',f(r[C.st_act],0), Math.abs(r[C.st_act])>=LOCK*0.94?'满舵':'');
+  row('转角 下发',f(r[C.st_cmd],0));
+  row('该转的半径',f(Rkin)+' m','运动学 1410/舵角');
+  row('实际转的半径',f(Ract)+' m','轮速/偏航角速度');
+  row('转向不足比',f(ratio), ratio>1.15?'← 明显推头':(ratio>1.05?'轻微推头':''));
+  row('偏航角',f(r[C.yaw],1)+'°','角速度 '+f(r[C.yrate],1)+'°/s');
+  row('左/右轮增量',f(dL,0)+' / '+f(dR,0));
+  row('几何要求轮速差', f(need===null?NaN:need*100,1)+' %','轮距0.60 / 该转的半径');
+  row('实际轮速差', f(got===null?NaN:got*100,1)+' %',
+      (need&&got!==null)?('达成 '+f(got/need*100,0)+'%'+(got/need<0.8?' ← 在刮地':'')):'');
+  row('横向误差 e_lat',f(r[C.elat])+' m', r[C.phase]===1?('Ke=-300 时修正 '+f(-300*r[C.elat],0)):'');
+  row('航向误差',f(r[C.herr],1)+'°','相对录制路径，不是车身姿态');
+  row('复现索引 k',f(r[C.k],0));
+  row('视觉',r[C.valid]>0.5?'有效':'无效','帧龄 '+f(r[C.vage]*10,0)+' ms');
+  row('方位角',f(r[C.bear],1)+'°','距离 '+f(r[C.dist])+' m');
+  row('调度超时',f(r[C.ovr],0)+' 次','单拍最长 '+f(r[C.exec],0)+' / 5000 us');
+  row('日志丢帧',f(r[C.drop],0),'flags '+r[C.flags]);
+  T.innerHTML=h;
+}
+function drawEvents(){
+  var E=document.getElementById('events'), h='', i;
+  for(i=0;i<evts.length;i++) h+='<div data-i="'+evts[i].i+'"><span><span class="tag t-'
+    +evts[i].t+'">'+(evts[i].i*DT).toFixed(1)+'s</span> '+evts[i].s+'</span></div>';
+  E.innerHTML=h||'<small>没识别到事件</small>';
+  var ds=E.querySelectorAll('div[data-i]');
+  for(i=0;i<ds.length;i++) ds[i].onclick=function(){ go(+this.getAttribute('data-i')); };
+}
+function go(i){
+  cur=Math.max(0,Math.min(rows.length-1,i|0));
+  document.getElementById('slider').value=cur;
+  drawPath(); drawStrip(); drawState();
+}
+function load(txt,name){
+  rows=parse(txt);
+  if(rows.length<20){ alert('没读出有效数据。确认是 VOFA 存的 43 通道 csv。'); return; }
+  segs=segment(rows); bb=bounds(); evts=events(rows); cur=0;
+  var sl=document.getElementById('slider'); sl.max=rows.length-1; sl.value=0;
+  var d=segs.map(function(s){ return s.lab+' '+((s.b-s.a)*DT).toFixed(1)+'s/'
+    +Math.abs(rows[s.b][C.odo]-rows[s.a][C.odo]).toFixed(1)+'m'; }).join('　');
+  document.getElementById('meta').innerHTML='<small>'+name+'　'+rows.length+' 帧 / '
+    +(rows.length*DT).toFixed(1)+' s　'+d+'</small>';
+  drawEvents(); go(0);
+}
+function feed(fl){ if(!fl||!fl[0]) return; var f2=fl[0], rd=new FileReader();
+  rd.onload=function(){ load(String(rd.result),f2.name); }; rd.readAsText(f2); }
+var drop=document.getElementById('drop');
+document.getElementById('file').onchange=function(){ feed(this.files); };
+document.addEventListener('dragover',function(e){ e.preventDefault(); drop.classList.add('on'); });
+document.addEventListener('dragleave',function(e){ e.preventDefault(); drop.classList.remove('on'); });
+document.addEventListener('drop',function(e){ e.preventDefault();
+  drop.classList.remove('on'); feed(e.dataTransfer.files); });
+document.getElementById('slider').oninput=function(){ go(+this.value); };
+document.getElementById('path').onclick=function(e){ if(!rows.length) return;
+  var b=this.getBoundingClientRect();
+  pick((e.clientX-b.left)*this.width/b.width,(e.clientY-b.top)*this.height/b.height); };
+document.getElementById('strip').onclick=function(e){ if(!rows.length) return;
+  var b=this.getBoundingClientRect();
+  go(Math.round((e.clientX-b.left)/b.width*(rows.length-1))); };
+document.addEventListener('keydown',function(e){ if(!rows.length) return;
+  var s=e.shiftKey?25:1;
+  if(e.key==='ArrowLeft'){ go(cur-s); e.preventDefault(); }
+  else if(e.key==='ArrowRight'){ go(cur+s); e.preventDefault(); } });
+window.addEventListener('resize',function(){ if(rows.length){ drawPath(); drawStrip(); } });
+</script>
+</body>
+</html>

@@ -1,0 +1,1 @@
+Logger will create log0.txt here if #filehead:LOG1/log works.

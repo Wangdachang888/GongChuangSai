@@ -1,0 +1,10 @@
+#include "race_config.h"
+#undef RACE_PICK_DIRECT_KEY_TEST
+#undef RACE_PICK_ENABLE
+#ifdef TEST_DIRECT
+#define RACE_PICK_DIRECT_KEY_TEST 1U
+#define RACE_PICK_ENABLE 1U
+#else
+#define RACE_PICK_DIRECT_KEY_TEST 0U
+#define RACE_PICK_ENABLE 0U
+#endif

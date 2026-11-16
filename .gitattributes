@@ -1,0 +1,19 @@
+# 自动识别文本/二进制，仓库内统一 LF，检出时按平台转换
+* text=auto
+
+# Keil 工程文件保留 CRLF，避免 MDK 解析异常
+*.uvprojx text eol=crlf
+*.uvoptx text eol=crlf
+*.sct     text eol=crlf
+*.ioc     text eol=crlf
+
+# 明确二进制文件
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.pdf  binary
+*.zip  binary
+*.axf  binary
+*.hex  binary
+*.bin  binary
