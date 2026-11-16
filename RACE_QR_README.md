@@ -333,3 +333,23 @@ USART3 中断只收单字节进环形缓冲，解析在主循环，发送用中�
 `main.c` 不再直接编排底盘、IMU、日志、显示、D36 和夹取任务。比赛模式仍只由 `AppRuntime_Poll()` 调度；TIM6 仍每 1 ms 更新电机、每 10 ms 更新底盘位置环。普通比赛夹取完成后会先非阻塞复位夹取状态机，再允许下一项夹取，避免下一次 `PickFsm_Start()` 因停留在 `PICK_DONE` 被拒绝。
 
 本次电脑端验收：`tests/race/run.ps1` 和 `tests/ulog/run.ps1` 全部通过；`APP_RUN_MODE=0/1/2/3` 的入口静态语法检查全部通过；Keil `.uvprojx` 的文件路径和重复引用检查通过；源码中 HAL UART 接收/错误回调各保留一个定义。当前环境未发现 `UV4`、`armcc` 或 `armclang`，因此 ARM/Keil 固件编译标记为 `BUILD SKIP`，不能替代实机烧录和运行验收。
+
+## 2026-11-17：数字圆环视觉闭环
+
+本次视觉闭环在 `feature/ring-visual-closed-loop` 分支实现。STM32 视觉业务收口为 `Hardware/vision.c/.h`，OpenMV 运行文件只保留 `vision_openmv_stm32_v4_redownload/OpenMV/main.py`、`config.py` 和 `utils.py`。原有 `#SEQ` 任务码、`JOB,21`、`JOB,22`、`JOB,23`、二维码、六种颜色物料和旧物料任务接口继续保留。
+
+圆环定位由比赛调度入口显式启动：
+
+```c
+AppRace_StartRingAlign(2U);
+```
+
+目标数字可填写 `1U`、`2U` 或 `3U`。该接口只允许在比赛状态为 `RACE_READY`、夹取机构空闲时启动；启动后圆环闭环独占底盘位置控制，完成或失败后释放控制权，不会和普通路线或夹取状态机同时写入底盘目标。默认 `RACE_RING_J00_PX_PER_M` 到 `RACE_RING_J11_PX_PER_M` 为零，表示尚未标定；此时可以接收视觉坐标，但不会驱动车辆。
+
+闭环时序为：STM32 发送 `ALIGN,target,session` → OpenMV 回复 `ACK,ALIGN,target,session` → OpenMV 对当前新鲜图像发送 `POS,RING,target,dx,dy,cx,cy,session,step` → STM32 使用标定矩阵把像素误差转换为车体位移，并按当前航向转换到世界坐标 → 现有麦轮位置 PID 完成一次小步移动并确认速度稳定 → STM32 发送 `STEP_DONE,step,1`。如果本轮已在像素容差内，则发送 `STEP_DONE,step,0` 请求重新测量；连续四次新鲜观测满足容差后发送 `ARRIVED,RING,target,dx,dy,session,count`，OpenMV 回复 `ACK,ARRIVED,session` 和 `IDLE`。旧版扫码同时保留原始 `R` 触发字节，并发送新的封帧 `JOB,1`，因此旧 OpenMV 与 V4 OpenMV 均有兼容入口。
+
+V4 封帧格式为 `@SEQ,LEN,BODY*XOR\n`。STM32 和 OpenMV 都校验长度、XOR、会话号和步号；重复帧、旧序号、旧会话、错误步号和过期坐标不会推进运动。STM32 中断只把字节放入缓存，协议解析、位置计算和串口发送均在主循环中完成；USART3 的接收、错误和发送完成回调仍各只有一个入口。
+
+标定步骤：先把四个矩阵参数填入 `Hardware/race_config.h`，矩阵表示车体 `x/y` 位移对图像 `x/y` 像素变化的映射，单位为 px/m；用小幅、低速的单轴实测分别记录 `J00/J10` 和 `J01/J11`，确认正负方向后再启用非零矩阵。`RACE_RING_GAIN`、`RACE_RING_MAX_STEP_M`、`RACE_RING_MIN_STEP_M`、`RACE_RING_MAX_SPEED_MPS` 和 `RACE_RING_MAX_OMEGA_RADPS` 分别限制保守增益、单步位移、最小修正和运动速度。默认单步最大 50 mm，必须先用实测矩阵和低速空场测试。
+
+圆环实车验收顺序：先只接收并检查数字 1/2/3 与 `POS`；再分别做车体 X、Y 小位移标定；确认矩阵有效后只启动一次低速 `AppRace_StartRingAlign()`；检查每个 `STEP_DONE` 都发生在编码器位置到位且速度稳定之后；最后连续验证四轮收敛、`ARRIVED`、`IDLE`、拔掉视觉串口后的超时停车和重复启动。电脑端 `tests/race/run.ps1` 已增加圆环 ACK、重复步号、标定位移、停稳、`ARRIVED/IDLE` 模拟测试；目标固件仍需使用 Keil/ARM 工具链实际编译和实车验收。
