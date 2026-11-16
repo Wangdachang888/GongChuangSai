@@ -69,4 +69,16 @@
 #define RACE_IMU_STALE_MS           250U
 #define RACE_WARMUP_MS              18000U
 
+/* Ring alignment calibration. Keep the matrix invalid until it is measured
+ * on the actual camera and chassis; invalid calibration never moves the car. */
+#define RACE_RING_J00_PX_PER_M      0.0f
+#define RACE_RING_J01_PX_PER_M      0.0f
+#define RACE_RING_J10_PX_PER_M      0.0f
+#define RACE_RING_J11_PX_PER_M      0.0f
+#define RACE_RING_GAIN              0.35f
+#define RACE_RING_MAX_STEP_M        0.050f
+#define RACE_RING_MIN_STEP_M        0.003f
+#define RACE_RING_MAX_SPEED_MPS     0.120f
+#define RACE_RING_MAX_OMEGA_RADPS   0.350f
+
 #endif

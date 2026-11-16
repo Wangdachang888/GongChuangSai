@@ -1,7 +1,7 @@
 #include "app_mode.h"
 #include "app_race.h"
 #include "race_config.h"
-#include "race_vision.h"
+#include "vision.h"
 #include "app_imu.h"
 #include "app_pick_fsm.h"
 #include "app_stepper_openloop.h"
@@ -19,6 +19,7 @@ static RaceInput s_input;
 static PickFsm s_pick;
 static RaceTaskPlan s_plan;
 static uint8_t s_direct_cycle_done;
+static uint8_t s_ring_control;
 #if (RACE_PICK_DIRECT_KEY_TEST != 0U)
 static void start_direct_pick(uint32_t now, uint8_t reverse)
 {
@@ -99,6 +100,7 @@ void AppRace_Init(MecanumChassis_t *chassis)
 {
     s_chassis = chassis;
     s_direct_cycle_done = 0U;
+    s_ring_control = 0U;
     Race_Init(&s_race);
     s_boot = HAL_GetTick();
     s_last_poll = s_boot;
@@ -129,13 +131,25 @@ void AppRace_Init(MecanumChassis_t *chassis)
     Mecanum_SetSpeedLimit(chassis, RACE_MOVE_SPEED_MPS, RACE_TURN_SPEED_RADPS);
     Mecanum_SetTolerance(chassis, RACE_POSITION_TOL_M * 0.5f, RACE_YAW_TOL_RAD * 0.5f);
     if (!RaceVision_Init()) Race_Fail(&s_race, RACE_ERROR_LINK);
+    Vision_SetRingChassis(Vision_GetDefault(), chassis);
+    Vision_SetRingCalibration(Vision_GetDefault(),
+                              RACE_RING_J00_PX_PER_M,
+                              RACE_RING_J01_PX_PER_M,
+                              RACE_RING_J10_PX_PER_M,
+                              RACE_RING_J11_PX_PER_M,
+                              RACE_RING_GAIN,
+                              RACE_RING_MAX_STEP_M,
+                              RACE_RING_MIN_STEP_M,
+                              RACE_RING_MAX_SPEED_MPS,
+                              RACE_RING_MAX_OMEGA_RADPS);
     if (!app_imu_ok()) Race_Fail(&s_race, RACE_ERROR_IMU);
 }
 
 uint8_t AppRace_ControlTick(void)
 {
     if (s_chassis == NULL) return 0U;
-    if (s_active && (uint32_t)(HAL_GetTick() - s_last_poll) >= RACE_IMU_STALE_MS) {
+    if ((s_active || s_ring_control) &&
+        (uint32_t)(HAL_GetTick() - s_last_poll) >= RACE_IMU_STALE_MS) {
         s_stalled = 1U;
         s_control = 0U;
         s_active = 0U;
@@ -172,6 +186,24 @@ void AppRace_Poll(void)
             !RaceTaskPlan_Start(&s_plan)) {
             Race_Fail(&s_race, RACE_ERROR_CONFIG);
         }
+    }
+    if (s_ring_control || Vision_RingActive(Vision_GetDefault())) {
+        if (s_stalled && Vision_RingActive(Vision_GetDefault()))
+            (void)Vision_Cancel(Vision_GetDefault());
+        if (Vision_RingFailed(Vision_GetDefault())) {
+            s_ring_control = 0U;
+            stop_outputs();
+            s_control = 0U;
+        } else if (Vision_RingSucceeded(Vision_GetDefault())) {
+            s_ring_control = 0U;
+            Mecanum_Stop(s_chassis);
+        } else {
+            s_ring_control = 1U;
+        }
+        s_active = s_ring_control;
+        s_last_poll = now;
+        RaceUi_Poll(&s_race, now, warmed_up(now));
+        return;
     }
  #if (RACE_PICK_DIRECT_KEY_TEST != 0U)
     can_start = PickFsm_IsReady(&s_pick);
@@ -235,7 +267,8 @@ void AppRace_Poll(void)
     saved_irq = __get_PRIMASK();
     __disable_irq();
     if (s_stalled) Race_Fail(&s_race, RACE_ERROR_LOOP_STALL);
-    s_active = (s_race.state == RACE_RUNNING) || PickFsm_IsActive(&s_pick);
+    s_active = (s_race.state == RACE_RUNNING) || PickFsm_IsActive(&s_pick) ||
+               s_ring_control;
     s_last_poll = now;
     if (s_race.state != RACE_READY && s_race.state != RACE_RUNNING &&
         !PickFsm_IsActive(&s_pick)) {
@@ -255,6 +288,15 @@ const RaceFsm *AppRace_Status(void)
 const RaceTaskPlan *AppRace_TaskPlan(void)
 {
     return &s_plan;
+}
+
+uint8_t AppRace_StartRingAlign(uint8_t target)
+{
+    if (s_chassis == NULL || s_race.state != RACE_READY || s_ring_control ||
+        PickFsm_IsActive(&s_pick)) return 0U;
+    s_ring_control = (uint8_t)Vision_StartRingAlign(Vision_GetDefault(),
+                                                    target, HAL_GetTick());
+    return s_ring_control;
 }
 
 uint8_t AppRace_LogFinished(void)

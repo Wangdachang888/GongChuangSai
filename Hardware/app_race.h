@@ -6,6 +6,7 @@
 void AppRace_Init(MecanumChassis_t *chassis);
 void AppRace_Poll(void);
 uint8_t AppRace_ControlTick(void);
+uint8_t AppRace_StartRingAlign(uint8_t target);
 const RaceFsm *AppRace_Status(void);
 const RaceTaskPlan *AppRace_TaskPlan(void);
 /* Current executable flow has ended (also true for fault/abort).
