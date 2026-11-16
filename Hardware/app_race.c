@@ -3,13 +3,11 @@
 #include "race_config.h"
 #include "race_vision.h"
 #include "app_imu.h"
-#include "bsp_oled.h"
 #include "app_pick_fsm.h"
 #include "app_stepper_openloop.h"
 #include "bsp_servo.h"
 #include "race_task_plan.h"
-#include <stdio.h>
-#include <string.h>
+#include "race_ui.h"
 
 #if APP_RUN_MODE == APP_MODE_RACE
 static RaceFsm s_race;
@@ -17,10 +15,7 @@ static MecanumChassis_t *s_chassis;
 static uint32_t s_boot, s_frames, s_last_imu;
 static volatile uint32_t s_last_poll;
 static volatile uint8_t s_active, s_control, s_stalled;
-static uint8_t s_key_raw, s_key_stable, s_key_armed, s_key_long, s_key_start;
-static uint32_t s_key_changed, s_key_pressed;
-static uint32_t s_screen_time, s_page_time;
-static uint8_t s_page;
+static RaceInput s_input;
 static PickFsm s_pick;
 static RaceTaskPlan s_plan;
 static uint8_t s_direct_cycle_done;
@@ -100,100 +95,6 @@ static uint8_t warmed_up(uint32_t now)
     return app_imu_bias_ready() && (uint32_t)(now - s_boot) >= RACE_WARMUP_MS;
 }
 
-static void poll_key(const RaceFeedback *current, uint32_t now)
-{
-    uint8_t raw = HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_0) == GPIO_PIN_RESET;
-#if (RACE_PICK_DIRECT_KEY_TEST != 0U)
-    (void)current;
-#endif
-    if (raw != s_key_raw) {
-        s_key_raw = raw;
-        s_key_changed = now;
-    }
-    if ((uint32_t)(now - s_key_changed) < 20U) return;
-    if (!s_key_armed) {
-        s_key_stable = raw;
-        if (!raw) s_key_armed = 1U;
-        return;
-    }
-    if (raw != s_key_stable) {
-        s_key_stable = raw;
-        if (raw) {
-            s_key_pressed = now;
-            s_key_long = 0U;
-#if (RACE_PICK_DIRECT_KEY_TEST != 0U)
-            s_key_start = PickFsm_IsReady(&s_pick);
-#else
-            s_key_start = s_race.state == RACE_READY && warmed_up(now) && current->imu_valid;
-#endif
-            if (s_race.state == RACE_RUNNING) Race_Abort(&s_race);
-        }
-#if (RACE_PICK_DIRECT_KEY_TEST != 0U)
-        else if (s_key_start) {
-#else
-        else if (!s_key_long && s_key_start) {
-#endif
-#if (RACE_PICK_DIRECT_KEY_TEST != 0U)
-            start_direct_pick(now, s_key_long);
-#else
-            if (s_race.state == RACE_READY) {
-            (void)Race_StartQrRoute(&s_race, current, now);
-            }
-#endif
-        }
-    }
-    if (raw && !s_key_long && (uint32_t)(now - s_key_pressed) >= 700U) {
-        s_key_long = 1U;
-        if (s_race.state == RACE_READY) {
-            (void)Race_SelectZone(&s_race, s_race.zone == 1U ? 2U : 1U);
-        }
-    }
-}
-
-static void text_line(uint8_t row, const char *text)
-{
-    uint8_t column = 0U;
-    while (*text && column < 21U) {
-        OLED_ShowChar((uint8_t)(column * 6U), row, (uint8_t)*text++, 12U, 1U);
-        column++;
-    }
-}
-
-static void poll_display(uint32_t now)
-{
-    static const char *const states[] = {"READY", "RUNNING", "MATERIAL READY", "FAULT", "STOPPED"};
-    static const char *const actions[] = {"MOVE", "TURN", "SETTLE", "SCAN"};
-    char line[32];
-    uint8_t column;
-    if (s_page == 0U && (uint32_t)(now - s_screen_time) >= 200U) {
-        s_screen_time = now;
-        memset(OLED_GRAM, 0, sizeof(OLED_GRAM));
-        (void)snprintf(line, sizeof(line), "RACE Z%u %s", s_race.zone, states[s_race.state]);
-        text_line(0U, line);
-        if (s_race.state == RACE_READY) {
-            text_line(12U, warmed_up(now) ? "SHORT:START" : "IMU WARMUP: KEEP STILL");
-            text_line(24U, "LONG:ZONE 1/2");
-        } else if (s_race.state == RACE_RUNNING) {
-            (void)snprintf(line, sizeof(line), "%u/%u %s", s_race.action_index + 1U,
-                           s_race.action_count, actions[s_race.actions[s_race.action_index].kind]);
-            text_line(12U, line);
-            text_line(24U, "PRESS:STOP");
-        } else {
-            (void)snprintf(line, sizeof(line), "ERROR:%u RESET TO ARM", (unsigned)s_race.error);
-            text_line(12U, line);
-        }
-        text_line(36U, s_race.task_code);
-        text_line(48U, RaceVision_Healthy() ? "USART3:RX READY" : "USART3:FAULT");
-    }
-    if ((uint32_t)(now - s_page_time) < 2U) return;
-    s_page_time = now;
-    OLED_WR_Byte((uint8_t)(0xb0U + s_page), OLED_CMD);
-    OLED_WR_Byte(0x00U, OLED_CMD);
-    OLED_WR_Byte(0x10U, OLED_CMD);
-    for (column = 0U; column < 128U; column++) OLED_WR_Byte(OLED_GRAM[column][s_page], OLED_DATA);
-    s_page = (uint8_t)((s_page + 1U) & 7U);
-}
-
 void AppRace_Init(MecanumChassis_t *chassis)
 {
     s_chassis = chassis;
@@ -206,10 +107,8 @@ void AppRace_Init(MecanumChassis_t *chassis)
     s_active = 0U;
     s_stalled = 0U;
     s_control = 1U;
-    s_key_armed = 0U;
-    s_key_raw = HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_0) == GPIO_PIN_RESET;
-    s_key_stable = s_key_raw;
-    s_key_changed = s_boot;
+    RaceInput_Init(&s_input, s_boot);
+    RaceUi_Init();
     if (RACE_PICK_ENABLE != 0U) {
         AppStepper_Init();
         Servo_Init();
@@ -255,6 +154,8 @@ void AppRace_Poll(void)
     uint32_t saved_irq;
     RaceFeedback current;
     char code[RACE_TASK_CODE_SIZE];
+    uint8_t input_event;
+    uint8_t can_start;
     if (frames != s_frames) {
         s_frames = frames;
         s_last_imu = now;
@@ -272,7 +173,30 @@ void AppRace_Poll(void)
             Race_Fail(&s_race, RACE_ERROR_CONFIG);
         }
     }
-    poll_key(&current, now);
+ #if (RACE_PICK_DIRECT_KEY_TEST != 0U)
+    can_start = PickFsm_IsReady(&s_pick);
+ #else
+    can_start = (s_race.state == RACE_READY) && warmed_up(now) && current.imu_valid;
+ #endif
+    input_event = RaceInput_Poll(&s_input, now,
+                                 s_race.state == RACE_RUNNING, can_start);
+    if ((input_event & RACE_INPUT_PRESS) != 0U &&
+        s_race.state == RACE_RUNNING) {
+        Race_Abort(&s_race);
+    }
+    if ((input_event & RACE_INPUT_LONG) != 0U &&
+        s_race.state == RACE_READY) {
+        (void)Race_SelectZone(&s_race, s_race.zone == 1U ? 2U : 1U);
+    }
+    if ((input_event & RACE_INPUT_SHORT_RELEASE) != 0U) {
+ #if (RACE_PICK_DIRECT_KEY_TEST != 0U)
+        start_direct_pick(now, 0U);
+ #else
+        if (s_race.state == RACE_READY) {
+            (void)Race_StartQrRoute(&s_race, &current, now);
+        }
+ #endif
+    }
     Race_Tick(&s_race, &current, now);
     if (previous_state == RACE_RUNNING && s_race.state == RACE_DONE &&
         RaceTaskPlan_Current(&s_plan) != 0 &&
@@ -319,7 +243,7 @@ void AppRace_Poll(void)
     }
     __set_PRIMASK(saved_irq);
     if (!s_active) RaceVision_EndScan();
-    poll_display(now);
+    RaceUi_Poll(&s_race, now, warmed_up(now));
 }
 
 const RaceFsm *AppRace_Status(void)

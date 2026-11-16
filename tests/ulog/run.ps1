@@ -21,7 +21,7 @@ try {
         $extra = @('-include', 'tests/ulog/config.h')
         if ($direct) { $extra += '-DTEST_DIRECT=1' }
         $binary = "tmp/test_log_flow_$direct.exe"
-        & $Compiler @common @extra tests/ulog/test_flow.c Hardware/app_race.c Hardware/race_fsm.c Hardware/app_pick_fsm.c Hardware/app_pick_motion.c Hardware/race_task_plan.c -lm -o $binary
+        & $Compiler @common @extra tests/ulog/test_flow.c Hardware/app_race.c Hardware/race_ui.c Hardware/race_fsm.c Hardware/app_pick_fsm.c Hardware/app_pick_motion.c Hardware/race_task_plan.c -lm -o $binary
         if ($LASTEXITCODE) { throw 'Flow compile failed' }
         & (Join-Path $root $binary)
         if ($LASTEXITCODE) { throw 'Flow test failed' }
