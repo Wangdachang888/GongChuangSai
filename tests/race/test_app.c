@@ -52,8 +52,12 @@ uint8_t RaceVision_Poll(char code[RACE_TASK_CODE_SIZE])
 }
 void Servo_Init(void) {}
 void Servo_SetAngle(uint8_t id, float angle) { (void)id; (void)angle; }
+void Servo_SetAngleRelativeLong(uint8_t id, float angle) { (void)id; (void)angle; }
+void Servo_SetProfile(uint8_t id, float speed, float accel)
+{ (void)id; (void)speed; (void)accel; }
 void Servo_SetSpeedLimit(float speed) { (void)speed; }
 void Servo_SetAccel(float accel) { (void)accel; }
+void Servo_Disable(uint8_t id) { (void)id; }
 void Servo_Poll(void) {}
 uint8_t Servo_IsBusy(uint8_t id) { (void)id; return 0U; }
 void AppStepper_Init(void) {}
@@ -64,7 +68,11 @@ HAL_StatusTypeDef AppStepper_MoveStepsProfile(StepperAxis_t axis, int32_t steps,
 { (void)axis; (void)steps; (void)frequency; (void)accel; return 0; }
 void AppStepper_Poll(void) {}
 void AppStepper_Stop(StepperAxis_t axis) { (void)axis; }
+void AppStepper_SetBrakeMode(StepperAxis_t axis, uint8_t trap_brake)
+{ (void)axis; (void)trap_brake; }
 uint8_t AppStepper_IsBusy(StepperAxis_t axis) { (void)axis; return 0U; }
+uint32_t AppStepper_GetRemainingSteps(StepperAxis_t axis)
+{ (void)axis; return 0U; }
 
 static void tick(uint32_t duration)
 {

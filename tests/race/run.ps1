@@ -7,7 +7,7 @@ try {
     $cases = @(
         @{ Name = 'test_race'; Extra = @(); Sources = @('Hardware/race_fsm.c', 'Hardware/race_vision_protocol.c', 'Hardware/race_task_plan.c') },
         @{ Name = 'test_uart'; Extra = @(); Sources = @('Hardware/race_fsm.c', 'Hardware/race_vision.c', 'Hardware/race_vision_protocol.c') },
-        @{ Name = 'test_app'; Extra = @('-include', 'tests/race/stubs/board.h', '-include', 'tests/race/stubs/config.h'); Sources = @('Hardware/race_fsm.c', 'Hardware/app_race.c', 'Hardware/app_pick_fsm.c', 'Hardware/race_task_plan.c') }
+        @{ Name = 'test_app'; Extra = @('-include', 'tests/race/stubs/board.h', '-include', 'tests/race/stubs/config.h'); Sources = @('Hardware/race_fsm.c', 'Hardware/app_race.c', 'Hardware/app_pick_fsm.c', 'Hardware/app_pick_motion.c', 'Hardware/race_task_plan.c') }
     )
     foreach ($case in $cases) {
         $source = 'tests/race/' + $case.Name + '.c'
