@@ -314,3 +314,22 @@ USART3 中断只收单字节进环形缓冲，解析在主循环，发送用中�
 - 2026-11-16：托盘动作取消额外 `400 ms` 稳定等待；PC7 舵机报告不忙后立即进入下一状态。反向流程增加 `PickFsm_SetReverseTurntableAngle()` 接口，允许选择 `90°`、`0°` 或 `270°` 三个物块位置；启动反向流程时先转到选定角度，PC7 到位后立即进入 PB14/PB15/升降动作。默认选择 `0°`，实际选择应在调用 `PickFsm_StartReverse()` 前设置。
 - 2026-11-16：增加 `RACE_PICK_REVERSE_TURNTABLE_ANGLE_DEG` 默认选择参数。当前长按启动反向流程时，会先把 PC7 转到该角度：`90°`、`0°`、`270°` 分别对应三个物块；PC7 到位后立即开始夹取流程。
 - 2026-11-16：参考控制代码包的`Arm/Gimbal`分层方式，将夹取执行器动作移入`app_pick_motion.c/.h`，状态机只负责流程顺序和完成判断；删除PC7旧步进参数及无效状态枚举，并修正正向回零和反向下降到141 mm的步数方向。
+
+## 2026-11-17：GongXun 风格入口整理
+
+本次整理保留 HAL、TIM6 实时周期、麦克纳姆位置 PID、编码器/里程计、IMU、视觉协议、夹取状态机和旧模式入口，只调整上层职责：
+
+| 模块 | 现在负责的内容 |
+| --- | --- |
+| `Core/Src/main.c` | HAL、时钟、外设初始化，以及主循环和 TIM6 回调的桥接 |
+| `Hardware/app_runtime.c/.h` | 四轮电机/底盘初始化、模式选择、主循环任务和 1 ms/10 ms 实时调度 |
+| `Hardware/app_race.c/.h` | 比赛状态机、视觉轮询、夹取任务衔接、底盘目标写入和失联保护 |
+| `Hardware/race_ui.c/.h` | PE0 消抖、短按/长按事件和 OLED 状态页 |
+| `Hardware/race_fsm.c/.h` | MOVE、TURN、SETTLE、SCAN 的非阻塞状态执行 |
+| `Hardware/app_pick_fsm.c/.h` | PB14、PB15、PC7 和升降轴的非阻塞动作顺序 |
+| `Hardware/app_pick_motion.c/.h` | 夹爪、夹持机构、托盘舵机和升降轴的执行器接口 |
+| `Hardware/bsp_uart_router.c` | 唯一 HAL UART 接收/错误回调入口，按运行模式转发到视觉或 D36 |
+
+`main.c` 不再直接编排底盘、IMU、日志、显示、D36 和夹取任务。比赛模式仍只由 `AppRuntime_Poll()` 调度；TIM6 仍每 1 ms 更新电机、每 10 ms 更新底盘位置环。普通比赛夹取完成后会先非阻塞复位夹取状态机，再允许下一项夹取，避免下一次 `PickFsm_Start()` 因停留在 `PICK_DONE` 被拒绝。
+
+本次电脑端验收：`tests/race/run.ps1` 和 `tests/ulog/run.ps1` 全部通过；`APP_RUN_MODE=0/1/2/3` 的入口静态语法检查全部通过；Keil `.uvprojx` 的文件路径和重复引用检查通过；源码中 HAL UART 接收/错误回调各保留一个定义。当前环境未发现 `UV4`、`armcc` 或 `armclang`，因此 ARM/Keil 固件编译标记为 `BUILD SKIP`，不能替代实机烧录和运行验收。

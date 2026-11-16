@@ -216,6 +216,7 @@ void AppRace_Poll(void)
     if (PickFsm_IsDone(&s_pick) && RaceTaskPlan_Current(&s_plan) != 0 &&
         RaceTaskPlan_Current(&s_plan)->kind == TASK_ACTION_PICK) {
         (void)RaceTaskPlan_Advance(&s_plan);
+        PickFsm_Reset(&s_pick, now);
     }
     if (s_race.state == RACE_RUNNING &&
         (previous_state != RACE_RUNNING || previous_index != s_race.action_index)) {
