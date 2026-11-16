@@ -1,11 +1,30 @@
 #include "race_fsm.h"
 #include "race_config.h"
-#include "race_vision_protocol.h"
+#include "vision.h"
 #include "race_task_plan.h"
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+
+UART_HandleTypeDef huart3 = {USART3};
+static uint32_t s_irq;
+uint32_t __get_PRIMASK(void) { return s_irq; }
+void __disable_irq(void) { s_irq = 1U; }
+void __set_PRIMASK(uint32_t mask) { s_irq = mask; }
+uint32_t HAL_GetTick(void) { return 0U; }
+int HAL_UART_Receive_IT(UART_HandleTypeDef *uart, uint8_t *byte, uint16_t length)
+{ (void)uart; (void)byte; (void)length; return HAL_OK; }
+int HAL_UART_Transmit_IT(UART_HandleTypeDef *uart, uint8_t *byte, uint16_t length)
+{ (void)uart; (void)byte; (void)length; return HAL_OK; }
+void Mecanum_Stop(MecanumChassis_t *chassis) { (void)chassis; }
+void Mecanum_SetPositionMode(MecanumChassis_t *chassis, float x, float y, float yaw)
+{ (void)chassis; (void)x; (void)y; (void)yaw; }
+void Mecanum_GetPosition(MecanumChassis_t *chassis, float *x, float *y, float *theta)
+{ (void)chassis; if (x) *x = 0.0f; if (y) *y = 0.0f; if (theta) *theta = 0.0f; }
+void Mecanum_GetVelocity(MecanumChassis_t *chassis, float *vx, float *vy, float *omega)
+{ (void)chassis; if (vx) *vx = 0.0f; if (vy) *vy = 0.0f; if (omega) *omega = 0.0f; }
+uint8_t Mecanum_IsTargetReached(MecanumChassis_t *chassis) { (void)chassis; return 1U; }
 
 static RaceFeedback stationary(void)
 {

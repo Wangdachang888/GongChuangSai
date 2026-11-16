@@ -2,7 +2,7 @@
 #include "app_race.h"
 #include "app_stepper_openloop.h"
 #include "race_config.h"
-#include "race_vision.h"
+#include "vision.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -12,6 +12,7 @@ static Motor_t s_motors[4];
 static MecanumChassis_t s_chassis;
 static uint32_t s_now, s_frames, s_irq, s_position_calls, s_stops, s_scans;
 static uint8_t s_key_down, s_imu_ok = 1U, s_bias_ready = 1U, s_link_ok = 1U, s_qr;
+static VisionContext s_vision;
 
 uint32_t __get_PRIMASK(void) { return s_irq; }
 void __disable_irq(void) { s_irq = 1U; }
@@ -50,6 +51,18 @@ uint8_t RaceVision_Poll(char code[RACE_TASK_CODE_SIZE])
     memcpy(code, "452+321+254+312", RACE_TASK_CODE_SIZE);
     return 1U;
 }
+VisionContext *Vision_GetDefault(void) { return &s_vision; }
+void Vision_SetRingChassis(VisionContext *vision, MecanumChassis_t *chassis)
+{ (void)vision; (void)chassis; }
+void Vision_SetRingCalibration(VisionContext *vision, float a, float b, float c,
+                               float d, float e, float f, float g, float h, float i)
+{ (void)vision; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; (void)g; (void)h; (void)i; }
+uint8_t Vision_RingActive(const VisionContext *vision) { (void)vision; return 0U; }
+uint8_t Vision_RingFailed(const VisionContext *vision) { (void)vision; return 0U; }
+uint8_t Vision_RingSucceeded(const VisionContext *vision) { (void)vision; return 0U; }
+int Vision_StartRingAlign(VisionContext *vision, uint8_t target, uint32_t now)
+{ (void)vision; (void)target; (void)now; return 0; }
+int Vision_Cancel(VisionContext *vision) { (void)vision; return 0; }
 void Servo_Init(void) {}
 void Servo_SetAngle(uint8_t id, float angle) { (void)id; (void)angle; }
 void Servo_SetAngleRelativeLong(uint8_t id, float angle) { (void)id; (void)angle; }
