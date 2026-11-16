@@ -24,6 +24,9 @@ class Job:
         self.last_pos = now
         self.last_lost = now
         self.last_measure_stamp = None
+        self.align_session = 0
+        self.align_step = 0
+        self.align_wait_done = False
 
     def observed(self, dx, dy, identity=None):
         # Do not accumulate samples from different objects of the same color.
@@ -97,7 +100,7 @@ def camera_create():
 
 def camera_mode(cam, mode):
     # Preserve the latest source camera settings.
-    color = mode in ('MATERIAL', 'BLUE', 'RING', 'AREA', 'MATERIAL_ALIGN', 'MATERIAL_PICK')
+    color = mode in ('MATERIAL', 'BLUE', 'RING', 'RING_ALIGN', 'AREA', 'MATERIAL_ALIGN', 'MATERIAL_PICK')
     cam.pixformat(csi.RGB565 if color else csi.GRAYSCALE)
     cam.framesize(csi.QVGA)
     cam.snapshot(time=350)
@@ -207,6 +210,7 @@ def main():
                     rings.reset()
                     disk_locked = False
                     qr_last, qr_streak = '', 0
+                    serial.reset_rx_sequence()
                     serial.send('ACK', 'RESET')
                     serial.send('IDLE')
                 elif command == 'PICK_STATUS' and len(packet) == 1:
@@ -253,6 +257,54 @@ def main():
                     else:
                         area.reset()
                         serial.send('ACK', 'AREA_RESET')
+                elif command == 'STEP_DONE' and len(packet) == 3:
+                    if (job is None or job.kind != 'RING_ALIGN' or
+                            not job.align_wait_done):
+                        serial.send('ERR', 'NO_ALIGN_STEP')
+                        continue
+                    step = int(packet[1])
+                    moved = int(packet[2])
+                    if step != job.align_step or moved not in (0, 1):
+                        serial.send('ERR', 'ALIGN_STEP_ORDER')
+                        continue
+                    job.align_wait_done = False
+                    job.align_step += 1
+                    job.last_measure_stamp = None
+                    serial.send('ACK', 'STEP_DONE', step)
+                elif command == 'ARRIVED' and len(packet) == 7:
+                    if job is None or job.kind != 'RING_ALIGN':
+                        serial.send('ERR', 'NO_ALIGN_JOB')
+                        continue
+                    target = int(packet[2])
+                    session = int(packet[5])
+                    if (target != job.target or session != job.align_session or
+                            int(packet[6]) < 1):
+                        serial.send('ERR', 'ALIGN_SESSION')
+                        continue
+                    serial.send('ACK', 'ARRIVED', session)
+                    idle()
+                elif command == 'ALIGN' and len(packet) == 3:
+                    if job is not None or pick_pending is not None:
+                        serial.send('ERR', 'BUSY')
+                        continue
+                    target = int(packet[1])
+                    session = int(packet[2])
+                    if target not in (1, 2, 3) or not (1 <= session <= 65535):
+                        serial.send('ERR', 'ALIGN_FORMAT')
+                        continue
+                    new_job = Job('RING_ALIGN', target, C.JOB_TOL_X_PX,
+                                  C.JOB_TOL_Y_PX, now,
+                                  C.ALIGN_JOB_TIMEOUT_MS, 1)
+                    new_job.align_session = session
+                    new_job.align_step = 0
+                    new_job.align_wait_done = False
+                    if active_camera_mode != 'RING_ALIGN':
+                        camera_mode(cam, 'RING_ALIGN')
+                        active_camera_mode = 'RING_ALIGN'
+                    rings.reset()
+                    frame = 0
+                    job = new_job
+                    serial.send('ACK', 'ALIGN', target, session)
                 elif command == 'JOB':
                     if job is not None:
                         serial.send('ERR', 'BUSY')
@@ -429,13 +481,33 @@ def main():
                 material_tracker.clear()
             del gray
 
+        elif job.kind == 'RING_ALIGN':
+            rings.process(img)
+            ring = choose_ring(rings, job.target, now)
+            if (ring is not None and not job.align_wait_done and
+                    ring.last_measured != job.last_measure_stamp):
+                job.last_measure_stamp = ring.last_measured
+                px = int(round(ring.x.x))
+                py = int(round(ring.y.x))
+                dx = px - int(C.RING_TARGET_X_PX)
+                dy = py - int(C.RING_TARGET_Y_PX)
+                serial.send('POS', 'RING', job.target, dx, dy, px, py,
+                            job.align_session, job.align_step)
+                job.align_wait_done = True
+                job.last_pos = now
+            elif (ring is None and
+                  time.ticks_diff(now, job.last_lost) >= C.JOB_LOST_PERIOD_MS):
+                serial.send('LOST', 'RING', job.target)
+                job.last_lost = now
+            continue
+
         elif job.kind == 'RING':
             rings.process(img)
             t = choose_ring(rings, job.target, now)
             if t is not None and t.last_measured != job.last_measure_stamp:
                 job.last_measure_stamp = t.last_measured
                 px, py = int(round(t.x.x)), int(round(t.y.x))
-                observed = (px-int(C.CX_PX), py-int(C.CY_PX), px, py, None)
+                observed = (px-int(C.RING_TARGET_X_PX), py-int(C.RING_TARGET_Y_PX), px, py, None)
 
         elif job.kind == 'EDGE':
             line = U.detect_edge(img)

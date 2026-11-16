@@ -797,14 +797,9 @@
               <FilePath>..\Hardware\race_fsm.c</FilePath>
             </File>
             <File>
-              <FileName>race_vision.c</FileName>
+              <FileName>vision.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Hardware\race_vision.c</FilePath>
-            </File>
-            <File>
-              <FileName>race_vision_protocol.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Hardware\race_vision_protocol.c</FilePath>
+              <FilePath>..\Hardware\vision.c</FilePath>
             </File>
             <File>
               <FileName>app_mode.h</FileName>
@@ -837,14 +832,9 @@
               <FilePath>..\Hardware\race_fsm.h</FilePath>
             </File>
             <File>
-              <FileName>race_vision.h</FileName>
+              <FileName>vision.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\Hardware\race_vision.h</FilePath>
-            </File>
-            <File>
-              <FileName>race_vision_protocol.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\Hardware\race_vision_protocol.h</FilePath>
+              <FilePath>..\Hardware\vision.h</FilePath>
             </File>
             <File>
               <FileName>app_pick_fsm.c</FileName>

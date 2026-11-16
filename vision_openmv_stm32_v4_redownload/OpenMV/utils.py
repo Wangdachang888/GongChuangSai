@@ -1622,6 +1622,8 @@ class PacketSerial:
         self.rx = bytearray()
         self.seq = 0
         self.bad = 0
+        self.rx_seq = 0
+        self.rx_seq_valid = False
 
     def send(self, *parts):
         body = ','.join(str(p) for p in parts)
@@ -1649,8 +1651,8 @@ class PacketSerial:
             elif b == 10:
                 if self.rx:
                     p = self._decode(self.rx)
-                    if p is not None:
-                        result.append(p)
+                    if p is not None and self._accept_rx_seq(p[0]):
+                        result.append(p[1])
                     else:
                         self.bad += 1
                 self.rx = bytearray()
@@ -1682,9 +1684,24 @@ class PacketSerial:
                 return None
             if int(seq) > 65535:
                 return None
-            return body.split(',')
+            return (int(seq), body.split(','))
         except Exception:
             return None
+
+    def _accept_rx_seq(self, sequence):
+        if not self.rx_seq_valid:
+            self.rx_seq = sequence
+            self.rx_seq_valid = True
+            return True
+        distance = (sequence - self.rx_seq) % 65536
+        if distance == 0 or distance >= 32768:
+            return False
+        self.rx_seq = sequence
+        return True
+
+    def reset_rx_sequence(self):
+        self.rx_seq = 0
+        self.rx_seq_valid = False
 
 
 def metric_from_circle(px, py, diameter_px, known_diameter_mm):

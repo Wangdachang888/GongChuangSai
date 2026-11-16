@@ -1,6 +1,6 @@
 #include "race_ui.h"
 #include "bsp_oled.h"
-#include "race_vision.h"
+#include "vision.h"
 #include "main.h"
 #include <stdio.h>
 #include <string.h>
