@@ -14,7 +14,7 @@
 #ifndef __BSP_D36_CMD_H
 #define __BSP_D36_CMD_H
 
-#include "stm32f4xx_hal.h"
+#include "usart.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,6 +27,8 @@ extern "C" {
 void D36Cmd_Init(void);
 void D36Cmd_Poll(void);
 void D36Cmd_Printf(const char *s);
+void D36Cmd_RxCpltCallback(UART_HandleTypeDef *huart);
+void D36Cmd_ErrorCallback(UART_HandleTypeDef *huart);
 
 #ifdef __cplusplus
 }

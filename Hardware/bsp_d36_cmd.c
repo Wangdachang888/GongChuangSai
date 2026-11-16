@@ -310,7 +310,7 @@ void D36Cmd_Poll(void)
     }
 }
 
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+void D36Cmd_RxCpltCallback(UART_HandleTypeDef *huart)
 {
     uint16_t next;
 
@@ -328,7 +328,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     (void)HAL_UART_Receive_IT(&huart3, &s_rx_byte, 1U);
 }
 
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+void D36Cmd_ErrorCallback(UART_HandleTypeDef *huart)
 {
     if (huart->Instance == USART3)
     {
@@ -341,6 +341,8 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 void D36Cmd_Init(void) {}
 void D36Cmd_Poll(void) {}
 void D36Cmd_Printf(const char *s) { (void)s; }
+void D36Cmd_RxCpltCallback(UART_HandleTypeDef *huart) { (void)huart; }
+void D36Cmd_ErrorCallback(UART_HandleTypeDef *huart) { (void)huart; }
 
 #endif
 

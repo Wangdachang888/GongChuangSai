@@ -777,6 +777,16 @@
               <FilePath>..\Hardware\app_race.c</FilePath>
             </File>
             <File>
+              <FileName>app_runtime.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Hardware\app_runtime.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_uart_router.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Hardware\bsp_uart_router.c</FilePath>
+            </File>
+            <File>
               <FileName>race_fsm.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Hardware\race_fsm.c</FilePath>
@@ -805,6 +815,11 @@
               <FileName>app_race.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\Hardware\app_race.h</FilePath>
+            </File>
+            <File>
+              <FileName>app_runtime.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Hardware\app_runtime.h</FilePath>
             </File>
             <File>
               <FileName>race_fsm.h</FileName>

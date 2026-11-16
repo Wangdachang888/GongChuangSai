@@ -63,7 +63,7 @@ uint8_t RaceVision_Poll(char code[RACE_TASK_CODE_SIZE])
     return found && RaceVision_Healthy();
 }
 
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *uart)
+void RaceVision_RxCpltCallback(UART_HandleTypeDef *uart)
 {
     uint16_t next;
     if (uart->Instance != USART3) return;
@@ -77,7 +77,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *uart)
     if (HAL_UART_Receive_IT(&huart3, &s_byte, 1U) != HAL_OK) s_rx_fault = 1U;
 }
 
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *uart)
+void RaceVision_ErrorCallback(UART_HandleTypeDef *uart)
 {
     if (uart->Instance != USART3) return;
     s_rx_fault = 1U;
