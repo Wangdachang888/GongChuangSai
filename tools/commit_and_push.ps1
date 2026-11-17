@@ -192,7 +192,7 @@ try {
         finally {
             $ErrorActionPreference = $previousPreference
         }
-        $pushOutput | ForEach-Object { Write-Output $_ }
+        $pushOutput | ForEach-Object { Write-Output $_.ToString() }
         if ($pushCode -eq 0) {
             $pushed = $true
             break

@@ -22,10 +22,11 @@
 - GitHub 远程：`git@github.com:Wangdachang888/GongChuangSai.git`。
 - 授权自动推送分支：`refactor/architecture-v2`。
 - 本次自动同步机制启用前最后确认：本地和远程开发分支均为 `4f26e96699d1ba9abd4419461ee924993a5a24c2`，状态为 `SYNC PASS`。
+- 自动同步脚本首次真实成功提交并推送后确认：提交 `673abab4f2da835267a08b126a917e791cae741b` 的本地和远程 SHA 一致，状态为 `SYNC PASS`。
 - 当前未推送提交和远程 SHA：必须通过 `git rev-parse HEAD`、`git ls-remote origin refs/heads/refactor/architecture-v2` 动态查询，不在本状态快照中固定当前提交自身的 SHA。
 - 自动同步脚本：`tools/commit_and_push.ps1`；它只接受明确文件列表，不会默认暂存整个工作区。
 - 当前已知同步异常：无；若推送失败，必须保留本地提交并记录 `SYNC FAIL`，不得强制推送。
-- 最近完成阶段：长期维护规则、架构文档、硬件验收记录、工程引用清理和 GitHub 开发分支首次同步。
+- 最近完成阶段：长期维护规则、架构文档、硬件验收记录、工程引用清理、GitHub 开发分支首次同步和自动同步脚本成功验证。
 
 ## 3. 硬件与引脚事实
 
