@@ -11,7 +11,7 @@ if ([string]::IsNullOrWhiteSpace($Compiler) -or
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 Push-Location $root
 try {
-    $common = @('-DULOG_TEST', '-std=c99', '-Wall', '-Wextra', '-Werror', '-Itests/ulog', '-Itests/race/stubs', '-IConfig', '-IHardware', '-include', 'tests/race/stubs/board.h')
+    $common = @('-DULOG_TEST', '-std=c99', '-Wall', '-Wextra', '-Werror', '-Itests/ulog', '-Itests/race/stubs', '-IConfig', '-IControl', '-IHardware', '-include', 'tests/race/stubs/board.h')
     foreach ($mode in @(0, 3)) {
         $binary = "tmp/test_ulog_$mode.exe"
         & $Compiler @common "-DAPP_RUN_MODE=$mode" -Dsnprintf=ulog_test_snprintf tests/ulog/test_ulog.c Hardware/bsp_ulog.c Hardware/race_task_plan.c -lm -o $binary

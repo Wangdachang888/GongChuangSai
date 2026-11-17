@@ -3,7 +3,7 @@
 ## 主工程
 
 当前唯一正式 STM32 工程是根目录下的 `MDK-ARM/GongChuangSai.uvprojx`。源码位于
-`Config/`、`Core/`、`Drivers/`、`IMU20948/` 和 `Hardware/`。历史工程副本保存在本机
+`Config/`、`Control/`、`Core/`、`Drivers/`、`IMU20948/` 和 `Hardware/`。历史工程副本保存在本机
 `archive/historical/`，不参与构建；旧 ZIP 包保存在 `archive/packages/`。
 
 OpenMV 的正式部署源代码是 `vision_openmv_stm32_v4_redownload/OpenMV/` 下的
@@ -12,6 +12,7 @@ OpenMV 的正式部署源代码是 `vision_openmv_stm32_v4_redownload/OpenMV/` �
 ## 目录职责
 
 - `Core/`：CubeMX 生成的启动、外设和中断桥接。
+- `Control/`：四轮电机速度环、麦轮运动学、里程计、位置 PID 和导航辅助。
 - `Hardware/`：底盘、轮毂电机、IMU、视觉通信、圆环闭环、夹取状态机和设备驱动。
 - `Config/`：运行模式和比赛参数配置头文件。
 - `IMU20948/`：ICM20948 驱动和姿态解算。

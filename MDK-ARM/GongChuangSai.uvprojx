@@ -340,7 +340,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32F407xx</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../Config;../Hardware;../IMU20948/inc</IncludePath>
+              <IncludePath>../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../Config;../Control;../Hardware;../IMU20948/inc</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -639,12 +639,12 @@
             <File>
               <FileName>Motor.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Hardware\Motor.c</FilePath>
+              <FilePath>..\Control\Motor.c</FilePath>
             </File>
             <File>
               <FileName>Motor.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\Hardware\Motor.h</FilePath>
+              <FilePath>..\Control\Motor.h</FilePath>
             </File>
             <File>
               <FileName>oledfont.h</FileName>

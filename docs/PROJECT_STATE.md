@@ -44,7 +44,7 @@
 
 启动入口在 `Core/Src/main.c`：HAL、GPIO、定时器和 USART3 初始化后调用 `AppRuntime_Init()`，随后启动 TIM6 中断并在主循环调用 `AppRuntime_Poll()`。唯一的 TIM6 周期回调也在该文件中。
 
-`Config/` 负责运行模式和比赛参数；`Hardware/app_runtime.c` 负责模式选择、设备初始化和实时桥接；`Hardware/app_race.c` 负责比赛协调、按键、视觉、路线、圆环和夹取任务之间的互斥；`Hardware/mecanum_chassis.c` 是底盘运动学、里程计和位置 PID 的唯一执行层；`Hardware/vision.c` 负责协议、帧缓存和视觉结果；`Hardware/app_ring_align.c` 负责圆环标定换算和闭环移动；`Hardware/app_pick_fsm.c` 负责舵机、升降步进和夹取流程。
+`Config/` 负责运行模式和比赛参数；`Control/Motor.c` 负责轮毂电机速度环，`Hardware/app_runtime.c` 负责模式选择、设备初始化和实时桥接；`Hardware/app_race.c` 负责比赛协调、按键、视觉、路线、圆环和夹取任务之间的互斥；`Hardware/mecanum_chassis.c` 是底盘运动学、里程计和位置 PID 的唯一执行层；`Hardware/vision.c` 负责协议、帧缓存和视觉结果；`Hardware/app_ring_align.c` 负责圆环标定换算和闭环移动；`Hardware/app_pick_fsm.c` 负责舵机、升降步进和夹取流程。
 
 USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式转给 `vision.c`，其他模式按配置转给 D36 命令模块。UART 中断不执行阻塞发送、底盘控制或机械动作。
 
@@ -127,3 +127,10 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 - `tests/race/run.ps1`：`PASS`。
 - `tests/ulog/run.ps1`：`PASS`。
 - 本轮没有修改业务代码、PID、硬件参数、引脚映射或控制算法；没有执行烧录和硬件在线调试。
+
+## 14. Control 阶段迁移进度
+
+- `Motor.c/h` 已使用 `git mv` 从 `Hardware/` 迁移到 `Control/`。
+- Keil 工程已改为引用 `Control/Motor.c/h`，并将 `../Control` 加入 IncludePath；主机测试脚本同步加入 `-IControl`。
+- 本单元保留全部函数接口、PID 实现、轮毂电机参数和 TIM6 调度，不修改控制算法。
+- `mecanum_chassis.c/h` 与 `nav.c/h` 尚未迁移；本轮不进入 BSP 阶段。

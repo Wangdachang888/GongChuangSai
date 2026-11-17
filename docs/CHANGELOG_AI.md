@@ -40,6 +40,14 @@
 验证：`D:\keil\UV4\UV4.exe -b MDK-ARM\GongChuangSai.uvprojx -j0 -o <build-log>` PASS；ArmCC V5.06 update 5 (build 528)，0 Error、0 Warning；`tests/race/run.ps1` PASS；`tests/ulog/run.ps1` PASS。
 实机：NOT_RUN；未执行烧录和硬件在线调试，未修改业务代码。
 
+## Control 阶段：Motor 模块迁移（2026-11-17）
+
+提交：本次 Motor 迁移提交（不在提交内容中自引用当前 SHA）
+范围：`Hardware/Motor.c`、`Hardware/Motor.h` → `Control/Motor.c`、`Control/Motor.h`；Keil IncludePath；race/ulog 测试 IncludePath；架构文档
+原因：按 Control 层物理迁移计划整理轮毂电机速度环模块。
+验证：`tests/race/run.ps1` PASS；`tests/ulog/run.ps1` PASS；迁移路径、旧路径清理、Keil 文件引用和 `../Control` IncludePath 静态检查 PASS；`git diff --check` PASS。
+实机：NOT_RUN；未修改函数接口、PID、硬件参数或控制算法。
+
 ## 记录格式
 
 后续每个独立单元使用以下字段追加：
