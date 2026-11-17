@@ -45,8 +45,8 @@ USART3 的 HAL UART 接收、发送完成和错误回调唯一归属
 
 ## 构建和测试
 
-目标固件需要 Keil MDK/Arm 编译工具链；当前环境没有 `UV4`、`armcc` 或 `armclang`，
-所以电脑端测试不能替代固件编译。主机测试会自动从 PATH 查找 `gcc`，也可以显式
+目标固件使用 Keil MDK/Arm 编译工具链；当前已定位 `D:\keil\UV4\UV4.exe` 和
+ArmCC 工具链，可通过命令行构建正式工程。主机测试仍不能替代烧录和实机验收；主机测试会自动从 PATH 查找 `gcc`，也可以显式
 传入工具链路径：
 
 ```powershell
