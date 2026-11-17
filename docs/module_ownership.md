@@ -6,7 +6,7 @@
 | --- | --- | --- | --- |
 | TIM6 实时调度 | `Core/Src/main.c` 的 `HAL_TIM_PeriodElapsedCallback` | `AppRuntime_ControlTick`、`AppRuntime_MotorTick`、`AppRuntime_ChassisTick` | 其他模块定义第二个 TIM6 回调。 |
 | 四轮电机速度环与 PWM | `Control/Motor.c` | `app_runtime.c` 的 1 ms 调度 | 应用层直接改 PWM 或编码器计数。 |
-| 底盘运动学、里程计和位置 PID | `Hardware/mecanum_chassis.c` | `app_runtime.c` 的 10 ms 调度 | 新增第二套位置 PID。 |
+| 底盘运动学、里程计和位置 PID | `Control/mecanum_chassis.c` | `app_runtime.c` 的 10 ms 调度 | 新增第二套位置 PID。 |
 | 底盘位置目标 | 比赛模式由 `Hardware/app_race.c` 和 `Hardware/app_ring_align.c` 通过协调状态互斥写入 | 比赛状态机、圆环闭环 | `vision.c` 直接写目标；两个应用同时运行。 |
 | USART3 HAL 回调 | `Hardware/bsp_uart_router.c` | 路由到 `vision.c` 或非比赛 D36 模块 | 在视觉、D36 或测试业务中重复定义 HAL 回调。 |
 | OpenMV 消息与协议状态 | `Hardware/vision.c` | `app_race.c`、`app_ring_align.c` | UART ISR 中执行底盘、矩阵或机械动作。 |

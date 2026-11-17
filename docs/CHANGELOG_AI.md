@@ -48,6 +48,14 @@
 验证：`tests/race/run.ps1` PASS；`tests/ulog/run.ps1` PASS；迁移路径、旧路径清理、Keil 文件引用和 `../Control` IncludePath 静态检查 PASS；`git diff --check` PASS。
 实机：NOT_RUN；未修改函数接口、PID、硬件参数或控制算法。
 
+## Control 阶段：Mecanum chassis 模块迁移（2026-11-17）
+
+提交：本次 Mecanum chassis 迁移提交（不在提交内容中自引用当前 SHA）
+范围：`Hardware/mecanum_chassis.c`、`Hardware/mecanum_chassis.h` → `Control/mecanum_chassis.c`、`Control/mecanum_chassis.h`；Keil 工程路径；架构和 IMU/圆环文档路径
+原因：按 Control 层物理迁移计划整理麦轮运动学、里程计和位置 PID 执行模块。
+验证：迁移路径、旧路径清理、Keil 文件引用和主机 IncludePath 静态检查 PASS；待本单元完成后运行 `tests/race/run.ps1`、`tests/ulog/run.ps1` 并记录结果。
+实机：NOT_RUN；不修改运动学、位置 PID、轮径、轮距或函数接口。
+
 ## 记录格式
 
 后续每个独立单元使用以下字段追加：

@@ -14,7 +14,7 @@
 
 ## 数据依据与修正
 
-默认通道来自 `Hardware/bsp_ulog.c`，几何和运动学来自 `Core/Src/main.c`、`Hardware/mecanum_chassis.c`。
+默认通道来自 `Hardware/bsp_ulog.c`，几何和运动学来自 `Core/Src/main.c`、`Control/mecanum_chassis.c`。
 
 | 量 | 来源 / 单位 |
 |---|---|

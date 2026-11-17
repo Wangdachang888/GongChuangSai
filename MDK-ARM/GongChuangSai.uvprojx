@@ -629,12 +629,12 @@
             <File>
               <FileName>mecanum_chassis.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Hardware\mecanum_chassis.c</FilePath>
+              <FilePath>..\Control\mecanum_chassis.c</FilePath>
             </File>
             <File>
               <FileName>mecanum_chassis.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\Hardware\mecanum_chassis.h</FilePath>
+              <FilePath>..\Control\mecanum_chassis.h</FilePath>
             </File>
             <File>
               <FileName>Motor.c</FileName>

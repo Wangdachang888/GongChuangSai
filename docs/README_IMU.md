@@ -35,8 +35,8 @@ ICM20948 ─200Hz─► app_imu ──► yaw（陀螺 + 磁力计）
 | 文件 | 改动 |
 |---|---|
 | `Core\Src\main.c` | 打开 `OLED_Init()`；加 `DisplayNav_Init()`、`app_imu_init()`；主循环加 `app_imu_poll()` + `DisplayNav_Poll()` |
-| `Hardware\mecanum_chassis.c` | `Mecanum_UpdateState()` 改为调用 `nav.c`；加 `MecanumChassis_GetNav()`；`Init`/`ResetPosition` 里初始化/复位导航 |
-| `Hardware\mecanum_chassis.h` | 引入 `nav.h`，声明 `MecanumChassis_GetNav()` |
+| `Control\mecanum_chassis.c` | `Mecanum_UpdateState()` 改为调用 `nav.c`；加 `MecanumChassis_GetNav()`；`Init`/`ResetPosition` 里初始化/复位导航 |
+| `Control\mecanum_chassis.h` | 引入 `nav.h`，声明 `MecanumChassis_GetNav()` |
 | `MDK-ARM\GongChuangSai.uvprojx` | 新增 `IMU20948` 组（3 个 .c）；`Hardware` 组加 3 个 .c；Include 加 `../IMU20948/inc` |
 
 新增文件：`Hardware\app_imu.c/h`、`nav.c/h`、`display_nav.c/h`、`IMU20948\`（8 个文件）。

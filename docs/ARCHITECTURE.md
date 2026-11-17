@@ -8,7 +8,7 @@
 | `Core/Src/main.c` | HAL、外设初始化、TIM6 启动、主循环和唯一 TIM6 周期回调 | 比赛业务、视觉解析、机械动作 |
 | `Hardware/app_runtime.c` | 运行模式初始化、主循环调度、TIM6 到电机/底盘的桥接 | 新增第二套控制器 |
 | `Control/Motor.c` | 单轮 PWM、编码器采样和速度闭环 | 四轮运动学和比赛流程 |
-| `Hardware/mecanum_chassis.c` | 麦轮运动学、里程计、位置 PID、速度/位置目标执行 | UART 协议和机械夹取 |
+| `Control/mecanum_chassis.c` | 麦轮运动学、里程计、位置 PID、速度/位置目标执行 | UART 协议和机械夹取 |
 | `Hardware/app_race.c` | 比赛协调、按键、路线、视觉、圆环、夹取互斥 | 直接解析 UART 字节、实现第二套底盘 PID |
 | `Hardware/race_fsm.c` | 启停区、路线动作、扫描、到位、取消、超时和故障状态 | 直接操作硬件 UART 或舵机 |
 | `Hardware/race_task_plan.c` | 根据二维码颜色/位置生成和推进任务计划 | 直接写底盘目标 |
