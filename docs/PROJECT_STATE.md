@@ -15,7 +15,7 @@
 - 配置目录：`Config/`，包含 `app_mode.h` 和 `race_config.h`。
 - 主机测试编译器：`D:\minGW\mingw64\bin\gcc.exe`
 - 已发现主机测试：`tests/race/run.ps1`、`tests/ulog/run.ps1`
-- 当前环境未发现 `UV4`、`armcc`、`armclang`，固件编译必须记录为 `BUILD SKIP`。
+- 已定位 Keil/Arm 工具链：`D:\keil\UV4\UV4.exe`、`D:\keil\ARM\ARMCC\Bin\armcc.exe`、`D:\keil\ARM\ARMCC\Bin\armlink.exe`；注册表 MDK 产品版本为 `V5.24a`，实际 uVision 构建日志使用 MDK-ARM Plus `V5.37.0.0` 工具链组件。
 - 不自动合并 `main`、不烧录；经授权的普通推送只允许当前开发分支，并按 `AGENTS.md` 的规则完成。
 
 ## 版本同步状态
@@ -92,7 +92,7 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 ## 9. 下一步优先级
 
 1. 重新执行工程文件、回调、公开接口和阻塞路径静态检查。
-2. 在具备 Keil 工具链后执行完整编译链接，并保存体积数据。
+2. 继续执行 Keil 命令行编译链接，并保存体积数据。
 3. 测量并填写圆环像素到米制的标定矩阵，再进行低速实机验证。
 4. 在断电检查和人工急停条件下逐项验证夹取、升降、转盘和底盘联动。
 5. 完成 OpenMV、USART3、SD 卡日志和机械负载测试后再考虑合并稳定分支。
@@ -102,7 +102,7 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 - `tests/race/run.ps1`：`PASS`，覆盖路线、协议、圆环握手和比赛应用状态机。
 - `tests/ulog/run.ps1`：`PASS`，覆盖正常、取消、超时、发送错误、格式错误、非有限值、手动和空指针场景。
 - GCC `-std=c99 -Wall -Wextra -Werror`：随上述脚本通过。
-- Keil/Arm 固件编译：`BUILD SKIP`，工具链不存在。
+- Keil/Arm 固件编译：`PASS`，ArmCC V5.06 update 5 (build 528)，`0 Error(s), 0 Warning(s)`。
 - 真实烧录、OpenMV、底盘、圆环、夹取、舵机、步进和 SD 卡：`NOT_RUN`。
 
 ## 11. 给下一位 AI 的交接
@@ -115,5 +115,15 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 - `tests/ulog/run.ps1`：`PASS`。覆盖正常、取消、超时、发送错误、格式错误、非有限值、手动和空指针日志场景，以及流程完成、启动复位和取消路径。
 - Keil 工程静态检查：`PASS`。`MDK-ARM/GongChuangSai.uvprojx` 包含 76 个文件引用，全部路径存在且无重复；`IncludePath` 包含 `../Config`；Keil 工程引用 `Config/app_mode.h` 和 `Config/race_config.h`，不再引用旧的 `Hardware/` 配置路径。
 - Config 迁移阶段：`COMPLETE`。本次仅完成最终验证和验收记录，没有开始 Control、BSP、Services 或 App 的下一阶段迁移。
-- Keil/Arm 固件编译：`BUILD SKIP`，当前环境仍未安装 UV4、armcc 或 armclang。
+- Keil/Arm 固件编译：`PASS`，当前已定位并使用 UV4 与 ArmCC；本次 Config 验收未修改业务代码。
 - 烧录、OpenMV 通信、底盘、圆环、夹取、舵机、步进和 SD 卡：`NOT_RUN`。
+
+## 13. Keil 编译与自动测试验收（2026-11-17）
+
+- 工程：`MDK-ARM/GongChuangSai.uvprojx`。
+- 编译命令：`D:\keil\UV4\UV4.exe -b MDK-ARM\GongChuangSai.uvprojx -j0 -o <build-log>`。
+- 编译结果：`PASS`；使用 ArmCC V5.06 update 5 (build 528)，生成 AXF 和 HEX，`0 Error(s), 0 Warning(s)`。
+- 程序尺寸：`Code=54004`、`RO-data=8664`、`RW-data=356`、`ZI-data=9540`。
+- `tests/race/run.ps1`：`PASS`。
+- `tests/ulog/run.ps1`：`PASS`。
+- 本轮没有修改业务代码、PID、硬件参数、引脚映射或控制算法；没有执行烧录和硬件在线调试。

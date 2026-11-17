@@ -32,6 +32,14 @@
 验证：`tests/race/run.ps1` PASS；`tests/ulog/run.ps1` PASS；Keil 工程 76 个文件引用、路径存在性、重复引用和 `../Config` IncludePath 静态检查 PASS；Keil/Arm BUILD SKIP（工具链不存在）。
 实机：NOT_RUN；Config 阶段标记为 COMPLETE。
 
+## Keil 编译与自动测试验收（2026-11-17）
+
+提交：本次编译验收文档提交（不在提交内容中自引用当前 SHA）
+范围：`docs/PROJECT_STATE.md`、`docs/CHANGELOG_AI.md`
+原因：记录已定位的 Keil/Arm 工具链、命令行编译结果和主机测试结果。
+验证：`D:\keil\UV4\UV4.exe -b MDK-ARM\GongChuangSai.uvprojx -j0 -o <build-log>` PASS；ArmCC V5.06 update 5 (build 528)，0 Error、0 Warning；`tests/race/run.ps1` PASS；`tests/ulog/run.ps1` PASS。
+实机：NOT_RUN；未执行烧录和硬件在线调试，未修改业务代码。
+
 ## 记录格式
 
 后续每个独立单元使用以下字段追加：
