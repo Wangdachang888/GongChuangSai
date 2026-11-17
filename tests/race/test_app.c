@@ -1,5 +1,6 @@
 #include "board.h"
 #include "app_race.h"
+#include "app_ring_align.h"
 #include "app_stepper_openloop.h"
 #include "race_config.h"
 #include "vision.h"
@@ -52,6 +53,8 @@ uint8_t RaceVision_Poll(char code[RACE_TASK_CODE_SIZE])
     return 1U;
 }
 VisionContext *Vision_GetDefault(void) { return &s_vision; }
+void Vision_SetStop(VisionContext *vision, VisionStop stop, void *user)
+{ (void)vision; (void)stop; (void)user; }
 void Vision_SetRingChassis(VisionContext *vision, MecanumChassis_t *chassis)
 { (void)vision; (void)chassis; }
 void Vision_SetRingCalibration(VisionContext *vision, float a, float b, float c,
@@ -62,6 +65,20 @@ uint8_t Vision_RingFailed(const VisionContext *vision) { (void)vision; return 0U
 uint8_t Vision_RingSucceeded(const VisionContext *vision) { (void)vision; return 0U; }
 int Vision_StartRingAlign(VisionContext *vision, uint8_t target, uint32_t now)
 { (void)vision; (void)target; (void)now; return 0; }
+void AppRingAlign_Init(AppRingAlign *align, VisionContext *vision,
+                       MecanumChassis_t *chassis, const RingAlignConfig *config)
+{ (void)align; (void)vision; (void)chassis; (void)config; }
+uint8_t AppRingAlign_Start(AppRingAlign *align, uint8_t target, uint32_t now)
+{ (void)align; (void)target; (void)now; return 0U; }
+void AppRingAlign_Poll(AppRingAlign *align, uint32_t now)
+{ (void)align; (void)now; }
+void AppRingAlign_Cancel(AppRingAlign *align) { (void)align; }
+uint8_t AppRingAlign_IsActive(const AppRingAlign *align)
+{ (void)align; return 0U; }
+uint8_t AppRingAlign_Succeeded(const AppRingAlign *align)
+{ (void)align; return 0U; }
+uint8_t AppRingAlign_Failed(const AppRingAlign *align)
+{ (void)align; return 0U; }
 int Vision_Cancel(VisionContext *vision) { (void)vision; return 0; }
 void Servo_Init(void) {}
 void Servo_SetAngle(uint8_t id, float angle) { (void)id; (void)angle; }

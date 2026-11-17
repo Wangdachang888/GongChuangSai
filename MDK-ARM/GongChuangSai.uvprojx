@@ -777,6 +777,11 @@
               <FilePath>..\Hardware\app_race.c</FilePath>
             </File>
             <File>
+              <FileName>app_ring_align.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Hardware\app_ring_align.c</FilePath>
+            </File>
+            <File>
               <FileName>app_runtime.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Hardware\app_runtime.c</FilePath>
@@ -815,6 +820,11 @@
               <FileName>app_race.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\Hardware\app_race.h</FilePath>
+            </File>
+            <File>
+              <FileName>app_ring_align.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Hardware\app_ring_align.h</FilePath>
             </File>
             <File>
               <FileName>app_runtime.h</FileName>

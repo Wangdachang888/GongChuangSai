@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include "usart.h"
 #include "race_fsm.h"
-#include "mecanum_chassis.h"
 
 #define VISION_FRAME_MAX             192U
 #define VISION_BODY_MAX              128U
@@ -66,31 +65,9 @@ typedef struct {
     uint16_t session_id;
     uint16_t step_id;
     uint8_t good_count;
-    uint8_t correction_count;
-    uint8_t stable_started;
-    uint8_t calibration_valid;
     uint32_t started_ms;
     uint32_t step_started_ms;
-    uint32_t stable_since_ms;
-    uint32_t last_pos_ms;
-    float target_x;
-    float target_y;
-    float target_theta;
-    float matrix_00;
-    float matrix_01;
-    float matrix_10;
-    float matrix_11;
-    float gain;
-    float max_step_m;
-    float min_step_m;
-    float max_speed_mps;
-    float max_omega_radps;
-    float tolerance_x_px;
-    float tolerance_y_px;
-    float saved_max_speed;
-    float saved_max_omega;
-    uint8_t speed_limited;
-} VisionRingAlign;
+} VisionRingProtocol;
 
 typedef struct {
     VisionTx tx;
@@ -129,8 +106,7 @@ typedef struct {
     char qr_code[RACE_TASK_CODE_SIZE];
     char wait_reason[32];
     char last_error[48];
-    VisionRingAlign ring;
-    MecanumChassis_t *ring_chassis;
+    VisionRingProtocol ring;
 } VisionContext;
 
 typedef struct {
@@ -162,20 +138,23 @@ const VisionPosition *Vision_GetPosition(const VisionContext *vision,
                                          uint32_t now_ms);
 uint8_t Vision_TakeQr(VisionContext *vision, char code[RACE_TASK_CODE_SIZE]);
 
-void Vision_SetRingChassis(VisionContext *vision, MecanumChassis_t *chassis);
-void Vision_SetRingCalibration(VisionContext *vision,
-                               float matrix_00, float matrix_01,
-                               float matrix_10, float matrix_11,
-                               float gain, float max_step_m,
-                               float min_step_m, float max_speed_mps,
-                               float max_omega_radps);
+void Vision_SetStop(VisionContext *vision, VisionStop stop, void *user);
 int Vision_StartRingAlign(VisionContext *vision, uint8_t target,
                           uint32_t now_ms);
 VisionRingState Vision_GetRingState(const VisionContext *vision);
 uint8_t Vision_RingActive(const VisionContext *vision);
 uint8_t Vision_RingSucceeded(const VisionContext *vision);
 uint8_t Vision_RingFailed(const VisionContext *vision);
-void Vision_RingPoll(VisionContext *vision, uint32_t now_ms);
+uint8_t Vision_RingTarget(const VisionContext *vision);
+uint16_t Vision_RingSession(const VisionContext *vision);
+uint16_t Vision_RingStep(const VisionContext *vision);
+uint32_t Vision_RingStartedAt(const VisionContext *vision);
+uint32_t Vision_RingStepStartedAt(const VisionContext *vision);
+void Vision_RingMarkMoving(VisionContext *vision, uint32_t now_ms);
+uint8_t Vision_RingMarkStepDone(VisionContext *vision, uint32_t now_ms);
+uint8_t Vision_RingMarkStable(VisionContext *vision, uint32_t now_ms);
+void Vision_RingClearPosition(VisionContext *vision);
+void Vision_RingFail(VisionContext *vision, const char *reason);
 
 /* Compatibility adapters used by the existing QR route. */
 uint8_t RaceVision_Init(void);

@@ -1,8 +1,5 @@
-#include "app_mode.h"
 #include "vision.h"
-#include "race_config.h"
 #include <ctype.h>
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -95,16 +92,6 @@ static void stop_vehicle(VisionContext *vision)
     if (vision == NULL) return;
     vision->pos.valid = 0U;
     if (vision->stop != NULL) vision->stop(vision->user);
-    else if (vision->ring_chassis != NULL) Mecanum_Stop(vision->ring_chassis);
-}
-
-static void restore_ring_limits(VisionContext *vision)
-{
-    if (vision == NULL || vision->ring_chassis == NULL ||
-        !vision->ring.speed_limited) return;
-    vision->ring_chassis->max_speed = vision->ring.saved_max_speed;
-    vision->ring_chassis->max_omega = vision->ring.saved_max_omega;
-    vision->ring.speed_limited = 0U;
 }
 
 static void ring_fail(VisionContext *vision, const char *reason)
@@ -114,7 +101,6 @@ static void ring_fail(VisionContext *vision, const char *reason)
     vision->result = VISION_RESULT_ERROR;
     vision->ring.state = VISION_RING_ERROR;
     vision->phase = VISION_IDLE;
-    restore_ring_limits(vision);
     stop_vehicle(vision);
 }
 
@@ -279,7 +265,6 @@ static void handle_body(VisionContext *vision, char *body, uint32_t now_ms)
             target != vision->ring.target || session != vision->ring.session_id ||
             step != vision->ring.step_id) return;
         accept_position(vision, fields[1], target, dx, dy, cx, cy, now_ms);
-        vision->ring.last_pos_ms = now_ms;
         vision->ring.state = VISION_RING_CALCULATE;
         return;
     }
@@ -320,7 +305,6 @@ static void handle_body(VisionContext *vision, char *body, uint32_t now_ms)
         if (vision->ring.state == VISION_RING_WAIT_IDLE) {
             vision->ring.state = VISION_RING_SUCCESS;
             vision->result = VISION_RESULT_ARRIVED;
-            restore_ring_limits(vision);
         }
         vision->phase = VISION_IDLE;
         return;
@@ -359,16 +343,6 @@ void Vision_Init(VisionContext *vision, VisionTx tx, VisionStop stop, void *user
     vision->user = user;
     vision->phase = VISION_IDLE;
     vision->ring.state = VISION_RING_IDLE;
-    vision->ring.target_x = 160.0f;
-    vision->ring.target_y = 120.0f;
-    vision->ring.target_theta = 0.0f;
-    vision->ring.gain = 0.35f;
-    vision->ring.max_step_m = 0.05f;
-    vision->ring.min_step_m = 0.003f;
-    vision->ring.max_speed_mps = 0.12f;
-    vision->ring.max_omega_radps = 0.35f;
-    vision->ring.tolerance_x_px = 8.0f;
-    vision->ring.tolerance_y_px = 8.0f;
 }
 
 VisionContext *Vision_GetDefault(void)
@@ -618,34 +592,11 @@ uint8_t Vision_TakeQr(VisionContext *vision, char code[RACE_TASK_CODE_SIZE])
     return 1U;
 }
 
-void Vision_SetRingChassis(VisionContext *vision, MecanumChassis_t *chassis)
+void Vision_SetStop(VisionContext *vision, VisionStop stop, void *user)
 {
-    if (vision != NULL) vision->ring_chassis = chassis;
-}
-
-void Vision_SetRingCalibration(VisionContext *vision,
-                               float matrix_00, float matrix_01,
-                               float matrix_10, float matrix_11,
-                               float gain, float max_step_m,
-                               float min_step_m, float max_speed_mps,
-                               float max_omega_radps)
-{
-    float determinant;
     if (vision == NULL) return;
-    vision->ring.matrix_00 = matrix_00;
-    vision->ring.matrix_01 = matrix_01;
-    vision->ring.matrix_10 = matrix_10;
-    vision->ring.matrix_11 = matrix_11;
-    vision->ring.gain = gain;
-    vision->ring.max_step_m = max_step_m;
-    vision->ring.min_step_m = min_step_m;
-    vision->ring.max_speed_mps = max_speed_mps;
-    vision->ring.max_omega_radps = max_omega_radps;
-    determinant = matrix_00 * matrix_11 - matrix_01 * matrix_10;
-    vision->ring.calibration_valid = fabsf(determinant) > 0.000001f &&
-                                     gain > 0.0f && max_step_m > 0.0f &&
-                                     min_step_m >= 0.0f && max_speed_mps > 0.0f &&
-                                     max_omega_radps > 0.0f;
+    vision->stop = stop;
+    vision->user = user;
 }
 
 int Vision_StartRingAlign(VisionContext *vision, uint8_t target, uint32_t now_ms)
@@ -653,18 +604,15 @@ int Vision_StartRingAlign(VisionContext *vision, uint8_t target, uint32_t now_ms
     char body[40];
     int written;
     if (vision == NULL || !vision->ready || !ring_target_valid(target) ||
-        vision->phase != VISION_IDLE || Vision_RingActive(vision) ||
-        vision->ring_chassis == NULL) return 0;
+        vision->phase != VISION_IDLE || Vision_RingActive(vision)) return 0;
     if (vision->ring.session_id == 0U || vision->ring.session_id == 65535U)
         vision->ring.session_id = 1U;
     else vision->ring.session_id++;
     vision->ring.target = target;
     vision->ring.step_id = 0U;
     vision->ring.good_count = 0U;
-    vision->ring.correction_count = 0U;
     vision->ring.started_ms = now_ms;
     vision->ring.step_started_ms = now_ms;
-    vision->ring.last_pos_ms = now_ms;
     vision->ring.state = VISION_RING_WAIT_ACK;
     vision->phase = VISION_WAIT_ACK;
     vision->result = VISION_RESULT_NONE;
@@ -703,162 +651,95 @@ uint8_t Vision_RingFailed(const VisionContext *vision)
     return vision != NULL && vision->ring.state == VISION_RING_ERROR;
 }
 
-static int ring_compute_step(VisionContext *vision, float *body_x, float *body_y)
+uint8_t Vision_RingTarget(const VisionContext *vision)
 {
-    float determinant;
-    float body_delta_x;
-    float body_delta_y;
-    float length;
-    float scale;
-    if (vision == NULL || body_x == NULL || body_y == NULL ||
-        !vision->ring.calibration_valid) return 0;
-    determinant = vision->ring.matrix_00 * vision->ring.matrix_11 -
-                  vision->ring.matrix_01 * vision->ring.matrix_10;
-    if (fabsf(determinant) <= 0.000001f) return 0;
-    body_delta_x = -vision->ring.gain *
-        (vision->ring.matrix_11 * (float)vision->pos.dx -
-         vision->ring.matrix_01 * (float)vision->pos.dy) / determinant;
-    body_delta_y = -vision->ring.gain *
-        (-vision->ring.matrix_10 * (float)vision->pos.dx +
-         vision->ring.matrix_00 * (float)vision->pos.dy) / determinant;
-    length = sqrtf(body_delta_x * body_delta_x + body_delta_y * body_delta_y);
-    if (length > vision->ring.max_step_m) {
-        scale = vision->ring.max_step_m / length;
-        body_delta_x *= scale;
-        body_delta_y *= scale;
-    } else if (length < vision->ring.min_step_m && length > 0.0f) {
-        scale = vision->ring.min_step_m / length;
-        body_delta_x *= scale;
-        body_delta_y *= scale;
-    }
-    *body_x = body_delta_x;
-    *body_y = body_delta_y;
-    return 1;
+    return vision == NULL ? 0U : vision->ring.target;
 }
 
-void Vision_RingPoll(VisionContext *vision, uint32_t now_ms)
+uint16_t Vision_RingSession(const VisionContext *vision)
 {
-    float x, y, theta, vx, vy, omega;
-    float body_x, body_y, world_x, world_y;
-    float cos_theta, sin_theta;
+    return vision == NULL ? 0U : vision->ring.session_id;
+}
+
+uint16_t Vision_RingStep(const VisionContext *vision)
+{
+    return vision == NULL ? 0U : vision->ring.step_id;
+}
+
+uint32_t Vision_RingStartedAt(const VisionContext *vision)
+{
+    return vision == NULL ? 0U : vision->ring.started_ms;
+}
+
+uint32_t Vision_RingStepStartedAt(const VisionContext *vision)
+{
+    return vision == NULL ? 0U : vision->ring.step_started_ms;
+}
+
+void Vision_RingMarkMoving(VisionContext *vision, uint32_t now_ms)
+{
+    if (vision == NULL || vision->ring.state != VISION_RING_CALCULATE) return;
+    vision->ring.step_started_ms = now_ms;
+    vision->ring.state = VISION_RING_MOVING;
+    vision->pos.valid = 0U;
+}
+
+static uint8_t send_ring_step(VisionContext *vision, uint32_t now_ms,
+                              uint8_t moving)
+{
+    char body[40];
     int written;
-    if (vision == NULL || !Vision_RingActive(vision)) return;
-    if ((uint32_t)(now_ms - vision->ring.started_ms) > VISION_RING_TOTAL_TIMEOUT_MS) {
-        ring_fail(vision, "RING_TOTAL_TIMEOUT");
-        return;
+    written = snprintf(body, sizeof(body), "STEP_DONE,%u,%u",
+                       (unsigned)vision->ring.step_id, (unsigned)moving);
+    if (written <= 0 || written >= (int)sizeof(body) ||
+        !Vision_SendBody(vision, body)) {
+        ring_fail(vision, "RING_STEP_SEND");
+        return 0U;
     }
-    if (vision->ring.state == VISION_RING_WAIT_ACK &&
-        (uint32_t)(now_ms - vision->ring.started_ms) > VISION_ACK_TIMEOUT_MS) {
-        ring_fail(vision, "RING_ACK_TIMEOUT");
-        (void)Vision_SendBody(vision, "CANCEL");
-        return;
+    vision->ring.step_id++;
+    vision->ring.step_started_ms = now_ms;
+    vision->ring.state = VISION_RING_WAIT_POS;
+    vision->pos.valid = 0U;
+    return 1U;
+}
+
+uint8_t Vision_RingMarkStepDone(VisionContext *vision, uint32_t now_ms)
+{
+    if (vision == NULL || vision->ring.state != VISION_RING_MOVING) return 0U;
+    return send_ring_step(vision, now_ms, 1U);
+}
+
+uint8_t Vision_RingMarkStable(VisionContext *vision, uint32_t now_ms)
+{
+    char body[64];
+    int written;
+    if (vision == NULL || vision->ring.state != VISION_RING_CALCULATE) return 0U;
+    vision->ring.good_count++;
+    if (vision->ring.good_count < VISION_RING_STABLE_COUNT)
+        return send_ring_step(vision, now_ms, 0U);
+    written = snprintf(body, sizeof(body), "ARRIVED,RING,%u,%d,%d,%u,%u",
+                       (unsigned)vision->ring.target, (int)vision->pos.dx,
+                       (int)vision->pos.dy, (unsigned)vision->ring.session_id,
+                       (unsigned)vision->ring.good_count);
+    if (written <= 0 || written >= (int)sizeof(body) ||
+        !Vision_SendBody(vision, body)) {
+        ring_fail(vision, "RING_ARRIVED_SEND");
+        return 0U;
     }
-    if (vision->ring.state == VISION_RING_WAIT_POS &&
-        (uint32_t)(now_ms - vision->ring.step_started_ms) > VISION_RING_STEP_TIMEOUT_MS) {
-        ring_fail(vision, "RING_POS_TIMEOUT");
-        (void)Vision_SendBody(vision, "CANCEL");
-        return;
-    }
-    if (vision->ring.state == VISION_RING_CALCULATE) {
-        if (!vision->pos.valid ||
-            (uint32_t)(now_ms - vision->pos.time_ms) > VISION_POS_TIMEOUT_MS) {
-            ring_fail(vision, "RING_POS_STALE");
-            return;
-        }
-        if (fabsf((float)vision->pos.dx) <= vision->ring.tolerance_x_px &&
-            fabsf((float)vision->pos.dy) <= vision->ring.tolerance_y_px) {
-            vision->ring.good_count++;
-            if (vision->ring.good_count >= VISION_RING_STABLE_COUNT) {
-                written = snprintf(vision->rx_frame, sizeof(vision->rx_frame),
-                                   "ARRIVED,RING,%u,%d,%d,%u,%u",
-                                   (unsigned)vision->ring.target,
-                                   (int)vision->pos.dx, (int)vision->pos.dy,
-                                   (unsigned)vision->ring.session_id,
-                                   (unsigned)vision->ring.good_count);
-                if (written <= 0 || written >= (int)sizeof(vision->rx_frame) ||
-                    !Vision_SendBody(vision, vision->rx_frame)) {
-                    ring_fail(vision, "RING_ARRIVED_SEND");
-                    return;
-                }
-                vision->ring.state = VISION_RING_WAIT_IDLE;
-                vision->phase = VISION_WAIT_IDLE;
-                vision->pos.valid = 0U;
-                return;
-            }
-            written = snprintf(vision->rx_frame, sizeof(vision->rx_frame),
-                               "STEP_DONE,%u,0", (unsigned)vision->ring.step_id);
-            if (written <= 0 || written >= (int)sizeof(vision->rx_frame) ||
-                !Vision_SendBody(vision, vision->rx_frame)) {
-                ring_fail(vision, "RING_STEP_SEND");
-                return;
-            }
-            vision->ring.step_id++;
-            vision->ring.step_started_ms = now_ms;
-            vision->ring.state = VISION_RING_WAIT_POS;
-            vision->pos.valid = 0U;
-            return;
-        }
-        vision->ring.good_count = 0U;
-        if (++vision->ring.correction_count > VISION_RING_MAX_CORRECTIONS ||
-            !ring_compute_step(vision, &body_x, &body_y)) {
-            ring_fail(vision, vision->ring.calibration_valid ?
-                      "RING_NOT_CONVERGING" : "RING_CALIBRATION_INVALID");
-            return;
-        }
-        Mecanum_GetPosition(vision->ring_chassis, &x, &y, &theta);
-        (void)x;
-        (void)y;
-        cos_theta = cosf(theta);
-        sin_theta = sinf(theta);
-        world_x = body_x * cos_theta - body_y * sin_theta;
-        world_y = body_x * sin_theta + body_y * cos_theta;
-        vision->ring.target_theta = theta;
-        vision->ring.target_x = x + world_x;
-        vision->ring.target_y = y + world_y;
-        vision->ring.saved_max_speed = vision->ring_chassis->max_speed;
-        vision->ring.saved_max_omega = vision->ring_chassis->max_omega;
-        if (!vision->ring.speed_limited) vision->ring.speed_limited = 1U;
-        vision->ring_chassis->max_speed = fminf(vision->ring.saved_max_speed,
-                                                vision->ring.max_speed_mps);
-        vision->ring_chassis->max_omega = fminf(vision->ring.saved_max_omega,
-                                                vision->ring.max_omega_radps);
-        vision->ring_chassis->body_frame = 0U;
-        Mecanum_SetPositionMode(vision->ring_chassis,
-                                 vision->ring.target_x,
-                                 vision->ring.target_y,
-                                 vision->ring.target_theta);
-        vision->ring.stable_started = 0U;
-        vision->ring.stable_since_ms = 0U;
-        vision->ring.step_started_ms = now_ms;
-        vision->ring.state = VISION_RING_MOVING;
-        return;
-    }
-    if (vision->ring.state == VISION_RING_MOVING) {
-        Mecanum_GetVelocity(vision->ring_chassis, &vx, &vy, &omega);
-        if (!Mecanum_IsTargetReached(vision->ring_chassis) ||
-            sqrtf(vx * vx + vy * vy) > VISION_RING_MIN_SPEED_MPS ||
-            fabsf(omega) > VISION_RING_MIN_OMEGA_RADPS) {
-            vision->ring.stable_started = 0U;
-            return;
-        }
-        if (!vision->ring.stable_started) {
-            vision->ring.stable_started = 1U;
-            vision->ring.stable_since_ms = now_ms;
-            return;
-        }
-        if ((uint32_t)(now_ms - vision->ring.stable_since_ms) < VISION_RING_STABLE_MS) return;
-        written = snprintf(vision->rx_frame, sizeof(vision->rx_frame),
-                           "STEP_DONE,%u,1", (unsigned)vision->ring.step_id);
-        if (written <= 0 || written >= (int)sizeof(vision->rx_frame) ||
-            !Vision_SendBody(vision, vision->rx_frame)) {
-            ring_fail(vision, "RING_STEP_SEND");
-            return;
-        }
-        vision->ring.step_id++;
-        vision->ring.step_started_ms = now_ms;
-        vision->ring.state = VISION_RING_WAIT_POS;
-        vision->pos.valid = 0U;
-    }
+    vision->ring.state = VISION_RING_WAIT_IDLE;
+    vision->phase = VISION_WAIT_IDLE;
+    vision->pos.valid = 0U;
+    return 1U;
+}
+
+void Vision_RingClearPosition(VisionContext *vision)
+{
+    if (vision != NULL) vision->pos.valid = 0U;
+}
+
+void Vision_RingFail(VisionContext *vision, const char *reason)
+{
+    ring_fail(vision, reason);
 }
 
 void Vision_Poll(VisionContext *vision, uint32_t now_ms)
@@ -881,7 +762,6 @@ void Vision_Poll(VisionContext *vision, uint32_t now_ms)
     if (vision->pos.valid &&
         (uint32_t)(now_ms - vision->pos.time_ms) > VISION_POS_TIMEOUT_MS)
         stop_vehicle(vision);
-    Vision_RingPoll(vision, now_ms);
 }
 
 uint8_t RaceVision_Init(void)

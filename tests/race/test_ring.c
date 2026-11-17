@@ -1,4 +1,5 @@
 #include "board.h"
+#include "app_ring_align.h"
 #include "vision.h"
 #include <assert.h>
 #include <stdio.h>
@@ -21,6 +22,8 @@ int HAL_UART_Transmit_IT(UART_HandleTypeDef *uart, uint8_t *byte, uint16_t lengt
 { (void)uart; (void)byte; (void)length; return HAL_OK; }
 
 void Mecanum_Stop(MecanumChassis_t *chassis) { chassis->mode = 0U; }
+void Mecanum_SetSpeedLimit(MecanumChassis_t *chassis, float linear, float angular)
+{ chassis->max_speed = linear; chassis->max_omega = angular; }
 void Mecanum_SetPositionMode(MecanumChassis_t *chassis, float x, float y, float yaw)
 {
     chassis->x_target = x;
@@ -77,39 +80,49 @@ static void receive_position(VisionContext *vision, unsigned sequence,
 
 int main(void)
 {
+    const RingAlignConfig config = {
+        100.0f, 0.0f, 0.0f, 100.0f, 1.0f, 0.10f, 0.003f,
+        0.12f, 0.35f, 8.0f, 8.0f
+    };
+    AppRingAlign align;
     VisionContext vision;
     memset(&s_chassis, 0, sizeof(s_chassis));
     Vision_Init(&vision, tx_capture, 0, 0);
     vision.ready = 1U;
-    Vision_SetRingChassis(&vision, &s_chassis);
-    Vision_SetRingCalibration(&vision, 100.0f, 0.0f, 0.0f, 100.0f,
-                              1.0f, 0.10f, 0.003f, 0.12f, 0.35f);
-    assert(Vision_StartRingAlign(&vision, 2U, 0U));
+    AppRingAlign_Init(&align, &vision, &s_chassis, &config);
+    assert(AppRingAlign_Start(&align, 2U, 0U));
     assert(strstr(s_last_tx, "ALIGN,2,1") != 0);
     s_now = 1U;
     receive_frame(&vision, 1U, "ACK,ALIGN,2,1");
+    AppRingAlign_Poll(&align, s_now);
     assert(Vision_GetRingState(&vision) == VISION_RING_WAIT_POS);
     s_now = 2U;
     receive_position(&vision, 2U, 0U, 20, 0);
+    AppRingAlign_Poll(&align, s_now);
     assert(Vision_GetRingState(&vision) == VISION_RING_MOVING);
     assert(s_chassis.mode == 1U && s_chassis.x_target < 0.0f);
     receive_position(&vision, 2U, 0U, 20, 0);
     assert(Vision_GetRingState(&vision) == VISION_RING_MOVING);
     s_chassis.target_reached = 1U;
     s_now = 300U;
-    Vision_Poll(&vision, s_now);
+    AppRingAlign_Poll(&align, s_now);
     s_now = 500U;
-    Vision_Poll(&vision, s_now);
+    AppRingAlign_Poll(&align, s_now);
     assert(strstr(s_last_tx, "STEP_DONE,0,1") != 0);
     assert(Vision_GetRingState(&vision) == VISION_RING_WAIT_POS);
     s_now = 600U;
     receive_position(&vision, 3U, 1U, 3, -2);
+    AppRingAlign_Poll(&align, s_now);
     receive_position(&vision, 4U, 2U, 3, -2);
+    AppRingAlign_Poll(&align, s_now);
     receive_position(&vision, 5U, 3U, 3, -2);
+    AppRingAlign_Poll(&align, s_now);
     receive_position(&vision, 6U, 4U, 3, -2);
+    AppRingAlign_Poll(&align, s_now);
     assert(Vision_GetRingState(&vision) == VISION_RING_WAIT_IDLE);
     receive_frame(&vision, 7U, "IDLE");
-    assert(Vision_RingSucceeded(&vision));
+    AppRingAlign_Poll(&align, s_now);
+    assert(Vision_RingSucceeded(&vision) && AppRingAlign_Succeeded(&align));
     puts("PASS: ring ACK/session, duplicate step rejection, calibrated move, stable STEP_DONE, ARRIVED/IDLE");
     return 0;
 }

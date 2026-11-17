@@ -1,5 +1,6 @@
 #include "app_mode.h"
 #include "app_race.h"
+#include "app_ring_align.h"
 #include "race_config.h"
 #include "vision.h"
 #include "app_imu.h"
@@ -18,6 +19,7 @@ static volatile uint8_t s_active, s_control, s_stalled;
 static RaceInput s_input;
 static PickFsm s_pick;
 static RaceTaskPlan s_plan;
+static AppRingAlign s_ring;
 static uint8_t s_direct_cycle_done;
 static uint8_t s_ring_control;
 #if (RACE_PICK_DIRECT_KEY_TEST != 0U)
@@ -73,6 +75,26 @@ static void stop_outputs(void)
     Motor_Stop(s_chassis->motor_lb);
     Motor_Stop(s_chassis->motor_rb);
 }
+
+static void stop_vision_chassis(void *user)
+{
+    MecanumChassis_t *chassis = (MecanumChassis_t *)user;
+    if (chassis != 0) Mecanum_Stop(chassis);
+}
+
+static const RingAlignConfig s_ring_config = {
+    RACE_RING_J00_PX_PER_M,
+    RACE_RING_J01_PX_PER_M,
+    RACE_RING_J10_PX_PER_M,
+    RACE_RING_J11_PX_PER_M,
+    RACE_RING_GAIN,
+    RACE_RING_MAX_STEP_M,
+    RACE_RING_MIN_STEP_M,
+    RACE_RING_MAX_SPEED_MPS,
+    RACE_RING_MAX_OMEGA_RADPS,
+    8.0f,
+    8.0f
+};
 
 static RaceFeedback feedback(uint32_t now)
 {
@@ -131,17 +153,8 @@ void AppRace_Init(MecanumChassis_t *chassis)
     Mecanum_SetSpeedLimit(chassis, RACE_MOVE_SPEED_MPS, RACE_TURN_SPEED_RADPS);
     Mecanum_SetTolerance(chassis, RACE_POSITION_TOL_M * 0.5f, RACE_YAW_TOL_RAD * 0.5f);
     if (!RaceVision_Init()) Race_Fail(&s_race, RACE_ERROR_LINK);
-    Vision_SetRingChassis(Vision_GetDefault(), chassis);
-    Vision_SetRingCalibration(Vision_GetDefault(),
-                              RACE_RING_J00_PX_PER_M,
-                              RACE_RING_J01_PX_PER_M,
-                              RACE_RING_J10_PX_PER_M,
-                              RACE_RING_J11_PX_PER_M,
-                              RACE_RING_GAIN,
-                              RACE_RING_MAX_STEP_M,
-                              RACE_RING_MIN_STEP_M,
-                              RACE_RING_MAX_SPEED_MPS,
-                              RACE_RING_MAX_OMEGA_RADPS);
+    Vision_SetStop(Vision_GetDefault(), stop_vision_chassis, chassis);
+    AppRingAlign_Init(&s_ring, Vision_GetDefault(), chassis, &s_ring_config);
     if (!app_imu_ok()) Race_Fail(&s_race, RACE_ERROR_IMU);
 }
 
@@ -190,6 +203,7 @@ void AppRace_Poll(void)
     if (s_ring_control || Vision_RingActive(Vision_GetDefault())) {
         if (s_stalled && Vision_RingActive(Vision_GetDefault()))
             (void)Vision_Cancel(Vision_GetDefault());
+        AppRingAlign_Poll(&s_ring, now);
         if (Vision_RingFailed(Vision_GetDefault())) {
             s_ring_control = 0U;
             stop_outputs();
@@ -294,8 +308,7 @@ uint8_t AppRace_StartRingAlign(uint8_t target)
 {
     if (s_chassis == NULL || s_race.state != RACE_READY || s_ring_control ||
         PickFsm_IsActive(&s_pick)) return 0U;
-    s_ring_control = (uint8_t)Vision_StartRingAlign(Vision_GetDefault(),
-                                                    target, HAL_GetTick());
+    s_ring_control = AppRingAlign_Start(&s_ring, target, HAL_GetTick());
     return s_ring_control;
 }
 
