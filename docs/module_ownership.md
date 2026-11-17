@@ -14,7 +14,7 @@
 | 比赛路线状态 | `Hardware/race_fsm.c` | `app_race.c` | 任务规划模块直接写底盘。 |
 | 任务顺序规划 | `Hardware/race_task_plan.c` | `app_race.c` | 重复消费同一个任务完成事件。 |
 | 机械抓取状态 | `Hardware/app_pick_fsm.c` | `app_race.c` 调度 | 在 `main.c` 或 UART 回调中控制舵机、步进。 |
-| 机械动作参数 | `Hardware/app_pick_motion.c`、`Hardware/race_config.h` | `app_pick_fsm.c` | 修改已验证机械参数而不重新验收。 |
+| 机械动作参数 | `Hardware/app_pick_motion.c`、`Config/race_config.h` | `app_pick_fsm.c` | 修改已验证机械参数而不重新验收。 |
 | 步进脉冲 | `Hardware/bsp_stepper.c`、`app_stepper_openloop.c` | 夹取应用或非比赛调试模式 | 业务层直接操作 TIM8 CCR。 |
 | 舵机轨迹 | `Hardware/bsp_servo.c` | 夹取状态机、按键测试模式 | 使用阻塞延时替代 `Servo_Poll`。 |
 | IMU 数据与姿态 | `Hardware/app_imu.c`、`IMU20948/` | 运行时轮询、底盘反馈 | 视觉模块直接读取或修改 IMU 状态。 |

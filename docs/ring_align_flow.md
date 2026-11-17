@@ -36,7 +36,7 @@ sequenceDiagram
 ## 关键保护
 
 1. 标定矩阵行列式无效时，`AppRingAlign_Start` 仍可建立协议会话，但计算阶段立即
-   报错，绝不写底盘目标；当前 `race_config.h` 矩阵全零，因此实机标定前不会自动动。
+   报错，绝不写底盘目标；当前 `Config/race_config.h` 矩阵全零，因此实机标定前不会自动动。
 2. 每一个 `POS,RING` 必须匹配 target、session 和 step；旧坐标会被丢弃。
 3. 移动阶段不接受到位判定。只有 `Mecanum_IsTargetReached()` 成立、线速度和角速度
    低于稳定阈值并持续 `VISION_RING_STABLE_MS` 后，才发送 `STEP_DONE`。

@@ -157,16 +157,47 @@ try {
         throw "Unrelated or unapproved working-tree/index changes exist: $($unrelated -join ', ')"
     }
 
-    $addArguments = @('add', '--') + $normalizedFiles
-    Invoke-Git $addArguments | Out-Null
-    $cachedAfter = @(Invoke-Git @('diff', '--cached', '--name-only'))
-    $cachedAfterSet = Get-NameSet $cachedAfter
+    $stageFiles = @()
+    foreach ($path in $normalizedFiles) {
+        $fullPath = Join-Path $repoRoot ($path.Replace('/', '\'))
+        $indexedPath = @(& git ls-files --cached -- $path 2>$null)
+        if ((Test-Path -LiteralPath $fullPath -PathType Leaf) -or
+            $indexedPath.Count -gt 0) {
+            $stageFiles += $path
+        }
+    }
+    if ($stageFiles.Count -gt 0) {
+        $addArguments = @('add', '--all', '--') + $stageFiles
+        Invoke-Git $addArguments | Out-Null
+    }
+    $cachedStatus = @(Invoke-Git @('diff', '--cached', '--name-status', '--find-renames'))
+    $cachedComparableNames = @()
+    foreach ($statusLine in $cachedStatus) {
+        $statusParts = @($statusLine -split "`t")
+        if ($statusParts.Count -ge 3 -and
+            $statusParts[0] -match '^[RC]') {
+            $cachedComparableNames += $statusParts[2]
+        } elseif ($statusParts.Count -ge 2) {
+            $cachedComparableNames += $statusParts[1]
+        }
+    }
+    $cachedAfterSet = Get-NameSet $cachedComparableNames
     if ($cachedAfterSet.Count -eq 0) {
         Write-Output 'NOOP: no file changes; no commit or push created.'
         exit 0
     }
-    if (-not (Test-SetEqual $expected $cachedAfterSet)) {
-        throw "Staged paths do not exactly match the explicit file list: $($cachedAfter -join ', ')"
+    $expectedComparable = Get-NameSet $normalizedFiles
+    foreach ($statusLine in $cachedStatus) {
+        $statusParts = @($statusLine -split "`t")
+        if ($statusParts.Count -ge 3 -and
+            $statusParts[0] -match '^[RC]' -and
+            $expectedComparable.ContainsKey($statusParts[1]) -and
+            $expectedComparable.ContainsKey($statusParts[2])) {
+            $expectedComparable.Remove($statusParts[1])
+        }
+    }
+    if (-not (Test-SetEqual $expectedComparable $cachedAfterSet)) {
+        throw "Staged paths do not exactly match the explicit file list: $($cachedComparableNames -join ', ')"
     }
 
     Invoke-Git @('diff', '--cached', '--check') | Out-Null

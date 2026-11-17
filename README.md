@@ -3,7 +3,7 @@
 ## 主工程
 
 当前唯一正式 STM32 工程是根目录下的 `MDK-ARM/GongChuangSai.uvprojx`。源码位于
-`Core/`、`Drivers/`、`IMU20948/` 和 `Hardware/`。历史工程副本保存在本机
+`Config/`、`Core/`、`Drivers/`、`IMU20948/` 和 `Hardware/`。历史工程副本保存在本机
 `archive/historical/`，不参与构建；旧 ZIP 包保存在 `archive/packages/`。
 
 OpenMV 的正式部署源代码是 `vision_openmv_stm32_v4_redownload/OpenMV/` 下的
@@ -13,6 +13,7 @@ OpenMV 的正式部署源代码是 `vision_openmv_stm32_v4_redownload/OpenMV/` �
 
 - `Core/`：CubeMX 生成的启动、外设和中断桥接。
 - `Hardware/`：底盘、轮毂电机、IMU、视觉通信、圆环闭环、夹取状态机和设备驱动。
+- `Config/`：运行模式和比赛参数配置头文件。
 - `IMU20948/`：ICM20948 驱动和姿态解算。
 - `MDK-ARM/`：Keil 工程文件。
 - `tests/race/`、`tests/ulog/`：主机端协议、状态机和日志测试。
@@ -28,10 +29,10 @@ OpenMV 的正式部署源代码是 `vision_openmv_stm32_v4_redownload/OpenMV/` �
 
 ## 运行模式
 
-`Hardware/app_mode.h` 中的 `APP_RUN_MODE` 支持 `APP_MODE_LEGACY`、`APP_MODE_SERVO`、
+`Config/app_mode.h` 中的 `APP_RUN_MODE` 支持 `APP_MODE_LEGACY`、`APP_MODE_SERVO`、
 `APP_MODE_STEPPER` 和 `APP_MODE_RACE`。比赛固件使用 `APP_MODE_RACE`；该模式保留
 二维码路线、OpenMV V4 协议、旧 `#SEQ` 兼容、夹取状态机和数字 1/2/3 圆环闭环。
-圆环自动运动要求 `Hardware/race_config.h` 中的标定矩阵有效，当前全零配置会安全
+圆环自动运动要求 `Config/race_config.h` 中的标定矩阵有效，当前全零配置会安全
 禁止自动移动。
 
 ## UART 资源

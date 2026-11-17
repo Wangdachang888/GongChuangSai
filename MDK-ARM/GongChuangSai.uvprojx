@@ -340,7 +340,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32F407xx</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../Hardware;../IMU20948/inc</IncludePath>
+              <IncludePath>../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../Config;../Hardware;../IMU20948/inc</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -804,12 +804,12 @@
             <File>
               <FileName>app_mode.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\Hardware\app_mode.h</FilePath>
+              <FilePath>..\Config\app_mode.h</FilePath>
             </File>
             <File>
               <FileName>race_config.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\Hardware\race_config.h</FilePath>
+              <FilePath>..\Config\race_config.h</FilePath>
             </File>
             <File>
               <FileName>app_race.h</FileName>

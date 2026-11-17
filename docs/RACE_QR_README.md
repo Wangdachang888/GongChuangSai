@@ -12,7 +12,7 @@ PE0当前用于夹取测试。短按PE0执行地面取料到车上的一轮动�
 
 二十圈加二十脉冲的实测累计偏差基本可控，说明原MOTORB脉冲换算没有明显问题。现在PC7改接为`SERVO_3`，原转盘电机的四段90°动作改由PC7舵机执行；不再向`STEPPER_AXIS_2`输出STEP脉冲，也不再使用MOTOEB。PC7由TIM8_CH2比较中断产生50 Hz舵机信号，PB14/PB15仍由TIM12控制。
 
-`Hardware/app_mode.h` 的 `APP_RUN_MODE` 默认是 `APP_MODE_RACE`。原先 main.c 强制开启的舵机/步进测试分支改为统一选择：
+`Config/app_mode.h` 的 `APP_RUN_MODE` 默认是 `APP_MODE_RACE`。原先 main.c 强制开启的舵机/步进测试分支改为统一选择：
 
 | 值 | 模式 | PE0 用途 |
 | --- | --- | --- |
@@ -49,7 +49,7 @@ PE0当前用于夹取测试。短按PE0执行地面取料到车上的一轮动�
 
 这些是规则示意图的**名义距离**，不是实测标定值。右侧通道选用距右边界 275 mm 的底盘中心线；规则中的二维码纵向位置可为 1100～1300 mm，当前按中值 1200 mm。没有视觉寻板、自动测距或车道边缘检测，初次调试应确认名义终点确实能看到二维码。
 
-调整集中在 `Hardware/race_config.h`：
+调整集中在 `Config/race_config.h`：
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -147,7 +147,7 @@ USART3 中断只收单字节进环形缓冲，解析在主循环，发送用中�
 | --- | --- |
 | `Hardware/app_pick_motion.h/.c` | 夹爪、夹持机构、PC7托盘和升降轴的动作接口；使用`OPEN/PRECLOSE/CLOSED`、`HOME/PLACE`、升降动作枚举，集中管理引脚对应关系和步数参数 |
 | `Hardware/app_pick_fsm.h/.c` | 非阻塞状态机；只负责动作顺序、完成判断、超时和故障切换，不直接拼接舵机角度或升降步数 |
-| `Hardware/race_config.h` | 机械标定参数、速度参数、方向符号和流程开关 |
+| `Config/race_config.h` | 机械标定参数、速度参数、方向符号和流程开关 |
 | `Hardware/app_race.c` | 按键、比赛模式和状态机入口；每次轮询只调用一次夹取状态机 |
 
 当前唯一动作入口是`PickFsm_Start()`和`PickFsm_StartReverse()`。旧MOTORB步进接口、PC7旧脉冲参数和转盘等待参数已从夹取配置中移除，PC7只通过`SERVO_3`动作接口控制。
@@ -350,6 +350,6 @@ AppRace_StartRingAlign(2U);
 
 V4 封帧格式为 `@SEQ,LEN,BODY*XOR\n`。STM32 和 OpenMV 都校验长度、XOR、会话号和步号；重复帧、旧序号、旧会话、错误步号和过期坐标不会推进运动。STM32 中断只把字节放入缓存，协议解析、位置计算和串口发送均在主循环中完成；USART3 的接收、错误和发送完成回调仍各只有一个入口。
 
-标定步骤：先把四个矩阵参数填入 `Hardware/race_config.h`，矩阵表示车体 `x/y` 位移对图像 `x/y` 像素变化的映射，单位为 px/m；用小幅、低速的单轴实测分别记录 `J00/J10` 和 `J01/J11`，确认正负方向后再启用非零矩阵。`RACE_RING_GAIN`、`RACE_RING_MAX_STEP_M`、`RACE_RING_MIN_STEP_M`、`RACE_RING_MAX_SPEED_MPS` 和 `RACE_RING_MAX_OMEGA_RADPS` 分别限制保守增益、单步位移、最小修正和运动速度。默认单步最大 50 mm，必须先用实测矩阵和低速空场测试。
+标定步骤：先把四个矩阵参数填入 `Config/race_config.h`，矩阵表示车体 `x/y` 位移对图像 `x/y` 像素变化的映射，单位为 px/m；用小幅、低速的单轴实测分别记录 `J00/J10` 和 `J01/J11`，确认正负方向后再启用非零矩阵。`RACE_RING_GAIN`、`RACE_RING_MAX_STEP_M`、`RACE_RING_MIN_STEP_M`、`RACE_RING_MAX_SPEED_MPS` 和 `RACE_RING_MAX_OMEGA_RADPS` 分别限制保守增益、单步位移、最小修正和运动速度。默认单步最大 50 mm，必须先用实测矩阵和低速空场测试。
 
 圆环实车验收顺序：先只接收并检查数字 1/2/3 与 `POS`；再分别做车体 X、Y 小位移标定；确认矩阵有效后只启动一次低速 `AppRace_StartRingAlign()`；检查每个 `STEP_DONE` 都发生在编码器位置到位且速度稳定之后；最后连续验证四轮收敛、`ARRIVED`、`IDLE`、拔掉视觉串口后的超时停车和重复启动。电脑端 `tests/race/run.ps1` 已增加圆环 ACK、重复步号、标定位移、停稳、`ARRIVED/IDLE` 模拟测试；目标固件仍需使用 Keil/ARM 工具链实际编译和实车验收。

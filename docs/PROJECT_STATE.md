@@ -12,6 +12,7 @@
 - 重构前稳定基线：`79de1dd`
 - 当前工作区状态：以 `git status --short` 的实时结果为准。
 - 目标工程：`MDK-ARM/GongChuangSai.uvprojx`
+- 配置目录：`Config/`，包含 `app_mode.h` 和 `race_config.h`。
 - 主机测试编译器：`D:\minGW\mingw64\bin\gcc.exe`
 - 已发现主机测试：`tests/race/run.ps1`、`tests/ulog/run.ps1`
 - 当前环境未发现 `UV4`、`armcc`、`armclang`，固件编译必须记录为 `BUILD SKIP`。
@@ -43,7 +44,7 @@
 
 启动入口在 `Core/Src/main.c`：HAL、GPIO、定时器和 USART3 初始化后调用 `AppRuntime_Init()`，随后启动 TIM6 中断并在主循环调用 `AppRuntime_Poll()`。唯一的 TIM6 周期回调也在该文件中。
 
-`Hardware/app_runtime.c` 负责模式选择、设备初始化和实时桥接；`Hardware/app_race.c` 负责比赛协调、按键、视觉、路线、圆环和夹取任务之间的互斥；`Hardware/mecanum_chassis.c` 是底盘运动学、里程计和位置 PID 的唯一执行层；`Hardware/vision.c` 负责协议、帧缓存和视觉结果；`Hardware/app_ring_align.c` 负责圆环标定换算和闭环移动；`Hardware/app_pick_fsm.c` 负责舵机、升降步进和夹取流程。
+`Config/` 负责运行模式和比赛参数；`Hardware/app_runtime.c` 负责模式选择、设备初始化和实时桥接；`Hardware/app_race.c` 负责比赛协调、按键、视觉、路线、圆环和夹取任务之间的互斥；`Hardware/mecanum_chassis.c` 是底盘运动学、里程计和位置 PID 的唯一执行层；`Hardware/vision.c` 负责协议、帧缓存和视觉结果；`Hardware/app_ring_align.c` 负责圆环标定换算和闭环移动；`Hardware/app_pick_fsm.c` 负责舵机、升降步进和夹取流程。
 
 USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式转给 `vision.c`，其他模式按配置转给 D36 命令模块。UART 中断不执行阻塞发送、底盘控制或机械动作。
 
@@ -75,7 +76,7 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 
 近期重构将视觉协议与圆环运动控制拆开，新增 `Hardware/app_ring_align.c/.h`，保留 V4、旧 `#SEQ`、二维码和 OpenMV 兼容入口；同时保留底盘 PID、IMU、TIM6、步进、舵机、夹取和日志能力。历史实验资料已移入归档目录，主工程引用经过检查。
 
-本轮长期维护工作新增根目录规则文件和长期状态文档，并已从 Keil 工程文件组移除仅含注释的 `main_example.c` 引用；历史文件本身仍保留。
+本轮长期维护工作新增根目录规则文件和长期状态文档，并已从 Keil 工程文件组移除仅含注释的 `main_example.c` 引用；历史文件本身仍保留。当前阶段将运行配置物理迁移到 `Config/`，不改变配置参数。
 
 ## 8. 当前任务与风险
 
