@@ -13,17 +13,17 @@ IMU 和位置 PID。整理工作只改变应用层职责和仓库组织，不替
 | 层次 | 模块 | 职责 |
 | --- | --- | --- |
 | 启动与调度 | `Core/Src/main.c` | HAL、时钟、外设初始化；启动 TIM6；调用运行时入口。 |
-| 运行时 | `Hardware/app_runtime.c` | 按 `APP_RUN_MODE` 选择应用，初始化硬件，调度主循环和 TIM6 控制周期。 |
+| 运行时 | `App/app_runtime.c` | 按 `APP_RUN_MODE` 选择应用，初始化硬件，调度主循环和 TIM6 控制周期。 |
 | 底盘执行 | `Control/Motor.c` | 单轮编码器速度环、PWM 输出和电机停止。 |
 | 底盘执行 | `Control/mecanum_chassis.c` | 里程计、坐标变换、位置 PID、速度限制和四轮运动学。 |
 | 底盘执行 | `Control/nav.c` | 航向融合、零速修正、打滑检测和位姿辅助。 |
-| 比赛协调 | `Hardware/app_race.c` | 比赛入口、按键、故障门控、动作切换、夹取和圆环应用协调。 |
-| 比赛路线 | `Hardware/race_fsm.c` | 启停区、路线动作、二维码扫描、超时和取消。 |
-| 任务规划 | `Hardware/race_task_plan.c` | 将二维码颜色和位置转换为物料任务队列。 |
-| 夹取执行 | `Hardware/app_pick_fsm.c` | 舵机、升降步进和转盘动作的非阻塞状态机、超时和故障处理。 |
-| 夹取参数 | `Hardware/app_pick_motion.c` | 机械姿态、角度、高度、步数和速度参数换算。 |
+| 比赛协调 | `App/app_race.c` | 比赛入口、按键、故障门控、动作切换、夹取和圆环应用协调。 |
+| 比赛路线 | `App/race_fsm.c` | 启停区、路线动作、二维码扫描、超时和取消。 |
+| 任务规划 | `App/race_task_plan.c` | 将二维码颜色和位置转换为物料任务队列。 |
+| 夹取执行 | `App/app_pick_fsm.c` | 舵机、升降步进和转盘动作的非阻塞状态机、超时和故障处理。 |
+| 夹取参数 | `App/app_pick_motion.c` | 机械姿态、角度、高度、步数和速度参数换算。 |
 | 视觉传输 | `Hardware/vision.c` | USART3 收发、V4 帧、旧 `#SEQ`、二维码缓存、圆环协议握手。 |
-| 圆环控制 | `Hardware/app_ring_align.c` | 标定矩阵换算、误差限幅、底盘目标提交、限速恢复、停稳判断和握手推进。 |
+| 圆环控制 | `App/app_ring_align.c` | 标定矩阵换算、误差限幅、底盘目标提交、限速恢复、停稳判断和握手推进。 |
 | UART 路由 | `Hardware/bsp_uart_router.c` | 唯一 HAL UART 回调入口，按应用模式转发到视觉或 D36 命令模块。 |
 | 设备驱动 | `Hardware/bsp_servo.c`、`bsp_stepper.c`、`app_stepper_*` | 舵机 PWM、D36 步进脉冲及上层运动接口。 |
 

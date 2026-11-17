@@ -11,10 +11,10 @@ if ([string]::IsNullOrWhiteSpace($Compiler) -or
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 Push-Location $root
 try {
-    $common = @('-DULOG_TEST', '-std=c99', '-Wall', '-Wextra', '-Werror', '-Itests/ulog', '-Itests/race/stubs', '-IConfig', '-IControl', '-IHardware', '-include', 'tests/race/stubs/board.h')
+    $common = @('-DULOG_TEST', '-std=c99', '-Wall', '-Wextra', '-Werror', '-Itests/ulog', '-Itests/race/stubs', '-IConfig', '-IControl', '-IApp', '-IHardware', '-include', 'tests/race/stubs/board.h')
     foreach ($mode in @(0, 3)) {
         $binary = "tmp/test_ulog_$mode.exe"
-        & $Compiler @common "-DAPP_RUN_MODE=$mode" -Dsnprintf=ulog_test_snprintf tests/ulog/test_ulog.c Hardware/bsp_ulog.c Hardware/race_task_plan.c -lm -o $binary
+        & $Compiler @common "-DAPP_RUN_MODE=$mode" -Dsnprintf=ulog_test_snprintf tests/ulog/test_ulog.c Hardware/bsp_ulog.c App/race_task_plan.c -lm -o $binary
         if ($LASTEXITCODE) { throw 'Logger compile failed' }
         foreach ($case in @('normal','early','abort','timeout','tx_error','format_error','nonfinite','manual','null','init_error')) {
             & (Join-Path $root $binary) $case
@@ -29,7 +29,7 @@ try {
         $extra = @('-include', 'tests/ulog/config.h')
         if ($direct) { $extra += '-DTEST_DIRECT=1' }
         $binary = "tmp/test_log_flow_$direct.exe"
-        & $Compiler @common @extra tests/ulog/test_flow.c Hardware/app_race.c Hardware/race_ui.c Hardware/race_fsm.c Hardware/app_pick_fsm.c Hardware/app_pick_motion.c Hardware/race_task_plan.c -lm -o $binary
+        & $Compiler @common @extra tests/ulog/test_flow.c App/app_race.c App/race_ui.c App/race_fsm.c App/app_pick_fsm.c App/app_pick_motion.c App/race_task_plan.c -lm -o $binary
         if ($LASTEXITCODE) { throw 'Flow compile failed' }
         & (Join-Path $root $binary)
         if ($LASTEXITCODE) { throw 'Flow test failed' }

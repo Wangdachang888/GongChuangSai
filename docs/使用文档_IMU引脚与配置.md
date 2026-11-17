@@ -30,7 +30,7 @@
 | **PB10** | I2C SCL | `GPIO_MODE_OUTPUT_OD`（开漏输出） | `GPIO_PULLUP` | `GPIO_SPEED_FREQ_HIGH` | 高（释放） | `IMU20948\port\imu_port_stm32_hal.c` → `soft_i2c_gpio_init()` |
 | **PB11** | I2C SDA | `GPIO_MODE_OUTPUT_OD` | `GPIO_PULLUP` | `GPIO_SPEED_FREQ_HIGH` | 高（释放） | 同上 |
 | **PB12** | ICM20948 INT1（数据就绪） | `GPIO_MODE_INPUT` + EXTI | 默认 `NOPULL`（高有效）；`PULLUP`（低有效） | `GPIO_SPEED_FREQ_LOW` | — | `Hardware\app_imu.c` → `drdy_exti_init()`，**仅当 `APP_IMU_USE_DRDY_INT=1`** |
-| **PE0** | 显示页翻页 / 长按归零 | `GPIO_MODE_INPUT` | `GPIO_PULLUP` | —（输入） | — | `Hardware\display_nav.c` → `DisplayNav_Init()`，**仅当 `DISPLAY_NAV_USE_KEY=1`** |
+| **PE0** | 显示页翻页 / 长按归零 | `GPIO_MODE_INPUT` | `GPIO_PULLUP` | —（输入） | — | `App\display_nav.c` → `DisplayNav_Init()`，**仅当 `DISPLAY_NAV_USE_KEY=1`** |
 
 > 关键点：**PB11 完全没有在 CubeMX 里出现，PB10 在 `.ioc` 里标了 `GPIO_Output`，
 > 但两者最终都由 `soft_i2c_gpio_init()` 重新配置成开漏输出**，所以 CubeMX 里是否配置
@@ -415,7 +415,7 @@ s_imu              ← 展开 cfg 可核对运行时的量程/采样率/DLPF
 | 数据就绪中断 | `Hardware\app_imu.h` | `APP_IMU_USE_DRDY_INT` / `APP_IMU_INT_ACTIVE_LOW` / `APP_IMU_EXTI_MANAGED` | 见 2.2 |
 | 导航阈值 | `Control\nav.c` → `Nav_Init()` | `zupt_v` / `zupt_w` / `slip_thr` / `slip_v_scale` / `wheel_weight` | 也可运行期 `Nav_SetParams()` |
 | yaw 方向 | `Hardware\app_imu.h` | `APP_IMU_YAW_SIGN` | ±1 |
-| 显示刷新周期 | `Hardware\display_nav.h` | `DISPLAY_NAV_PERIOD_MS` | 太小会占用主循环 |
+| 显示刷新周期 | `App\display_nav.h` | `DISPLAY_NAV_PERIOD_MS` | 太小会占用主循环 |
 | 翻页按键 | 同上 | `DISPLAY_NAV_USE_KEY` / `DISPLAY_NAV_KEY_PIN` | 换键就改这两个 |
 | 长按归零时间 | 同上 | `DISPLAY_NAV_LONG_MS` | 800ms |
 

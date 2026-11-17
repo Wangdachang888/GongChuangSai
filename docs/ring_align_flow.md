@@ -3,9 +3,9 @@
 ## 参与模块
 
 - `Hardware/vision.c/.h`：USART3 协议、序号、session、step、位置缓存和握手消息。
-- `Hardware/app_ring_align.c/.h`：标定矩阵、误差换算、车体到世界坐标转换、限幅、
+- `App/app_ring_align.c/.h`：标定矩阵、误差换算、车体到世界坐标转换、限幅、
   速度限制、停稳判断和底盘目标提交。
-- `Hardware/app_race.c`：在主循环中调度闭环，并与路线/夹取状态互斥。
+- `App/app_race.c`：在主循环中调度闭环，并与路线/夹取状态互斥。
 - `Control/mecanum_chassis.c`：唯一位置 PID 和底盘运动学执行。
 
 ## 状态流程

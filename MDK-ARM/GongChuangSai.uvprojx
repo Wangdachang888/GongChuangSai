@@ -340,7 +340,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32F407xx</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../Config;../Control;../Hardware;../IMU20948/inc</IncludePath>
+              <IncludePath>../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../Config;../Control;../App;../Hardware;../IMU20948/inc</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -659,6 +659,35 @@
           </Files>
         </Group>
         <Group>
+          <GroupName>App</GroupName>
+          <Files>
+            <File><FileName>app_runtime.c</FileName><FileType>1</FileType><FilePath>..\App\app_runtime.c</FilePath></File>
+            <File><FileName>app_runtime.h</FileName><FileType>5</FileType><FilePath>..\App\app_runtime.h</FilePath></File>
+            <File><FileName>app_race.c</FileName><FileType>1</FileType><FilePath>..\App\app_race.c</FilePath></File>
+            <File><FileName>app_race.h</FileName><FileType>5</FileType><FilePath>..\App\app_race.h</FilePath></File>
+            <File><FileName>race_fsm.c</FileName><FileType>1</FileType><FilePath>..\App\race_fsm.c</FilePath></File>
+            <File><FileName>race_fsm.h</FileName><FileType>5</FileType><FilePath>..\App\race_fsm.h</FilePath></File>
+            <File><FileName>race_task_plan.c</FileName><FileType>1</FileType><FilePath>..\App\race_task_plan.c</FilePath></File>
+            <File><FileName>race_task_plan.h</FileName><FileType>5</FileType><FilePath>..\App\race_task_plan.h</FilePath></File>
+            <File><FileName>race_ui.c</FileName><FileType>1</FileType><FilePath>..\App\race_ui.c</FilePath></File>
+            <File><FileName>race_ui.h</FileName><FileType>5</FileType><FilePath>..\App\race_ui.h</FilePath></File>
+            <File><FileName>app_ring_align.c</FileName><FileType>1</FileType><FilePath>..\App\app_ring_align.c</FilePath></File>
+            <File><FileName>app_ring_align.h</FileName><FileType>5</FileType><FilePath>..\App\app_ring_align.h</FilePath></File>
+            <File><FileName>app_pick_fsm.c</FileName><FileType>1</FileType><FilePath>..\App\app_pick_fsm.c</FilePath></File>
+            <File><FileName>app_pick_fsm.h</FileName><FileType>5</FileType><FilePath>..\App\app_pick_fsm.h</FilePath></File>
+            <File><FileName>app_pick_motion.c</FileName><FileType>1</FileType><FilePath>..\App\app_pick_motion.c</FilePath></File>
+            <File><FileName>app_pick_motion.h</FileName><FileType>5</FileType><FilePath>..\App\app_pick_motion.h</FilePath></File>
+            <File><FileName>app_servo_key.c</FileName><FileType>1</FileType><FilePath>..\App\app_servo_key.c</FilePath></File>
+            <File><FileName>app_servo_key.h</FileName><FileType>5</FileType><FilePath>..\App\app_servo_key.h</FilePath></File>
+            <File><FileName>app_square.c</FileName><FileType>1</FileType><FilePath>..\App\app_square.c</FilePath></File>
+            <File><FileName>app_square.h</FileName><FileType>5</FileType><FilePath>..\App\app_square.h</FilePath></File>
+            <File><FileName>app_stepper_openloop.c</FileName><FileType>1</FileType><FilePath>..\App\app_stepper_openloop.c</FilePath></File>
+            <File><FileName>app_stepper_openloop.h</FileName><FileType>5</FileType><FilePath>..\App\app_stepper_openloop.h</FilePath></File>
+            <File><FileName>display_nav.c</FileName><FileType>1</FileType><FilePath>..\App\display_nav.c</FilePath></File>
+            <File><FileName>display_nav.h</FileName><FileType>5</FileType><FilePath>..\App\display_nav.h</FilePath></File>
+          </Files>
+        </Group>
+        <Group>
           <GroupName>Hardware</GroupName>
           <Files>
             <File>
@@ -687,16 +716,6 @@
               <FilePath>..\Hardware\app_imu.h</FilePath>
             </File>
             <File>
-              <FileName>display_nav.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Hardware\display_nav.c</FilePath>
-            </File>
-            <File>
-              <FileName>display_nav.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\Hardware\display_nav.h</FilePath>
-            </File>
-            <File>
               <FileName>bsp_stepper.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Hardware\bsp_stepper.c</FilePath>
@@ -712,11 +731,6 @@
               <FilePath>..\Hardware\app_stepper_drive.c</FilePath>
             </File>
             <File>
-              <FileName>app_square.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Hardware\app_square.c</FilePath>
-            </File>
-            <File>
               <FileName>bsp_ulog.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Hardware\bsp_ulog.c</FilePath>
@@ -730,16 +744,6 @@
               <FileName>bsp_stepper.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\Hardware\bsp_stepper.h</FilePath>
-            </File>
-            <File>
-              <FileName>app_stepper_openloop.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Hardware\app_stepper_openloop.c</FilePath>
-            </File>
-            <File>
-              <FileName>app_stepper_openloop.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\Hardware\app_stepper_openloop.h</FilePath>
             </File>
             <File>
               <FileName>bsp_d36_cmd.c</FileName>
@@ -762,44 +766,9 @@
               <FilePath>..\Hardware\bsp_servo.h</FilePath>
             </File>
             <File>
-              <FileName>app_servo_key.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Hardware\app_servo_key.c</FilePath>
-            </File>
-            <File>
-              <FileName>app_servo_key.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\Hardware\app_servo_key.h</FilePath>
-            </File>
-            <File>
-              <FileName>app_race.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Hardware\app_race.c</FilePath>
-            </File>
-            <File>
-              <FileName>app_ring_align.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Hardware\app_ring_align.c</FilePath>
-            </File>
-            <File>
-              <FileName>app_runtime.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Hardware\app_runtime.c</FilePath>
-            </File>
-            <File>
               <FileName>bsp_uart_router.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Hardware\bsp_uart_router.c</FilePath>
-            </File>
-            <File>
-              <FileName>race_ui.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Hardware\race_ui.c</FilePath>
-            </File>
-            <File>
-              <FileName>race_fsm.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Hardware\race_fsm.c</FilePath>
             </File>
             <File>
               <FileName>vision.c</FileName>
@@ -817,64 +786,9 @@
               <FilePath>..\Config\race_config.h</FilePath>
             </File>
             <File>
-              <FileName>app_race.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\Hardware\app_race.h</FilePath>
-            </File>
-            <File>
-              <FileName>app_ring_align.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\Hardware\app_ring_align.h</FilePath>
-            </File>
-            <File>
-              <FileName>app_runtime.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\Hardware\app_runtime.h</FilePath>
-            </File>
-            <File>
-              <FileName>race_ui.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\Hardware\race_ui.h</FilePath>
-            </File>
-            <File>
-              <FileName>race_fsm.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\Hardware\race_fsm.h</FilePath>
-            </File>
-            <File>
               <FileName>vision.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\Hardware\vision.h</FilePath>
-            </File>
-            <File>
-              <FileName>app_pick_fsm.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Hardware\app_pick_fsm.c</FilePath>
-            </File>
-            <File>
-              <FileName>app_pick_fsm.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\Hardware\app_pick_fsm.h</FilePath>
-            </File>
-            <File>
-              <FileName>app_pick_motion.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Hardware\app_pick_motion.c</FilePath>
-            </File>
-            <File>
-              <FileName>app_pick_motion.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\Hardware\app_pick_motion.h</FilePath>
-            </File>
-            <File>
-              <FileName>race_task_plan.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Hardware\race_task_plan.c</FilePath>
-            </File>
-            <File>
-              <FileName>race_task_plan.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\Hardware\race_task_plan.h</FilePath>
             </File>
           </Files>
         </Group>

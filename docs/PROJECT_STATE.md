@@ -33,7 +33,7 @@
 ## 3. 硬件与引脚事实
 
 - 主控：STM32F407，底盘板为 C30D 资源布局。
-- 四轮电机使用 TIM1/TIM9/TIM10/TIM11 PWM 和 TIM2/TIM3/TIM4/TIM5 编码器，具体方向、轮径、轮距和 PID 以 `Hardware/app_runtime.c` 为准。
+- 四轮电机使用 TIM1/TIM9/TIM10/TIM11 PWM 和 TIM2/TIM3/TIM4/TIM5 编码器，具体方向、轮径、轮距和 PID 以 `App/app_runtime.c` 为准。
 - IMU 使用现有 ICM20948 驱动和应用层姿态解算；比赛运行要求 IMU 初始化和数据持续有效。
 - USART3 的 PD8/PD9 用于 OpenMV/视觉协议；非比赛模式可以接入 D36 文本调试命令。
 - PB14/PB15 是 TIM12 舵机通道；PC7 是 `SERVO3` 转盘舵机输出。
@@ -44,7 +44,7 @@
 
 启动入口在 `Core/Src/main.c`：HAL、GPIO、定时器和 USART3 初始化后调用 `AppRuntime_Init()`，随后启动 TIM6 中断并在主循环调用 `AppRuntime_Poll()`。唯一的 TIM6 周期回调也在该文件中。
 
-`Config/` 负责运行模式和比赛参数；`Control/Motor.c` 负责轮毂电机速度环，`Control/mecanum_chassis.c` 负责底盘运动学、里程计和位置 PID，`Control/nav.c` 负责导航辅助；`Hardware/app_runtime.c` 负责模式选择、设备初始化和实时桥接；`Hardware/app_race.c` 负责比赛协调、按键、视觉、路线、圆环和夹取任务之间的互斥；`Hardware/vision.c` 负责协议、帧缓存和视觉结果；`Hardware/app_ring_align.c` 负责圆环标定换算和闭环移动；`Hardware/app_pick_fsm.c` 负责舵机、升降步进和夹取流程。
+`Config/` 负责运行模式和比赛参数；`Control/Motor.c` 负责轮毂电机速度环，`Control/mecanum_chassis.c` 负责底盘运动学、里程计和位置 PID，`Control/nav.c` 负责导航辅助；`App/app_runtime.c` 负责模式选择、设备初始化和实时桥接；`App/app_race.c` 负责比赛协调、按键、视觉、路线、圆环和夹取任务之间的互斥；`Hardware/vision.c` 负责协议、帧缓存和视觉结果；`App/app_ring_align.c` 负责圆环标定换算和闭环移动；`App/app_pick_fsm.c` 负责舵机、升降步进和夹取流程。
 
 USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式转给 `vision.c`，其他模式按配置转给 D36 命令模块。UART 中断不执行阻塞发送、底盘控制或机械动作。
 
@@ -74,7 +74,7 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 
 ## 7. 最近工作
 
-近期重构将视觉协议与圆环运动控制拆开，新增 `Hardware/app_ring_align.c/.h`，保留 V4、旧 `#SEQ`、二维码和 OpenMV 兼容入口；同时保留底盘 PID、IMU、TIM6、步进、舵机、夹取和日志能力。历史实验资料已移入归档目录，主工程引用经过检查。
+近期重构将视觉协议与圆环运动控制拆开，新增 `App/app_ring_align.c/.h`，保留 V4、旧 `#SEQ`、二维码和 OpenMV 兼容入口；同时保留底盘 PID、IMU、TIM6、步进、舵机、夹取和日志能力。历史实验资料已移入归档目录，主工程引用经过检查。
 
 本轮长期维护工作新增根目录规则文件和长期状态文档，并已从 Keil 工程文件组移除仅含注释的 `main_example.c` 引用；历史文件本身仍保留。当前阶段将运行配置物理迁移到 `Config/`，不改变配置参数。
 
@@ -140,7 +140,7 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 ## 15. Control 反向依赖解除（2026-11-17）
 
 - `Control/nav.c` 不再包含 `app_imu.h`，`Nav_Update()` 改为接收 `NavImuSnapshot_t`；`Control/mecanum_chassis.c` 通过 `MecanumChassis_SetImuSnapshot()` 使用应用层注入的姿态快照。
-- `Control/mecanum_chassis.c/h` 不再包含 `bsp_oled.h`，原有编码器和电机速度调试显示移至 `Hardware/display_nav.c/h`。
-- `Hardware/app_runtime.c` 在 IMU 初始化和轮询后更新快照；航向零偏重置由 `Hardware/app_square.c`、`Hardware/display_nav.c` 发起，保留原有复位行为。
+- `Control/mecanum_chassis.c/h` 不再包含 `bsp_oled.h`，原有编码器和电机速度调试显示移至 `App/display_nav.c/h`。
+- `App/app_runtime.c` 在 IMU 初始化和轮询后更新快照；航向零偏重置由 `App/app_square.c`、`App/display_nav.c` 发起，保留原有复位行为。
 - `tests/race/run.ps1`：`PASS`；`tests/ulog/run.ps1`：`PASS`；`git diff --check`：`PASS`。
 - 本批使用 `D:\keil\UV4\UV4.exe -b MDK-ARM\GongChuangSai.uvprojx -j0` 完整编译：`PASS`；ArmCC V5.06 update 5 (build 528)，`0 Error(s), 0 Warning(s)`，生成 AXF/HEX。未执行烧录和实机验收。

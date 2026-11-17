@@ -6,16 +6,16 @@
 | --- | --- | --- |
 | `Config/` | 运行模式和比赛参数配置头文件 | 控制算法、硬件驱动和运行时状态 |
 | `Core/Src/main.c` | HAL、外设初始化、TIM6 启动、主循环和唯一 TIM6 周期回调 | 比赛业务、视觉解析、机械动作 |
-| `Hardware/app_runtime.c` | 运行模式初始化、主循环调度、TIM6 到电机/底盘的桥接 | 新增第二套控制器 |
+| `App/app_runtime.c` | 运行模式初始化、主循环调度、TIM6 到电机/底盘的桥接 | 新增第二套控制器 |
 | `Control/Motor.c` | 单轮 PWM、编码器采样和速度闭环 | 四轮运动学和比赛流程 |
 | `Control/mecanum_chassis.c` | 麦轮运动学、里程计、位置 PID、速度/位置目标执行 | UART 协议和机械夹取 |
 | `Control/nav.c` | 航向融合、零速修正、打滑检测和位姿辅助 | 直接写底盘目标或处理 UART |
-| `Hardware/app_race.c` | 比赛协调、按键、路线、视觉、圆环、夹取互斥 | 直接解析 UART 字节、实现第二套底盘 PID |
-| `Hardware/race_fsm.c` | 启停区、路线动作、扫描、到位、取消、超时和故障状态 | 直接操作硬件 UART 或舵机 |
-| `Hardware/race_task_plan.c` | 根据二维码颜色/位置生成和推进任务计划 | 直接写底盘目标 |
+| `App/app_race.c` | 比赛协调、按键、路线、视觉、圆环、夹取互斥 | 直接解析 UART 字节、实现第二套底盘 PID |
+| `App/race_fsm.c` | 启停区、路线动作、扫描、到位、取消、超时和故障状态 | 直接操作硬件 UART 或舵机 |
+| `App/race_task_plan.c` | 根据二维码颜色/位置生成和推进任务计划 | 直接写底盘目标 |
 | `Hardware/vision.c` | USART3 字节流、V4/旧协议、二维码和圆环握手数据 | 直接调用 `Mecanum_SetPositionMode` |
-| `Hardware/app_ring_align.c` | 圆环标定换算、限幅、停稳判定、底盘目标和完成握手 | 解析原始 UART 帧 |
-| `Hardware/app_pick_fsm.c` | 夹爪 PB14、机构旋转 PB15、升降步进和 PC7 转盘的非阻塞流程 | 控制底盘 |
+| `App/app_ring_align.c` | 圆环标定换算、限幅、停稳判定、底盘目标和完成握手 | 解析原始 UART 帧 |
+| `App/app_pick_fsm.c` | 夹爪 PB14、机构旋转 PB15、升降步进和 PC7 转盘的非阻塞流程 | 控制底盘 |
 | `Hardware/bsp_uart_router.c` | 唯一 HAL UART 回调入口，按编译模式路由 | 阻塞发送或执行业务动作 |
 | `Hardware/bsp_stepper_openloop.c` 等 | D36/步进脉冲、方向、使能和运动曲线 | 解释比赛任务 |
 | `IMU20948/`、`Hardware/app_imu.c` | ICM20948 驱动、姿态解算、偏置和有效性 | 改写底盘目标 |

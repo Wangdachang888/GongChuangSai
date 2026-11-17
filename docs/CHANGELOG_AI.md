@@ -87,3 +87,11 @@
 验证：<命令及 PASS/FAIL/SKIP/NOT_RUN>
 实机：<NOT_RUN / 已完成的具体硬件验证>
 ```
+
+## App 阶段：比赛业务模块物理迁移（2026-11-18）
+
+提交：本轮待提交，提交后不在长期文档中自引用当前 SHA
+范围：`Hardware/` 下 12 对业务源文件迁移到 `App/`；`MDK-ARM/GongChuangSai.uvprojx`；`tests/race/run.ps1`；`tests/ulog/run.ps1`
+原因：建立独立 App 物理目录，保持公开接口、比赛状态机、协议、控制参数和实时周期不变。
+验证：`tests/race/run.ps1` PASS；`tests/ulog/run.ps1` PASS；Keil 工程 77 个文件引用、路径存在性和重复引用检查 PASS；UV4/ArmCC 完整构建 PASS（0 Error、0 Warning）；`git diff --check` PASS。
+实机：NOT_RUN；`app_stepper_drive.c`、`bsp_d36_cmd.c`、`bsp_ulog.c`、`vision.h` 对 App 的既有反向依赖保留为后续解耦风险。

@@ -25,9 +25,9 @@
 
 | 变更 | 结果 |
 | --- | --- |
-| 新增 `Hardware/app_ring_align.c/.h` | 承担标定换算、限幅、位置目标、停稳和圆环握手。 |
+| 新增 `App/app_ring_align.c/.h` | 承担标定换算、限幅、位置目标、停稳和圆环握手。 |
 | 精简 `Hardware/vision.c/.h` | 保留 V4、旧 `#SEQ`、二维码、位置缓存和圆环通信状态；移除旧运动控制耦合。 |
-| 保留 `Hardware/app_race.c` | 继续作为比赛应用协调入口，不把业务堆回 `main.c`。 |
+| 保留 `App/app_race.c` | 继续作为比赛应用协调入口，不把业务堆回 `main.c`。 |
 | 保留 `Core/Src/main.c` | 未修改启动、HAL 和实时调度入口。 |
 | 清理主机测试桩 | 删除已废弃的 `Vision_SetRingChassis`、`Vision_SetRingCalibration` 定义。 |
 | 资产整理 | 历史工程、工具、日志、图片和说明文档分目录保留。 |

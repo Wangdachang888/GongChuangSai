@@ -24,7 +24,7 @@ OpenMV 的正式部署源代码是 `vision_openmv_stm32_v4_redownload/OpenMV/` �
 
 ## 实时调度
 
-`Core/Src/main.c` 只负责 HAL 初始化、定时器启动和主循环。`Hardware/app_runtime.c`
+`Core/Src/main.c` 只负责 HAL 初始化、定时器启动和主循环。`App/app_runtime.c`
 负责模式初始化与调度。TIM6 每 1 ms 更新四个轮毂电机，每 10 ms 调用一次麦轮
 底盘位置环；视觉闭环沿用同一条底盘位置控制链，不创建第二套 PID。
 

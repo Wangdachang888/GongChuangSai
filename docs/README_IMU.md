@@ -26,7 +26,7 @@ ICM20948 ─200Hz─► app_imu ──► yaw（陀螺 + 磁力计）
 | 移植 | `IMU20948\port\imu_port_stm32_hal.c` | PB10/PB11 软件 I2C（不依赖 I2C 外设） |
 | 应用 | `Hardware\app_imu.c` | 200Hz 采样、姿态更新、掉线降级 |
 | 导航 | `Control\nav.c` | 航向融合、ZUPT、打滑检测、位姿积分 |
-| 显示 | `Hardware\display_nav.c` | OLED 4 页调参界面 |
+| 显示 | `App\display_nav.c` | OLED 4 页调参界面 |
 
 ---
 

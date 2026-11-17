@@ -165,7 +165,7 @@ E1 0
 | 文件 | 作用 |
 |---|---|
 | `Hardware/bsp_stepper.*` | TIM8 翻转脉冲 + DIR/EN |
-| `Hardware/app_stepper_openloop.*` | 开环 API |
+| `App/app_stepper_openloop.*` | 开环 API |
 | `Hardware/bsp_d36_cmd.*` | USART3 文本协议 |
 | `Core/Src/tim.c` | TIM8 OC，PSC=1679→100kHz |
 | `Core/Src/gpio.c` / `main.h` | DIR/EN 脚 |
