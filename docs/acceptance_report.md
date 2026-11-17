@@ -50,4 +50,3 @@
 保留 `origin/main` 的 `79de1dd` 基线，且所有改动位于
 `refactor/architecture-v2`。验收前不要合并到 `main`，需要回退时使用 Git 历史
 查看基线或切换到该分支的稳定提交，不执行强制重写历史。
-

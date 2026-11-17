@@ -23,4 +23,3 @@
 比赛模式下，`bsp_uart_router.c` 将 USART3 唯一转给 `vision.c`；D36 文本命令只在
 非比赛模式启用。圆环通信和圆环运动分离，但通过 `AppRingAlign` 的 active 状态保证
 底盘控制权不重叠。
-
