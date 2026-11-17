@@ -627,11 +627,6 @@
           <GroupName>Hardware</GroupName>
           <Files>
             <File>
-              <FileName>main_example.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Hardware\main_example.c</FilePath>
-            </File>
-            <File>
               <FileName>mecanum_chassis.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Hardware\mecanum_chassis.c</FilePath>
