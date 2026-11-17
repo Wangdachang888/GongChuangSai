@@ -57,6 +57,12 @@ USART3 的 HAL UART 接收、发送完成和错误回调唯一归属
 
 ## 验收文档
 
+- `AGENTS.md`：新会话恢复、修改、测试、硬件保护和本地提交规则。
+- `docs/PROJECT_STATE.md`：当前分支、默认配置、功能状态、风险和交接信息。
+- `docs/ARCHITECTURE.md`：真实目录职责、初始化顺序、实时链路和状态机。
+- `docs/DECISIONS.md`：长期架构与硬件保护决策。
+- `docs/CHANGELOG_AI.md`：AI 维护提交和验证记录。
+- `docs/HARDWARE_VERIFICATION.md`：目标硬件验收矩阵；未实测项目保持 `NOT_RUN`。
 - `docs/architecture_before.md`：重构前调用链和耦合问题。
 - `docs/architecture_after.md`：重构后目录、调用图和状态机。
 - `docs/module_ownership.md`：硬件资源唯一管理者。
@@ -77,3 +83,9 @@ git switch --detach 79de1dd
 
 历史工程副本的完整内容仍保存在本机 `archive/historical/`；Git 中的原始版本可由
 基线提交恢复。实机电机、视觉和比赛场地验收必须在目标硬件上另行完成。
+
+## 长期维护
+
+后续会话先读取 `AGENTS.md`、`docs/PROJECT_STATE.md`、`docs/ARCHITECTURE.md` 和
+`docs/DECISIONS.md`，再检查 Git 状态和相关源码。每个独立修改都要运行相关测试、执行
+`git diff --check`、更新长期文档并提交当前开发分支；不会自动合并、推送或烧录。
