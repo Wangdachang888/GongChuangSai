@@ -26,7 +26,7 @@
   `HAL_UART_ErrorCallback` 各只有 `bsp_uart_router.c` 的有效定义。
 - PASS：没有额外的 TIM OC/PWM 用户回调定义。
 - PASS：视觉模块不包含 `mecanum_chassis.h`，且不调用 `Mecanum_SetPositionMode()`。
-- PASS：Keil 工程 77 个文件引用全部存在，无重复引用。
+- PASS：Keil 工程 76 个文件引用全部存在，无重复引用；仅含注释的 `main_example.c` 已移出工程文件组。
 - PASS：旧 `#SEQ`、二维码 `RaceVision_*` 和 V4 协议入口保留。
 - PASS：圆环 session/step、重复帧、停稳、`STEP_DONE`、`ARRIVED`、`IDLE` 有主机测试。
 - PASS：全零标定矩阵不会让圆环闭环写入实际运动目标。
