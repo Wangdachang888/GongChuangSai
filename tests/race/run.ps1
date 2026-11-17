@@ -1,5 +1,13 @@
-param([string]$Compiler = 'D:/minGW/mingw64/bin/gcc.exe')
+param([string]$Compiler = '')
 $ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($Compiler)) {
+    $gcc = Get-Command gcc -ErrorAction SilentlyContinue
+    if ($gcc) { $Compiler = $gcc.Source }
+}
+if ([string]::IsNullOrWhiteSpace($Compiler) -or
+    -not (Test-Path -LiteralPath $Compiler -PathType Leaf)) {
+    throw 'GCC not found. Pass -Compiler <path-to-gcc.exe> or add gcc to PATH.'
+}
 $raceRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 Push-Location $raceRoot
 try {
