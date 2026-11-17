@@ -57,6 +57,10 @@ void DisplayNav_NextPage(void);
 /** µ±Ç°Ò³ÃæºÅ 0~3 */
 uint8_t DisplayNav_GetPage(void);
 
+void Chassis_Display_Encoder(Motor_t *motor, uint8_t y, const char *name);
+void Chassis_Display_AllEncoder(MecanumChassis_t *chassis);
+void Chassis_Display_Speed(MecanumChassis_t *chassis);
+
 #ifdef __cplusplus
 }
 #endif

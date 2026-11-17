@@ -331,6 +331,13 @@ static void key_scan(MecanumChassis_t *chassis, uint32_t now)
         s_key_long_done = 1u;
         /* 位姿 + IMU 航向一起归零；中断里在跑底盘环，先关一下 */
         __disable_irq();
+        app_imu_zero_yaw();
+        {
+            NavImuSnapshot_t snapshot;
+            snapshot.yaw_rad = app_imu_yaw_rad();
+            snapshot.valid = app_imu_ok() ? 1u : 0u;
+            MecanumChassis_SetImuSnapshot(chassis, &snapshot);
+        }
         Mecanum_ResetPosition(chassis);
         __enable_irq();
     }
@@ -399,6 +406,106 @@ void DisplayNav_Poll(MecanumChassis_t *chassis)
     case 1u: draw_chassis_page(chassis);       break;
     case 2u: draw_param_page(nav, chassis);             break;
     default: draw_status_page(nav);            break;
+    }
+    OLED_Refresh_Gram();
+}
+static void display_encoder_value(uint8_t x, uint8_t y, int32_t value)
+{
+    if (value < 0) {
+        OLED_ShowChar(x, y, '-', 12, 1);
+        value = -value;
+    } else {
+        OLED_ShowChar(x, y, '+', 12, 1);
+    }
+    OLED_ShowNumber(x + 6u, y, (uint32_t)value, 6, 12);
+}
+
+void Chassis_Display_Encoder(Motor_t *motor, uint8_t y, const char *name)
+{
+    int32_t now;
+    int32_t delta;
+    if (motor == NULL) {
+        return;
+    }
+    now = (int32_t)__HAL_TIM_GET_COUNTER(motor->enc_tim);
+    delta = now - motor->enc_last_cnt;
+    OLED_ShowString(0, y, (const uint8_t *)name);
+    OLED_ShowString(6, y, (const uint8_t *)"C");
+    display_encoder_value(12, y, now);
+    OLED_ShowString(66, y, (const uint8_t *)"D");
+    display_encoder_value(72, y, delta);
+}
+
+void Chassis_Display_AllEncoder(MecanumChassis_t *chassis)
+{
+    uint8_t page;
+    uint8_t column;
+    if (chassis == NULL) {
+        return;
+    }
+    for (page = 0u; page < 8u; page++) {
+        for (column = 0u; column < 128u; column++) {
+            OLED_GRAM[column][page] = 0x00;
+        }
+    }
+    OLED_ShowString(0, 0, (const uint8_t *)"C:Counter D:Delta");
+    Chassis_Display_Encoder(chassis->motor_lf, 12, "A");
+    Chassis_Display_Encoder(chassis->motor_rf, 24, "B");
+    Chassis_Display_Encoder(chassis->motor_lb, 36, "C");
+    Chassis_Display_Encoder(chassis->motor_rb, 48, "D");
+    OLED_Refresh_Gram();
+}
+
+static void display_speed_value(uint8_t x, uint8_t y, int32_t value)
+{
+    uint8_t digits[6];
+    uint8_t i;
+    if (value < 0) {
+        OLED_ShowChar(x, y, '-', 12, 1);
+        value = -value;
+    } else {
+        OLED_ShowChar(x, y, '+', 12, 1);
+    }
+    if (value > 999999) {
+        value = 999999;
+    }
+    digits[0] = (uint8_t)((value / 100000) % 10);
+    digits[1] = (uint8_t)((value / 10000) % 10);
+    digits[2] = (uint8_t)((value / 1000) % 10);
+    digits[3] = (uint8_t)((value / 100) % 10);
+    digits[4] = (uint8_t)((value / 10) % 10);
+    digits[5] = (uint8_t)(value % 10);
+    for (i = 0u; i < 6u; i++) {
+        OLED_ShowChar((uint8_t)(x + 6u + i * 6u), y,
+                      (uint8_t)('0' + digits[i]), 12, 1);
+    }
+}
+
+void Chassis_Display_Speed(MecanumChassis_t *chassis)
+{
+    uint8_t page;
+    uint8_t column;
+    uint8_t i;
+    Motor_t *motors[4];
+    if (chassis == NULL) {
+        return;
+    }
+    for (page = 0u; page < 8u; page++) {
+        for (column = 0u; column < 128u; column++) {
+            OLED_GRAM[column][page] = 0x00;
+        }
+    }
+    motors[0] = chassis->motor_lf;
+    motors[1] = chassis->motor_rf;
+    motors[2] = chassis->motor_lb;
+    motors[3] = chassis->motor_rb;
+    for (i = 0u; i < 4u; i++) {
+        uint8_t y = (uint8_t)(i * 12u);
+        OLED_ShowChar(0, y, (uint8_t)('A' + i), 12, 1);
+        OLED_ShowChar(6, y, 'T', 12, 1);
+        display_speed_value(12, y, (int32_t)motors[i]->target_speed);
+        OLED_ShowChar(54, y, 'A', 12, 1);
+        display_speed_value(60, y, (int32_t)motors[i]->actual_speed);
     }
     OLED_Refresh_Gram();
 }

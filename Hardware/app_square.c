@@ -117,6 +117,7 @@ void Square_Start(MecanumChassis_t *chassis)
 
     Mecanum_Enable(chassis, 1u);
     Mecanum_Stop(chassis);
+    app_imu_zero_yaw();
     Mecanum_ResetPosition(chassis);
 
     Mecanum_SetTolerance(chassis, SQUARE_TOL_M, SQUARE_TOL_RAD);

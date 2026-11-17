@@ -68,6 +68,14 @@
 
 本阶段指定的 `Motor.c/h`、`mecanum_chassis.c/h` 和 `nav.c/h` 均已迁移到 `Control/`，Keil 工程已拆出独立 `Control` 分组，主机测试依赖已加入 `-IControl`。本阶段完成后停止，未开始第三阶段 BSP 迁移。
 
+## Control 反向依赖解除（2026-11-17）
+
+提交：本轮待提交，提交后不在长期文档中自引用当前 SHA
+范围：`Control/nav.c`、`Control/nav.h`、`Control/mecanum_chassis.c`、`Control/mecanum_chassis.h`、`Hardware/app_runtime.c`、`Hardware/app_square.c`、`Hardware/display_nav.c`、`Hardware/display_nav.h`
+原因：解除 Control 对 `app_imu.h` 和 `bsp_oled.h` 的反向依赖，保持姿态、复位和调试显示行为。
+验证：Control 无上述两个头文件或对应 IMU 调用；`tests/race/run.ps1` PASS；`tests/ulog/run.ps1` PASS；`git diff --check` PASS；Keil 完整编译 PASS（ArmCC V5.06 update 5，0 Error、0 Warning）。
+实机：NOT_RUN；未修改 PID、运动学、IMU 算法、TIM6 周期、UART 或安全门。
+
 ## 记录格式
 
 后续每个独立单元使用以下字段追加：

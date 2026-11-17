@@ -62,6 +62,12 @@ typedef struct {
     float slip_ratio;        /* 当前角速度差 / 阈值，>1 即打滑 */
 } Nav_t;
 
+/** IMU posture snapshot supplied by the application runtime. */
+typedef struct {
+    float yaw_rad;
+    uint8_t valid;
+} NavImuSnapshot_t;
+
 /** 初始化并清零位姿；yaw0 为初始航向（rad） */
 void Nav_Init(Nav_t *nav, float yaw0);
 
@@ -75,7 +81,8 @@ void Nav_Reset(Nav_t *nav, float x, float y, float yaw);
  * @param vy_body    车体系左移速度（m/s）
  * @param omega_wheel 车体系角速度（rad/s，来自轮速正运动学）
  */
-void Nav_Update(Nav_t *nav, float dt, float vx_body, float vy_body, float omega_wheel);
+void Nav_Update(Nav_t *nav, float dt, float vx_body, float vy_body,
+                float omega_wheel, const NavImuSnapshot_t *imu);
 
 /** 读取位姿（指针可为 NULL） */
 void Nav_GetPose(const Nav_t *nav, float *x, float *y, float *yaw);

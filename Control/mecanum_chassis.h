@@ -60,6 +60,9 @@ typedef struct {
     float vy_actual;
     float omega_actual;
 
+    /* IMU snapshot supplied by the application runtime. */
+    NavImuSnapshot_t imu_snapshot;
+
     /* 目标状态 */
     float x_target;
     float y_target;
@@ -88,6 +91,8 @@ void MecanumChassis_Init(MecanumChassis_t *chassis,
                          float gear_ratio, float enc_ppr_x4);
 
 void MecanumChassis_Loop(MecanumChassis_t *chassis, float dt);
+void MecanumChassis_SetImuSnapshot(MecanumChassis_t *chassis,
+                                   const NavImuSnapshot_t *snapshot);
 
 void Mecanum_SetSpeedMode(MecanumChassis_t *chassis, float vx, float vy, float omega);
 void Mecanum_SetBodySpeed(MecanumChassis_t *chassis, float vx_body, float vy_body, float omega);
@@ -123,14 +128,8 @@ void Mecanum_SetPositionPID(MecanumChassis_t *chassis,
 							
 /* ==================== 编码器调试显示 ==================== */
 /* 显示单个电机的编码器原始计数 + 增量 */
-void Chassis_Display_Encoder(Motor_t *motor, u8 y, const char *name);
-
 /* 显示四个电机的编码器（全屏） */
-void Chassis_Display_AllEncoder(MecanumChassis_t *chassis);
 /* 显示四个电机的 actual/target speed（单页） */
-//void Chassis_Display_MotorSpeed(MecanumChassis_t *chassis);
-void Chassis_Display_Speed(MecanumChassis_t *chassis);
-
 Nav_t *MecanumChassis_GetNav(void);
 #endif
 

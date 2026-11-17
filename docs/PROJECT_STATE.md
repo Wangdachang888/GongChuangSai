@@ -136,3 +136,11 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 - `mecanum_chassis.c/h` 已使用 `git mv` 从 `Hardware/` 迁移到 `Control/`。
 - `nav.c/h` 已使用 `git mv` 从 `Hardware/` 迁移到 `Control/`；Control 阶段的三个指定模块物理迁移完成。
 - Control 阶段：`COMPLETE`。本阶段仅迁移 `Motor.c/h`、`mecanum_chassis.c/h`、`nav.c/h`，未开始 BSP 阶段。
+
+## 15. Control 反向依赖解除（2026-11-17）
+
+- `Control/nav.c` 不再包含 `app_imu.h`，`Nav_Update()` 改为接收 `NavImuSnapshot_t`；`Control/mecanum_chassis.c` 通过 `MecanumChassis_SetImuSnapshot()` 使用应用层注入的姿态快照。
+- `Control/mecanum_chassis.c/h` 不再包含 `bsp_oled.h`，原有编码器和电机速度调试显示移至 `Hardware/display_nav.c/h`。
+- `Hardware/app_runtime.c` 在 IMU 初始化和轮询后更新快照；航向零偏重置由 `Hardware/app_square.c`、`Hardware/display_nav.c` 发起，保留原有复位行为。
+- `tests/race/run.ps1`：`PASS`；`tests/ulog/run.ps1`：`PASS`；`git diff --check`：`PASS`。
+- 本批使用 `D:\keil\UV4\UV4.exe -b MDK-ARM\GongChuangSai.uvprojx -j0` 完整编译：`PASS`；ArmCC V5.06 update 5 (build 528)，`0 Error(s), 0 Warning(s)`，生成 AXF/HEX。未执行烧录和实机验收。

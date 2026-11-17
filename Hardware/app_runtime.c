@@ -32,6 +32,14 @@ static void stop_chassis_outputs(void)
     Motor_Stop(chassis.motor_rb);
 }
 
+static void update_chassis_imu_snapshot(void)
+{
+    NavImuSnapshot_t snapshot;
+
+    snapshot.yaw_rad = app_imu_yaw_rad();
+    snapshot.valid = app_imu_ok() ? 1u : 0u;
+    MecanumChassis_SetImuSnapshot(&chassis, &snapshot);
+}
 static void init_motors_and_chassis(void)
 {
     Motor_Init(&motor_left_front,
@@ -109,6 +117,7 @@ void AppRuntime_Init(void)
         Error_Handler();
 #endif
     }
+    update_chassis_imu_snapshot();
 #if APP_RUN_MODE == APP_MODE_RACE
     ULog_Init();
     AppRace_Init(&chassis);
@@ -130,6 +139,7 @@ void AppRuntime_Poll(void)
     ServoKey_Poll();
 #elif APP_RUN_MODE == APP_MODE_RACE
     app_imu_poll();
+    update_chassis_imu_snapshot();
     AppRace_Poll();
     Vbat_Poll();
     ULog_Poll(&chassis);
@@ -140,6 +150,7 @@ void AppRuntime_Poll(void)
     Square_Poll(&chassis);
 #endif
     app_imu_poll();
+    update_chassis_imu_snapshot();
     AppStepper_Poll();
     D36Cmd_Poll();
     Vbat_Poll();

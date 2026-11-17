@@ -16,8 +16,6 @@
 #include <math.h>
 #include <string.h>
 
-#include "app_imu.h"
-
 /*
  * 兼容性补丁：Keil AC5 默认按 C90 编译，math.h 里可能不声明 float 版本函数，
  * 直接调用会变成返回 int 的隐式声明，结果错误。这里显式声明一次。
@@ -75,7 +73,8 @@ void Nav_Reset(Nav_t *nav, float x, float y, float yaw)
     nav->started    = 0u;          /* 下一帧重新与 IMU 对齐 */
 }
 
-void Nav_Update(Nav_t *nav, float dt, float vx_body, float vy_body, float omega_wheel)
+void Nav_Update(Nav_t *nav, float dt, float vx_body, float vy_body,
+                float omega_wheel, const NavImuSnapshot_t *imu)
 {
     float imu_yaw;
     float d_imu;
@@ -94,8 +93,8 @@ void Nav_Update(Nav_t *nav, float dt, float vx_body, float vy_body, float omega_
     }
 
     /* ---------------- ① 取 IMU 航向 ---------------- */
-    imu_ok  = app_imu_ok() ? 1u : 0u;
-    imu_yaw = imu_ok ? app_imu_yaw_rad() : nav->yaw;
+    imu_ok  = (imu != NULL && imu->valid) ? 1u : 0u;
+    imu_yaw = imu_ok ? imu->yaw_rad : nav->yaw;
 
     if (!nav->started) {
         nav->yaw          = imu_yaw;   /* 首帧直接对齐，避免从 0 慢慢爬 */
