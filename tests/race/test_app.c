@@ -55,11 +55,6 @@ uint8_t RaceVision_Poll(char code[RACE_TASK_CODE_SIZE])
 VisionContext *Vision_GetDefault(void) { return &s_vision; }
 void Vision_SetStop(VisionContext *vision, VisionStop stop, void *user)
 { (void)vision; (void)stop; (void)user; }
-void Vision_SetRingChassis(VisionContext *vision, MecanumChassis_t *chassis)
-{ (void)vision; (void)chassis; }
-void Vision_SetRingCalibration(VisionContext *vision, float a, float b, float c,
-                               float d, float e, float f, float g, float h, float i)
-{ (void)vision; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; (void)g; (void)h; (void)i; }
 uint8_t Vision_RingActive(const VisionContext *vision) { (void)vision; return 0U; }
 uint8_t Vision_RingFailed(const VisionContext *vision) { (void)vision; return 0U; }
 uint8_t Vision_RingSucceeded(const VisionContext *vision) { (void)vision; return 0U; }

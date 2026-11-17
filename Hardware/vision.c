@@ -4,10 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define VISION_RING_MAX_CORRECTIONS 20U
-#define VISION_RING_MIN_SPEED_MPS   0.03f
-#define VISION_RING_MIN_OMEGA_RADPS 0.08f
-
 static VisionContext s_default;
 static VisionContext *s_uart_vision;
 static uint8_t s_scan_active;

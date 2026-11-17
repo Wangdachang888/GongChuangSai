@@ -27,8 +27,13 @@ build_*.log
 _backup_*/
 _tmp_d36a/
 tmp/
+/archive/packages/
 *.bak
 *~
+
+# ---------- 主机测试产物 ----------
+tests/race/*.exe
+tests/ulog/*.exe
 
 # ---------- 压缩包（内容已由对应目录跟踪，避免重复占空间） ----------
 *.zip
