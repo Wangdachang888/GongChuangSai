@@ -108,3 +108,12 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 ## 11. 给下一位 AI 的交接
 
 先读取 `AGENTS.md`、本文件、`docs/ARCHITECTURE.md` 和 `docs/DECISIONS.md`，再执行 Git 状态检查。修改前不要改变已验证的硬件参数，不要在 UART 或 TIM6 中断里增加阻塞逻辑，不要创建第二个底盘 PID 或第二个 UART 回调。完成每个独立修改后运行相关测试、执行 `git diff --check`、更新长期文档并在当前开发分支提交。所有涉及真实机械和视觉的结论都必须注明尚未实机验证。
+
+## 12. Config 迁移最终验收（2026-11-17）
+
+- `tests/race/run.ps1`：`PASS`。覆盖路线、位姿变换、停留/速度、取消锁存、时间回绕、故障、严格协议、流恢复、UART 扫描门控、旧帧处理、复位命令、IRQ 保留、溢出/错误/设防失败、环形 ACK/会话、重复步拒绝、标定移动、稳定 `STEP_DONE`、`ARRIVED/IDLE` 和比赛状态机。
+- `tests/ulog/run.ps1`：`PASS`。覆盖正常、取消、超时、发送错误、格式错误、非有限值、手动和空指针日志场景，以及流程完成、启动复位和取消路径。
+- Keil 工程静态检查：`PASS`。`MDK-ARM/GongChuangSai.uvprojx` 包含 76 个文件引用，全部路径存在且无重复；`IncludePath` 包含 `../Config`；Keil 工程引用 `Config/app_mode.h` 和 `Config/race_config.h`，不再引用旧的 `Hardware/` 配置路径。
+- Config 迁移阶段：`COMPLETE`。本次仅完成最终验证和验收记录，没有开始 Control、BSP、Services 或 App 的下一阶段迁移。
+- Keil/Arm 固件编译：`BUILD SKIP`，当前环境仍未安装 UV4、armcc 或 armclang。
+- 烧录、OpenMV 通信、底盘、圆环、夹取、舵机、步进和 SD 卡：`NOT_RUN`。
