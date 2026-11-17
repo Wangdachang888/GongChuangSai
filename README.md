@@ -88,4 +88,8 @@ git switch --detach 79de1dd
 
 后续会话先读取 `AGENTS.md`、`docs/PROJECT_STATE.md`、`docs/ARCHITECTURE.md` 和
 `docs/DECISIONS.md`，再检查 Git 状态和相关源码。每个独立修改都要运行相关测试、执行
-`git diff --check`、更新长期文档并提交当前开发分支；不会自动合并、推送或烧录。
+`git diff --check`、更新长期文档并提交当前开发分支；不会自动合并或烧录。
+
+当前已授权普通推送到 GitHub 的 `refactor/architecture-v2` 开发分支。完成一个独立修改单元后，使用
+`tools/commit_and_push.ps1` 明确列出相关文件执行提交和推送；脚本会校验远程仓库、分支、暂存范围、
+非快进冲突和远程 SHA。`main`、`master` 和其他稳定分支不会自动推送。

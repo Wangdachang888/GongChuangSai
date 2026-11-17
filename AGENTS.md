@@ -26,7 +26,25 @@
 6. 更新 `docs/PROJECT_STATE.md`、`docs/CHANGELOG_AI.md`，必要时更新硬件验证记录。
 7. 查看待提交文件，使用单一且清晰的提交信息创建本地 Git 提交。
 
-提交只允许发生在当前开发分支。不得自动合并到 `main`、推送、烧录或替用户做实机验收。
+提交只允许发生在当前开发分支 `refactor/architecture-v2`。经本项目长期维护规则授权，可以普通推送到该开发分支；不得自动合并到 `main`、`master` 或其他稳定/发布分支，不得烧录或替用户做实机验收。
+
+## 自动 Git Commit 与 GitHub Push
+
+每完成一个独立、可追踪的修改单元，必须执行完整流程：读取状态、完成修改、检查差异、运行相关测试、更新长期文档、核对暂存文件、创建本地提交、普通推送、查询远程 SHA、记录同步结果，然后继续下一项任务。
+
+自动推送只允许当前已授权的 `refactor/architecture-v2`，禁止 force push、force-with-lease、改写历史、删除远程分支、覆盖其他开发者提交或擅自修改发布标签。推送前必须检查 `origin` 是 `Wangdachang888/GongChuangSai`，并且明确暂存文件；禁止无条件使用 `git add -A`。
+
+标准脚本是 `tools/commit_and_push.ps1`，调用示例：
+
+```powershell
+.\tools\commit_and_push.ps1 `
+  -CommitMessage "docs: update project state" `
+  -Files docs/PROJECT_STATE.md,docs/CHANGELOG_AI.md
+```
+
+脚本会拒绝主分支、错误远程、敏感文件、生成文件、无关工作区修改和非快进远程冲突；无文件变化时输出 `NOOP`，普通网络错误只做有限重试。推送失败时保留本地提交并输出 `SYNC FAIL`，不得假装远程已同步。
+
+GitHub 凭据只能使用本机已配置的 SSH、Git Credential Manager 或 GitHub CLI。不得把 Token 写入代码、文档、日志或命令输出。
 
 ## 实时和硬件保护
 
@@ -47,4 +65,4 @@
 
 ## 文档和提交
 
-架构、硬件参数、接口、风险和下一步工作必须在长期文档中保持真实。文档不能把计划写成完成，也不能把当前提交自身的 SHA 写入需要长期维护的状态快照。每次自动提交后，在最终回复中说明提交 ID、测试结果和仍需人工验收的项目。
+架构、硬件参数、接口、风险和下一步工作必须在长期文档中保持真实。文档不能把计划写成完成，也不能把当前提交自身的 SHA 写入需要长期维护的状态快照。每次自动提交和推送后，在最终回复中说明提交 ID、测试结果、远程 SHA 和仍需人工验收的项目。

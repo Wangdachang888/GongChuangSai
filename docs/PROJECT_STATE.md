@@ -15,7 +15,17 @@
 - 主机测试编译器：`D:\minGW\mingw64\bin\gcc.exe`
 - 已发现主机测试：`tests/race/run.ps1`、`tests/ulog/run.ps1`
 - 当前环境未发现 `UV4`、`armcc`、`armclang`，固件编译必须记录为 `BUILD SKIP`。
-- 不自动合并 `main`、不推送、不烧录；本地开发提交可以按 `AGENTS.md` 的规则自动完成。
+- 不自动合并 `main`、不烧录；经授权的普通推送只允许当前开发分支，并按 `AGENTS.md` 的规则完成。
+
+## 版本同步状态
+
+- GitHub 远程：`git@github.com:Wangdachang888/GongChuangSai.git`。
+- 授权自动推送分支：`refactor/architecture-v2`。
+- 本次自动同步机制启用前最后确认：本地和远程开发分支均为 `4f26e96699d1ba9abd4419461ee924993a5a24c2`，状态为 `SYNC PASS`。
+- 当前未推送提交和远程 SHA：必须通过 `git rev-parse HEAD`、`git ls-remote origin refs/heads/refactor/architecture-v2` 动态查询，不在本状态快照中固定当前提交自身的 SHA。
+- 自动同步脚本：`tools/commit_and_push.ps1`；它只接受明确文件列表，不会默认暂存整个工作区。
+- 当前已知同步异常：无；若推送失败，必须保留本地提交并记录 `SYNC FAIL`，不得强制推送。
+- 最近完成阶段：长期维护规则、架构文档、硬件验收记录、工程引用清理和 GitHub 开发分支首次同步。
 
 ## 3. 硬件与引脚事实
 
