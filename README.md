@@ -55,6 +55,16 @@ USART3 的 HAL UART 接收、发送完成和错误回调唯一归属
 
 缺少 GCC 时脚本明确报错。测试生成的 `.exe` 被 `.gitignore` 忽略。
 
+## 验收文档
+
+- `docs/architecture_before.md`：重构前调用链和耦合问题。
+- `docs/architecture_after.md`：重构后目录、调用图和状态机。
+- `docs/module_ownership.md`：硬件资源唯一管理者。
+- `docs/uart_protocol.md`：USART3、V4 和旧二维码协议。
+- `docs/ring_align_flow.md`：数字圆环闭环时序与安全条件。
+- `docs/refactor_changes.md`：分批变更和保留项。
+- `docs/acceptance_report.md`：自动验收、BUILD SKIP 和实机待验收项。
+
 ## 回退
 
 重构只在 `refactor/architecture-v2` 分支进行，不自动合并稳定分支。回退到本次

@@ -72,3 +72,127 @@ TIM6 10 ms
 | 多个模式各自处理 UART 回调 | `bsp_uart_router.c` 统一入口 | 消除重复 HAL 回调定义。 |
 | 根目录混放历史工程、日志和工具 | `archive/`、`docs/`、`tools/`、`field_assets/` | 正式工程与历史资产分开，归档内容可回溯。 |
 
+## 当前真实目录
+
+```text
+GongChuangSai/
+├── Core/                 STM32 HAL 启动、外设和中断桥接
+├── Drivers/              STM32 HAL 与 CMSIS
+├── IMU20948/             ICM20948 驱动和姿态解算
+├── Hardware/             应用、控制、BSP、视觉和日志模块
+├── MDK-ARM/              GongChuangSai.uvprojx
+├── vision_openmv_stm32_v4_redownload/OpenMV/
+├── tests/                race 与 ulog 主机测试
+├── tools/                日志分析和查看器工具
+├── docs/                 架构、协议和验收文档
+└── archive/              可恢复的历史工程与压缩包
+```
+
+## 系统调用关系图
+
+```mermaid
+flowchart TD
+    MAIN[Core/Src/main.c] --> INIT[AppRuntime_Init]
+    INIT --> HW[硬件初始化与安全停车]
+    MAIN --> LOOP[AppRuntime_Poll]
+    LOOP --> IMU_POLL[app_imu_poll]
+    LOOP --> APP_RACE[AppRace_Poll]
+    LOOP --> ULOG[ULog_Poll]
+    TIM6[TIM6 1 ms] --> CONTROL[AppRuntime_ControlTick]
+    CONTROL --> MOTOR_TICK[AppRuntime_MotorTick]
+    CONTROL --> CHASSIS_TICK[每 10 ms AppRuntime_ChassisTick]
+    MOTOR_TICK --> MOTOR[Motor_Update x4]
+    CHASSIS_TICK --> PID[MecanumChassis_Loop]
+    APP_RACE --> RACE_FSM[Race_Fsm]
+    APP_RACE --> TASK[RaceTaskPlan]
+    APP_RACE --> PICK[PickFsm]
+    APP_RACE --> RING[AppRingAlign]
+    PICK --> SERVO[BSP Servo]
+    PICK --> STEPPER[AppStepper/BSP Stepper]
+    RING --> VISION[Vision protocol state]
+    RING --> TARGET[Mecanum_SetPositionMode]
+```
+
+## 竞赛动作状态机
+
+```mermaid
+stateDiagram-v2
+    [*] --> READY
+    READY --> RUNNING: Race_StartQrRoute
+    RUNNING --> RUNNING: MOVE / TURN / SETTLE
+    RUNNING --> SCAN: 进入扫码动作
+    SCAN --> RUNNING: RaceVision_Poll 收到二维码
+    RUNNING --> PICK: 任务动作 kind == PICK
+    PICK --> RUNNING: PickFsm_IsDone
+    RUNNING --> DONE: action_index 完成
+    RUNNING --> ABORTED: Race_Abort
+    RUNNING --> FAULT: IMU、链路或循环停滞
+    SCAN --> FAULT: 扫码超时
+```
+
+## 视觉闭环状态机
+
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE
+    IDLE --> WAIT_ACK: AppRingAlign_Start -> ALIGN
+    WAIT_ACK --> WAIT_POS: ACK,ALIGN
+    WAIT_POS --> CALCULATE: POS,RING
+    CALCULATE --> MOVING: 有效标定且未到位
+    CALCULATE --> WAIT_IDLE: 连续稳定到位 -> ARRIVED
+    MOVING --> WAIT_POS: 到位且速度稳定 -> STEP_DONE
+    WAIT_IDLE --> SUCCESS: IDLE
+    WAIT_ACK --> ERROR: ACK 超时
+    WAIT_POS --> ERROR: 位置超时
+    CALCULATE --> ERROR: 标定无效或不收敛
+    MOVING --> ERROR: 总超时或取消
+```
+
+## 机械抓取状态机
+
+```mermaid
+stateDiagram-v2
+    [*] --> PICK_IDLE
+    PICK_IDLE --> PICK_RESETTING: PickFsm_Reset
+    PICK_IDLE --> FORWARD_HOME: PickFsm_Start
+    PICK_IDLE --> REVERSE_HOME: PickFsm_StartReverse
+    FORWARD_HOME --> FORWARD_TO_APPROACH --> FORWARD_TO_GRAB
+    FORWARD_TO_GRAB --> FORWARD_CLOSE --> FORWARD_RAISE
+    FORWARD_RAISE --> FORWARD_OPEN --> FORWARD_RESET_ROTATE
+    FORWARD_RESET_ROTATE --> DONE
+    REVERSE_HOME --> REVERSE_RAISE --> REVERSE_TURN
+    REVERSE_TURN --> REVERSE_CLOSE --> REVERSE_RAISE_AFTER_CLOSE
+    REVERSE_RAISE_AFTER_CLOSE --> REVERSE_HOME_ROTATE
+    REVERSE_HOME_ROTATE --> REVERSE_RELEASE --> REVERSE_RESET_ZERO
+    REVERSE_RESET_ZERO --> DONE
+    FORWARD_HOME --> FAULT: 超时或命令错误
+    REVERSE_HOME --> FAULT: 超时或命令错误
+    FORWARD_TO_GRAB --> ABORTED: PickFsm_Abort
+    REVERSE_TURN --> ABORTED: PickFsm_Abort
+```
+
+## 模块依赖图
+
+```mermaid
+flowchart LR
+    APP[应用协调层<br/>app_runtime / app_race]
+    RACE[比赛流程<br/>race_fsm / race_task_plan]
+    RING[圆环闭环<br/>app_ring_align]
+    PICK[机械动作<br/>app_pick_fsm / app_pick_motion]
+    VISION[视觉服务<br/>vision]
+    CONTROL[底盘控制<br/>mecanum_chassis / Motor / nav]
+    BSP[BSP<br/>stepper / servo / oled / uart_router]
+    IMU[IMU20948]
+    APP --> RACE
+    APP --> RING
+    APP --> PICK
+    APP --> IMU
+    RACE --> VISION
+    RING --> VISION
+    RING --> CONTROL
+    PICK --> BSP
+    CONTROL --> BSP
+    VISION --> BSP
+    IMU --> CONTROL
+```
+

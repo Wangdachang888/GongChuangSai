@@ -27,6 +27,26 @@ main
 中断进入 `AppRuntime_ChassisTick()`，调用底盘位置环。`AppRace_ControlTick()` 是
 比赛模式的故障门控，IMU 失联或主循环停滞时禁止继续输出。
 
+### 初始化与实时调用图
+
+```mermaid
+flowchart TD
+    MAIN[Core/Src/main.c] --> HAL[HAL_Init 与外设初始化]
+    HAL --> RT[AppRuntime_Init]
+    RT --> MOTORS[四个 Motor_t 与 MecanumChassis_t]
+    RT --> IMU[app_imu_init]
+    RT --> RACE[AppRace_Init]
+    MAIN --> TIM6[TIM6 1 ms 中断]
+    TIM6 --> MOTOR_TICK[AppRuntime_MotorTick]
+    TIM6 --> CHASSIS_TICK[每 10 次进入 AppRuntime_ChassisTick]
+    MOTOR_TICK --> MOTOR[Motor_Update x4]
+    CHASSIS_TICK --> PID[MecanumChassis_Loop]
+    MAIN --> POLL[主循环 AppRuntime_Poll]
+    POLL --> IMU_POLL[app_imu_poll]
+    POLL --> RACE_POLL[AppRace_Poll]
+    POLL --> LOG[ULog_Poll]
+```
+
 ## 主要模块职责（重构前）
 
 | 模块 | 当前职责 | 公开接口重点 |
@@ -66,6 +86,24 @@ main.c
 
 USART3 的 HAL 接收、发送完成和错误回调只有 `Hardware/bsp_uart_router.c` 一个
 入口。比赛模式由路由器转给 `vision.c`；非比赛模式才转给 D36 文本命令模块。
+
+### 重构前依赖图
+
+```mermaid
+flowchart LR
+    APP[app_race.c] --> FSM[race_fsm.c]
+    APP --> PLAN[race_task_plan.c]
+    APP --> PICK[app_pick_fsm.c]
+    APP --> VISION[vision.c]
+    VISION --> CHASSIS[mecanum_chassis.c]
+    CHASSIS --> MOTOR[Motor.c]
+    UART[bsp_uart_router.c] --> VISION
+    TIM[TIM6] --> CHASSIS
+```
+
+重构前的直接依赖位置是 `vision.c` 内圆环处理路径：它同时保存底盘指针、计算
+像素到位移的结果、修改速度限制并调用 `Mecanum_SetPositionMode()`。这使视觉协议
+解析、圆环闭环和底盘控制权集中在一个模块中，是本次拆分的主要问题。
 
 ## 比赛状态与夹取状态
 
