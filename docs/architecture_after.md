@@ -16,6 +16,7 @@ IMU 和位置 PID。整理工作只改变应用层职责和仓库组织，不替
 | 运行时 | `Hardware/app_runtime.c` | 按 `APP_RUN_MODE` 选择应用，初始化硬件，调度主循环和 TIM6 控制周期。 |
 | 底盘执行 | `Control/Motor.c` | 单轮编码器速度环、PWM 输出和电机停止。 |
 | 底盘执行 | `Control/mecanum_chassis.c` | 里程计、坐标变换、位置 PID、速度限制和四轮运动学。 |
+| 底盘执行 | `Control/nav.c` | 航向融合、零速修正、打滑检测和位姿辅助。 |
 | 比赛协调 | `Hardware/app_race.c` | 比赛入口、按键、故障门控、动作切换、夹取和圆环应用协调。 |
 | 比赛路线 | `Hardware/race_fsm.c` | 启停区、路线动作、二维码扫描、超时和取消。 |
 | 任务规划 | `Hardware/race_task_plan.c` | 将二维码颜色和位置转换为物料任务队列。 |

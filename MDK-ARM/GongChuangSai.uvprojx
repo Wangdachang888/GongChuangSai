@@ -624,7 +624,7 @@
           </Files>
         </Group>
         <Group>
-          <GroupName>Hardware</GroupName>
+          <GroupName>Control</GroupName>
           <Files>
             <File>
               <FileName>mecanum_chassis.c</FileName>
@@ -646,6 +646,21 @@
               <FileType>5</FileType>
               <FilePath>..\Control\Motor.h</FilePath>
             </File>
+            <File>
+              <FileName>nav.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Control\nav.c</FilePath>
+            </File>
+            <File>
+              <FileName>nav.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Control\nav.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Hardware</GroupName>
+          <Files>
             <File>
               <FileName>oledfont.h</FileName>
               <FileType>5</FileType>
@@ -670,16 +685,6 @@
               <FileName>app_imu.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\Hardware\app_imu.h</FilePath>
-            </File>
-            <File>
-              <FileName>nav.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Hardware\nav.c</FilePath>
-            </File>
-            <File>
-              <FileName>nav.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\Hardware\nav.h</FilePath>
             </File>
             <File>
               <FileName>display_nav.c</FileName>

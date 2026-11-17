@@ -413,7 +413,7 @@ s_imu              ← 展开 cfg 可核对运行时的量程/采样率/DLPF
 | 磁力计开关 | 同上 | `cfg.enable_mag` | 室内建议 false |
 | 零偏标定次数 | 同上 | `cfg.gyro_calib_samples` | 400×2ms ≈ 0.8s |
 | 数据就绪中断 | `Hardware\app_imu.h` | `APP_IMU_USE_DRDY_INT` / `APP_IMU_INT_ACTIVE_LOW` / `APP_IMU_EXTI_MANAGED` | 见 2.2 |
-| 导航阈值 | `Hardware\nav.c` → `Nav_Init()` | `zupt_v` / `zupt_w` / `slip_thr` / `slip_v_scale` / `wheel_weight` | 也可运行期 `Nav_SetParams()` |
+| 导航阈值 | `Control\nav.c` → `Nav_Init()` | `zupt_v` / `zupt_w` / `slip_thr` / `slip_v_scale` / `wheel_weight` | 也可运行期 `Nav_SetParams()` |
 | yaw 方向 | `Hardware\app_imu.h` | `APP_IMU_YAW_SIGN` | ±1 |
 | 显示刷新周期 | `Hardware\display_nav.h` | `DISPLAY_NAV_PERIOD_MS` | 太小会占用主循环 |
 | 翻页按键 | 同上 | `DISPLAY_NAV_USE_KEY` / `DISPLAY_NAV_KEY_PIN` | 换键就改这两个 |

@@ -56,6 +56,18 @@
 验证：迁移路径、旧路径清理、Keil 文件引用和主机 IncludePath 静态检查 PASS；待本单元完成后运行 `tests/race/run.ps1`、`tests/ulog/run.ps1` 并记录结果。
 实机：NOT_RUN；不修改运动学、位置 PID、轮径、轮距或函数接口。
 
+## Control 阶段：Navigation 模块迁移（2026-11-17）
+
+提交：本次 Navigation 迁移提交（不在提交内容中自引用当前 SHA）
+范围：`Hardware/nav.c`、`Hardware/nav.h` → `Control/nav.c`、`Control/nav.h`；Keil Control 分组；IMU 和项目文档路径
+原因：完成 Control 层指定的导航辅助模块物理迁移。
+验证：`tests/race/run.ps1` PASS；`tests/ulog/run.ps1` PASS；Keil 工程 76 个文件引用、Control 分组 6 个文件、路径存在性和重复引用静态检查 PASS；Keil 命令行编译 PASS，ArmCC V5.06 update 5 (build 528)，0 Error、0 Warning。
+实机：NOT_RUN；不修改导航算法、阈值、硬件参数或函数接口。
+
+## Control 阶段完成（2026-11-17）
+
+本阶段指定的 `Motor.c/h`、`mecanum_chassis.c/h` 和 `nav.c/h` 均已迁移到 `Control/`，Keil 工程已拆出独立 `Control` 分组，主机测试依赖已加入 `-IControl`。本阶段完成后停止，未开始第三阶段 BSP 迁移。
+
 ## 记录格式
 
 后续每个独立单元使用以下字段追加：
