@@ -103,3 +103,11 @@
 原因：解除明确的 Hardware→App 反向依赖，保留硬件资源、协议、日志通道和实时周期。
 验证：`tests/race/run.ps1` PASS；`tests/ulog/run.ps1` PASS；Keil UV4/ArmCC 完整构建 PASS（0 Error、0 Warning）；工程路径/重复引用、Hardware→App 依赖和 UART 回调唯一性检查 PASS；`git diff --check` PASS。
 实机：NOT_RUN；未修改 IMU 底层驱动、Motor、TIM6/TIM8、UART 资源、GPIO/PWM/编码器映射或控制参数。
+
+## 网页调试台迁移衔接文档（2026-11-18）
+
+提交：本轮待提交，提交后不在长期文档中自引用当前 SHA
+范围：`docs/AI_HANDOFF.md`、`docs/PROJECT_STATE.md`
+原因：为迁移到另一个工程提供可直接接续的网页文件清单、构建方式、交互能力、ULog43 通道定义、运动学假设、限制和验证边界。
+验证：`node viewer/build.cjs` PASS；临时使用 `field_assets/logs/log0_kart.csv` 运行 `node viewer/test.cjs` PASS；`git diff --check` PASS。
+实机：NOT_RUN；本单元只新增迁移文档，没有修改固件或网页业务代码。

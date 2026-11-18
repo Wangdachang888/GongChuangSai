@@ -156,3 +156,10 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 - Keil UV4/ArmCC 完整构建：`PASS`，ArmCC V5.06 update 5，`0 Error(s), 0 Warning(s)`；程序尺寸 `Code=54276`、`RO-data=8660`、`RW-data=356`、`ZI-data=9564`。
 - 工程路径、重复引用、Hardware→App 依赖和 UART 回调唯一性静态检查：`PASS`；未改变 STM32F407、USART、TIM6/TIM8、GPIO、PWM、编码器、控制参数或协议文本。
 - 实机烧录、OpenMV、D36、IMU、底盘、机械动作和 SD 卡持续写入：`NOT_RUN`。Vision 内部保留一份纯任务码校验逻辑，后续可在不引入层间依赖的前提下统一协议校验实现。
+
+## 17. 网页调试台迁移衔接（2026-11-18）
+
+- 新增 `docs/AI_HANDOFF.md`，记录网页调试台的文件清单、离线构建方式、轨迹/波形/回放能力、当前 ULog43 通道和迁移核对步骤。
+- 网页源码位于 `viewer/`；通过 `node viewer/build.cjs` 生成根目录的 `kart_log_view_mecanum_v3.html` 和 `kart_log_view_mecanum_v4.html`。
+- 网页按四轮编码器重建 `vx`、`vy` 和角速度，四轮轨迹由车体位姿和轮心偏移计算；这些结果是编码器运动学估计，不等于对地真实速度。
+- 当前网页和主机测试不改变固件硬件参数，也不能替代 Keil 构建、烧录、OpenMV、底盘或机械实机验收；相关实机项目继续为 `NOT_RUN`。
