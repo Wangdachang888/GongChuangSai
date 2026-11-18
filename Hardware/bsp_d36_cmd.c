@@ -5,6 +5,7 @@
   ******************************************************************************
   */
 #include "bsp_d36_cmd.h"
+#include "bsp_stepper.h"
 #include "app_mode.h"
 #include "stepper_config.h"
 #include "usart.h"
