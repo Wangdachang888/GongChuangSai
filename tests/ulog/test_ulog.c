@@ -11,6 +11,9 @@
 #include <math.h>
 static uint32_t now, writes;
 static uint8_t finished, square = SQUARE_RUNNING;
+#if APP_RUN_MODE != APP_MODE_RACE
+static uint8_t square_seen_running;
+#endif
 static int tx_error, init_error, format_error;
 int ulog_test_snprintf(char *buf, size_t size, const char *format, ...)
 {
@@ -30,6 +33,31 @@ uint8_t Square_GetState(void) { return square; }
 uint8_t Square_GetStep(void) { return 0; }
 float Vbat_GetDriverVoltage(void) { return 12.0f; }
 float Vbat_GetBoardVoltage(void) { return 11.9f; }
+static void sync_snapshot(void)
+{
+    ULogAppSnapshot snapshot = {0};
+    snapshot.imu_yaw_deg = 0.0f;
+#if APP_RUN_MODE == APP_MODE_RACE
+    snapshot.status = (uint8_t)race.state;
+    snapshot.action_index = race.action_index;
+    snapshot.error = (uint8_t)race.error;
+    snapshot.plan_index = plan.index;
+#if ULOG_ENABLE != 0
+    snapshot.plan_done = RaceTaskPlan_Done(&plan);
+#endif
+    snapshot.finished = finished;
+    snapshot.phase = finished ? 4U :
+        ((race.state == RACE_RUNNING) ? 1U : 0U);
+#else
+    snapshot.status = square;
+    if (square == SQUARE_RUNNING) square_seen_running = 1U;
+    snapshot.finished = (square == SQUARE_DONE || square == SQUARE_TIMEOUT ||
+                         (square_seen_running && square == SQUARE_IDLE));
+    snapshot.phase = snapshot.finished ? 4U :
+        ((square == SQUARE_RUNNING) ? 1U : 0U);
+#endif
+    ULog_SetAppSnapshot(&snapshot);
+}
 void HAL_GPIO_Init(void *port, GPIO_InitTypeDef *config) { (void)port; (void)config; }
 HAL_StatusTypeDef HAL_UART_Init(UART_HandleTypeDef *uart) { (void)uart; return init_error; }
 HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *uart, uint8_t *data, uint16_t len, uint32_t timeout)
@@ -50,6 +78,7 @@ int main(int argc, char **argv)
     race.state=RACE_RUNNING; race.action_count=1;
     if (!strcmp(scenario,"init_error")) init_error=HAL_ERROR;
     ULog_Init();
+    sync_snapshot();
 #if ULOG_ENABLE == 0
     assert(!ULog_IsRecording()); ULog_Poll(&c); ULog_Printf("x"); assert(!writes); return 0;
 #endif
@@ -57,6 +86,7 @@ int main(int argc, char **argv)
     assert(ULog_IsRecording());
     ULog_Poll(&c); assert(!writes);
     if (!strcmp(scenario,"early")) { finished=1; square=SQUARE_DONE; }
+    sync_snapshot();
     if (finished) {
         ULog_Poll(&c); assert(!writes && !ULog_IsRecording()); return 0;
     }
@@ -73,6 +103,7 @@ int main(int argc, char **argv)
     if (!strcmp(scenario,"format_error")) format_error=1;
     if (!strcmp(scenario,"nonfinite")) c.theta_target=INFINITY;
     if (!strcmp(scenario,"manual")) ULog_Stop();
+    sync_snapshot();
     if (!strcmp(scenario,"null")) ULog_Poll(0); else ULog_Poll(&c);
     assert(!ULog_IsRecording());
     if (tx_error) assert(g_ulog_tx_error_count == 1);

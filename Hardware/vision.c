@@ -78,6 +78,29 @@ static int job_code_valid(unsigned code)
            code == 40U || code == 41U || code == 42U;
 }
 
+/* QR task-code validation is a protocol concern. Keep it local to Vision so
+ * the hardware protocol parser does not depend on the App race FSM. */
+static uint8_t vision_task_code_valid(const char *code)
+{
+    uint8_t group, index, mask, color_masks[2] = {0U, 0U};
+    if (code == NULL || strlen(code) != 15U) return 0U;
+    for (group = 0U; group < 4U; group++) {
+        mask = 0U;
+        for (index = 0U; index < 3U; index++) {
+            char digit = code[group * 4U + index];
+            uint8_t value;
+            if (digit < '1' || digit > ((group & 1U) ? '3' : '6')) return 0U;
+            value = (uint8_t)(digit - '0');
+            if (mask & (uint8_t)(1U << value)) return 0U;
+            mask |= (uint8_t)(1U << value);
+        }
+        if (group < 3U && code[group * 4U + 3U] != '+') return 0U;
+        if ((group & 1U) == 0U) color_masks[group / 2U] = mask;
+    }
+    if (color_masks[0] != color_masks[1]) return 0U;
+    return 1U;
+}
+
 static int ring_target_valid(long target)
 {
     return target >= 1L && target <= 3L;
@@ -163,11 +186,9 @@ static int decode_frame(char *line, uint16_t *sequence, char **body)
     return 1;
 }
 
-static uint8_t parse_legacy_qr(const char *line, char code[RACE_TASK_CODE_SIZE])
+static uint8_t parse_legacy_qr(const char *line, char code[VISION_TASK_CODE_SIZE])
 {
-    char candidate[RACE_TASK_CODE_SIZE];
-    uint8_t colors[2][3];
-    uint8_t positions[2][3];
+    char candidate[VISION_TASK_CODE_SIZE];
     const char *cursor;
     uint8_t index;
     if (line == NULL || strncmp(line, "#SEQ,", 5U) != 0) return 0U;
@@ -187,7 +208,7 @@ static uint8_t parse_legacy_qr(const char *line, char code[RACE_TASK_CODE_SIZE])
     candidate[7] = '+';
     candidate[11] = '+';
     candidate[15] = '\0';
-    if (!Race_ParseTask(candidate, colors, positions)) return 0U;
+    if (!vision_task_code_valid(candidate)) return 0U;
     memcpy(code, candidate, sizeof(candidate));
     return 1U;
 }
@@ -266,9 +287,7 @@ static void handle_body(VisionContext *vision, char *body, uint32_t now_ms)
     }
     if (!strcmp(fields[0], "QR") && count == 2 &&
         strlen(fields[1]) == 15U) {
-        uint8_t colors[2][3];
-        uint8_t positions[2][3];
-        if (Race_ParseTask(fields[1], colors, positions)) {
+        if (vision_task_code_valid(fields[1])) {
             copy_text(vision->qr_code, sizeof(vision->qr_code), fields[1]);
             vision->qr_ready = 1U;
         }
@@ -580,10 +599,10 @@ const VisionPosition *Vision_GetPosition(const VisionContext *vision,
     return &vision->pos;
 }
 
-uint8_t Vision_TakeQr(VisionContext *vision, char code[RACE_TASK_CODE_SIZE])
+uint8_t Vision_TakeQr(VisionContext *vision, char code[VISION_TASK_CODE_SIZE])
 {
     if (vision == NULL || code == NULL || !vision->qr_ready) return 0U;
-    memcpy(code, vision->qr_code, RACE_TASK_CODE_SIZE);
+    memcpy(code, vision->qr_code, VISION_TASK_CODE_SIZE);
     vision->qr_ready = 0U;
     return 1U;
 }
@@ -796,14 +815,14 @@ void RaceVision_EndScan(void)
     s_default.legacy_len = 0U;
 }
 
-uint8_t RaceVision_Poll(char code[RACE_TASK_CODE_SIZE])
+uint8_t RaceVision_Poll(char code[VISION_TASK_CODE_SIZE])
 {
     Vision_Poll(&s_default, HAL_GetTick());
     if (!s_scan_active) return 0U;
     return Vision_TakeQr(&s_default, code);
 }
 
-uint8_t RaceVision_ParseSeq(const char *line, char code[RACE_TASK_CODE_SIZE])
+uint8_t RaceVision_ParseSeq(const char *line, char code[VISION_TASK_CODE_SIZE])
 {
     return parse_legacy_qr(line, code);
 }
@@ -814,7 +833,7 @@ void RaceVisionDecoder_Reset(RaceVisionDecoder *decoder)
 }
 
 uint8_t RaceVisionDecoder_Push(RaceVisionDecoder *decoder, uint8_t byte,
-                               char code[RACE_TASK_CODE_SIZE])
+                               char code[VISION_TASK_CODE_SIZE])
 {
     uint8_t accepted = 0U;
     if (decoder == NULL || code == NULL) return 0U;

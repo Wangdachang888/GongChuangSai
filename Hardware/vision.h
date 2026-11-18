@@ -4,7 +4,12 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "usart.h"
-#include "race_fsm.h"
+
+#define VISION_TASK_CODE_SIZE       16U
+/* Compatibility size name retained for existing QR callers. */
+#ifndef RACE_TASK_CODE_SIZE
+#define RACE_TASK_CODE_SIZE          VISION_TASK_CODE_SIZE
+#endif
 
 #define VISION_FRAME_MAX             192U
 #define VISION_BODY_MAX              128U
@@ -103,7 +108,7 @@ typedef struct {
     VisionResult result;
     VisionPosition pos;
     uint8_t qr_ready;
-    char qr_code[RACE_TASK_CODE_SIZE];
+    char qr_code[VISION_TASK_CODE_SIZE];
     char wait_reason[32];
     char last_error[48];
     VisionRingProtocol ring;
@@ -136,7 +141,7 @@ int Vision_Reset(VisionContext *vision);
 int Vision_QueryStatus(VisionContext *vision);
 const VisionPosition *Vision_GetPosition(const VisionContext *vision,
                                          uint32_t now_ms);
-uint8_t Vision_TakeQr(VisionContext *vision, char code[RACE_TASK_CODE_SIZE]);
+uint8_t Vision_TakeQr(VisionContext *vision, char code[VISION_TASK_CODE_SIZE]);
 
 void Vision_SetStop(VisionContext *vision, VisionStop stop, void *user);
 int Vision_StartRingAlign(VisionContext *vision, uint8_t target,
@@ -159,12 +164,12 @@ void Vision_RingFail(VisionContext *vision, const char *reason);
 /* Compatibility adapters used by the existing QR route. */
 uint8_t RaceVision_Init(void);
 uint8_t RaceVision_BeginScan(void);
-uint8_t RaceVision_Poll(char code[RACE_TASK_CODE_SIZE]);
+uint8_t RaceVision_Poll(char code[VISION_TASK_CODE_SIZE]);
 uint8_t RaceVision_Healthy(void);
 void RaceVision_EndScan(void);
-uint8_t RaceVision_ParseSeq(const char *line, char code[RACE_TASK_CODE_SIZE]);
+uint8_t RaceVision_ParseSeq(const char *line, char code[VISION_TASK_CODE_SIZE]);
 void RaceVisionDecoder_Reset(RaceVisionDecoder *decoder);
 uint8_t RaceVisionDecoder_Push(RaceVisionDecoder *decoder, uint8_t byte,
-                               char code[RACE_TASK_CODE_SIZE]);
+                               char code[VISION_TASK_CODE_SIZE]);
 
 #endif

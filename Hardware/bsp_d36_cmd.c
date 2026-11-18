@@ -6,7 +6,7 @@
   */
 #include "bsp_d36_cmd.h"
 #include "app_mode.h"
-#include "app_stepper_openloop.h"
+#include "stepper_config.h"
 #include "usart.h"
 
 #include <stdlib.h>
@@ -25,6 +25,19 @@ static uint8_t           s_rx_byte;
 static char              s_line[D36_CMD_LINE_SIZE];
 static uint16_t          s_line_len;
 static uint8_t           s_inited;
+static D36CmdStepperOps s_stepper_ops;
+static void             *s_stepper_user;
+
+void D36Cmd_SetStepperOps(const D36CmdStepperOps *ops, void *user)
+{
+    if (ops == 0) {
+        memset(&s_stepper_ops, 0, sizeof(s_stepper_ops));
+        s_stepper_user = 0;
+    } else {
+        s_stepper_ops = *ops;
+        s_stepper_user = user;
+    }
+}
 
 static void D36Cmd_SendRaw(const uint8_t *data, uint16_t len)
 {
@@ -62,8 +75,10 @@ static void D36Cmd_Status(void)
     (void)sprintf(buf,
                    "LIFT en=%u busy=%u remain=%lu\r\n",
                    (unsigned)Stepper_GetEnable(STEPPER_AXIS_1),
-                   (unsigned)AppStepper_IsBusy(STEPPER_AXIS_1),
-                   (unsigned long)Stepper_GetRemainingSteps(STEPPER_AXIS_1));
+                   (unsigned)((s_stepper_ops.is_busy != 0) &&
+                              s_stepper_ops.is_busy(1U, s_stepper_user)),
+                   (unsigned long)((s_stepper_ops.get_remaining_steps != 0) ?
+                       s_stepper_ops.get_remaining_steps(1U, s_stepper_user) : 0U));
     D36Cmd_Printf(buf);
 }
 
@@ -148,21 +163,23 @@ static void D36Cmd_HandleLine(char *line)
         (strcmp(p, "STOP") == 0) ||
         ((p[0] == '0') && (p[1] == '\0')))
     {
-        AppStepper_StopAll();
+        if (s_stepper_ops.stop_all != 0) s_stepper_ops.stop_all(s_stepper_user);
         D36Cmd_Printf("OK STOP\r\n");
         return;
     }
 
     if ((p[0] == '1') && (p[1] == '\0'))
     {
-        st = AppStepper_StartContinuous(STEPPER_AXIS_1, 1, freq);
+        st = (s_stepper_ops.start_continuous != 0) ?
+             s_stepper_ops.start_continuous(1U, 1, freq, s_stepper_user) : HAL_ERROR;
         D36Cmd_Printf((st == HAL_OK) ? "OK CW\r\n" : "ERR CW\r\n");
         return;
     }
 
     if ((p[0] == '2') && (p[1] == '\0'))
     {
-        st = AppStepper_StartContinuous(STEPPER_AXIS_1, -1, freq);
+        st = (s_stepper_ops.start_continuous != 0) ?
+             s_stepper_ops.start_continuous(1U, -1, freq, s_stepper_user) : HAL_ERROR;
         D36Cmd_Printf((st == HAL_OK) ? "OK CCW\r\n" : "ERR CCW\r\n");
         return;
     }
@@ -184,7 +201,8 @@ static void D36Cmd_HandleLine(char *line)
                 freq = (uint32_t)freq_i;
             }
         }
-        st = AppStepper_MoveSteps(STEPPER_AXIS_1, a, freq);
+        st = (s_stepper_ops.move_steps != 0) ?
+             s_stepper_ops.move_steps(1U, a, freq, s_stepper_user) : HAL_ERROR;
         D36Cmd_Printf((st == HAL_OK) ? "OK MOVE\r\n" : "ERR MOVE\r\n");
         return;
     }
@@ -209,12 +227,13 @@ static void D36Cmd_HandleLine(char *line)
         }
         if (a == 0)
         {
-            AppStepper_Stop(STEPPER_AXIS_1);
+            if (s_stepper_ops.stop != 0) s_stepper_ops.stop(1U, s_stepper_user);
             D36Cmd_Printf("OK STOP AXIS\r\n");
             return;
         }
         dir = (a > 0) ? 1 : -1;
-        st = AppStepper_StartContinuous(STEPPER_AXIS_1, dir, freq);
+        st = (s_stepper_ops.start_continuous != 0) ?
+             s_stepper_ops.start_continuous(1U, dir, freq, s_stepper_user) : HAL_ERROR;
         D36Cmd_Printf((st == HAL_OK) ? "OK SPIN\r\n" : "ERR SPIN\r\n");
         return;
     }
@@ -232,7 +251,8 @@ static void D36Cmd_HandleLine(char *line)
                 D36Cmd_Printf("ERR usage: E1 1|0\r\n");
                 return;
             }
-            AppStepper_SetEnable(STEPPER_AXIS_1, (en_v != 0) ? 1U : 0U);
+            if (s_stepper_ops.set_enable != 0)
+                s_stepper_ops.set_enable(1U, (en_v != 0) ? 1U : 0U, s_stepper_user);
             D36Cmd_Printf("OK EN AXIS\r\n");
             return;
         }
@@ -242,7 +262,8 @@ static void D36Cmd_HandleLine(char *line)
             D36Cmd_Printf("ERR usage: E 1|0\r\n");
             return;
         }
-        AppStepper_SetEnableAll((en_v != 0) ? 1U : 0U);
+        if (s_stepper_ops.set_enable_all != 0)
+            s_stepper_ops.set_enable_all((en_v != 0) ? 1U : 0U, s_stepper_user);
         D36Cmd_Printf("OK EN ALL\r\n");
         return;
     }
@@ -338,6 +359,8 @@ void D36Cmd_ErrorCallback(UART_HandleTypeDef *huart)
 
 #else /* APP_D36_UART_CMD_ENABLE == 0 */
 
+void D36Cmd_SetStepperOps(const D36CmdStepperOps *ops, void *user)
+{ (void)ops; (void)user; }
 void D36Cmd_Init(void) {}
 void D36Cmd_Poll(void) {}
 void D36Cmd_Printf(const char *s) { (void)s; }

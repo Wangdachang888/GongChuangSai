@@ -95,3 +95,11 @@
 原因：建立独立 App 物理目录，保持公开接口、比赛状态机、协议、控制参数和实时周期不变。
 验证：`tests/race/run.ps1` PASS；`tests/ulog/run.ps1` PASS；Keil 工程 77 个文件引用、路径存在性和重复引用检查 PASS；UV4/ArmCC 完整构建 PASS（0 Error、0 Warning）；`git diff --check` PASS。
 实机：NOT_RUN；`app_stepper_drive.c`、`bsp_d36_cmd.c`、`bsp_ulog.c`、`vision.h` 对 App 的既有反向依赖保留为后续解耦风险。
+
+## Hardware 阶段：职责整理与依赖优化（2026-11-18）
+
+提交：本轮待提交，提交后不在长期文档中自引用当前 SHA
+范围：`Hardware/bsp_ulog.c/.h`、`Hardware/vision.c/.h`、`Hardware/bsp_d36_cmd.c/.h`、`Hardware/app_stepper_drive.c`、`Config/stepper_config.h`、`App/app_runtime.c`、`App/app_stepper_openloop.h`、测试和 Keil 工程引用
+原因：解除明确的 Hardware→App 反向依赖，保留硬件资源、协议、日志通道和实时周期。
+验证：`tests/race/run.ps1` PASS；`tests/ulog/run.ps1` PASS；Keil UV4/ArmCC 完整构建 PASS（0 Error、0 Warning）；工程路径/重复引用、Hardware→App 依赖和 UART 回调唯一性检查 PASS；`git diff --check` PASS。
+实机：NOT_RUN；未修改 IMU 底层驱动、Motor、TIM6/TIM8、UART 资源、GPIO/PWM/编码器映射或控制参数。

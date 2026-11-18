@@ -31,13 +31,8 @@
 
 #if (ULOG_ENABLE != 0)
 
-#include "app_square.h"
-#include "app_imu.h"
 #include "app_mode.h"
 #include "bsp_vbat.h"
-#if APP_RUN_MODE == APP_MODE_RACE
-#include "app_race.h"
-#endif
 
 #include <stdio.h>
 #include <string.h>
@@ -60,13 +55,16 @@ static float    s_odo;
 static float    s_last_x;
 static float    s_last_y;
 static uint8_t  s_have_last;
-#if APP_RUN_MODE != APP_MODE_RACE
-static uint8_t s_square_seen_running;
-#endif
+static ULogAppSnapshot s_app_snapshot;
 
 UART_HandleTypeDef *ULog_GetHandle(void)
 {
     return &s_huart2;
+}
+
+void ULog_SetAppSnapshot(const ULogAppSnapshot *snapshot)
+{
+    if (snapshot != 0) s_app_snapshot = *snapshot;
 }
 
 void ULog_WriteRaw(const uint8_t *data, uint16_t len)
@@ -161,47 +159,9 @@ static float ulog_wrap180(float deg)
     return deg;
 }
 
-static uint8_t ulog_phase(const MecanumChassis_t *chassis)
-{
-#if APP_RUN_MODE == APP_MODE_RACE
-    const RaceFsm *race = AppRace_Status();
-    (void)chassis;
-    if (AppRace_LogFinished()) return 4u;
-    if (race->state != RACE_RUNNING || race->action_index >= race->action_count) return 0u;
-    if (race->actions[race->action_index].kind == RACE_ACTION_TURN) return 2u;
-    if (race->actions[race->action_index].kind == RACE_ACTION_SETTLE ||
-        race->actions[race->action_index].kind == RACE_ACTION_SCAN) return 3u;
-    return race->actions[race->action_index].kind == RACE_ACTION_MOVE ? 1u : 0u;
-#else
-    uint8_t st = Square_GetState();
-    uint8_t step = Square_GetStep();
-
-    if (st == 2u) {          /* SQUARE_DONE */
-        return 4u;
-    }
-    if (st != 1u) {          /* not running */
-        return 0u;
-    }
-    if (chassis->mode == 0u && chassis->target_reached == 0u &&
-        (fabsf(chassis->x_target) < 1e-4f) && (fabsf(chassis->y_target) < 1e-4f) &&
-        (fabsf(chassis->vx_target) < 1e-4f)) {
-        return 0u;           /* start delay / idle */
-    }
-    /* square: even step = move, odd step = turn */
-    return ((step & 1u) == 0u) ? 1u : 2u;
-#endif
-}
-
 static uint8_t ulog_finished(void)
 {
-#if APP_RUN_MODE == APP_MODE_RACE
-    return AppRace_LogFinished();
-#else
-    uint8_t state = Square_GetState();
-    if (state == SQUARE_RUNNING) s_square_seen_running = 1u;
-    return state == SQUARE_DONE || state == SQUARE_TIMEOUT ||
-           (s_square_seen_running && state == SQUARE_IDLE);
-#endif
+    return s_app_snapshot.finished;
 }
 
 void ULog_Poll(const MecanumChassis_t *chassis)
@@ -248,7 +208,7 @@ void ULog_Poll(const MecanumChassis_t *chassis)
     s_have_last = 1u;
 
     yaw_deg = chassis->theta_pos * (180.0f / (float)M_PI);
-    imu_deg = app_imu_yaw_deg();
+    imu_deg = s_app_snapshot.imu_yaw_deg;
     ex = chassis->x_target - chassis->x_pos;
     ey = chassis->y_target - chassis->y_pos;
     eyaw = ulog_wrap180(chassis->theta_target * (180.0f / (float)M_PI) - yaw_deg);
@@ -271,7 +231,7 @@ void ULog_Poll(const MecanumChassis_t *chassis)
         fabsf(chassis->motor_lb->actual_speed) +
         fabsf(chassis->motor_rb->actual_speed)) / ULOG_PULSE_PER_METER;
 
-    phase = ulog_phase(chassis);
+    phase = s_app_snapshot.phase;
 
     for (i = 0; i < 43u; i++) {
         ch[i] = 0.0f;
@@ -279,16 +239,11 @@ void ULog_Poll(const MecanumChassis_t *chassis)
 
     ch[0]  = (float)chassis->mode;
     ch[1]  = (float)phase;
-#if APP_RUN_MODE == APP_MODE_RACE
-    ch[2]  = (float)AppRace_Status()->state;
-    ch[3]  = (float)AppRace_Status()->action_index;
-    ch[6]  = (float)AppRace_Status()->error;
-    ch[7]  = (float)AppRace_TaskPlan()->index;
-    ch[9]  = (float)RaceTaskPlan_Done(AppRace_TaskPlan());
-#else
-    ch[2]  = (float)Square_GetState();
-    ch[3]  = (float)Square_GetStep();
-#endif
+    ch[2]  = (float)s_app_snapshot.status;
+    ch[3]  = (float)s_app_snapshot.action_index;
+    ch[6]  = (float)s_app_snapshot.error;
+    ch[7]  = (float)s_app_snapshot.plan_index;
+    ch[9]  = (float)s_app_snapshot.plan_done;
     ch[4]  = (float)chassis->target_reached;
     ch[5]  = (float)now;                 /* ms */
     ch[8]  = (float)phase;
@@ -373,6 +328,7 @@ volatile uint16_t g_ulog_last_line_len;
 
 void ULog_Init(void) {}
 void ULog_Poll(const MecanumChassis_t *chassis) { (void)chassis; }
+void ULog_SetAppSnapshot(const ULogAppSnapshot *snapshot) { (void)snapshot; }
 void ULog_Stop(void) {}
 uint8_t ULog_IsRecording(void) { return 0u; }
 void ULog_WriteRaw(const uint8_t *data, uint16_t len) { (void)data; (void)len; }

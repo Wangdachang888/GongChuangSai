@@ -15,6 +15,7 @@
 #define __BSP_D36_CMD_H
 
 #include "usart.h"
+#include "main.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -24,6 +25,20 @@ extern "C" {
 #define APP_D36_UART_CMD_ENABLE     1
 #endif
 
+typedef struct {
+    uint8_t (*is_busy)(uint8_t axis, void *user);
+    uint32_t (*get_remaining_steps)(uint8_t axis, void *user);
+    HAL_StatusTypeDef (*start_continuous)(uint8_t axis, int8_t direction,
+                                          uint32_t frequency_hz, void *user);
+    HAL_StatusTypeDef (*move_steps)(uint8_t axis, int32_t steps,
+                                    uint32_t frequency_hz, void *user);
+    void (*stop)(uint8_t axis, void *user);
+    void (*stop_all)(void *user);
+    void (*set_enable)(uint8_t axis, uint8_t enable, void *user);
+    void (*set_enable_all)(uint8_t enable, void *user);
+} D36CmdStepperOps;
+
+void D36Cmd_SetStepperOps(const D36CmdStepperOps *ops, void *user);
 void D36Cmd_Init(void);
 void D36Cmd_Poll(void);
 void D36Cmd_Printf(const char *s);

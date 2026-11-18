@@ -46,10 +46,22 @@ extern "C" {
 #define ULOG_PULSE_PER_METER  1750.0f
 #endif
 
+typedef struct {
+    uint8_t phase;
+    uint8_t status;
+    uint8_t action_index;
+    uint8_t error;
+    uint8_t plan_index;
+    uint8_t plan_done;
+    uint8_t finished;
+    float imu_yaw_deg;
+} ULogAppSnapshot;
+
 /* Init once per boot. Stop stays latched until MCU reset. */
 void ULog_Init(void);
 uint8_t ULog_IsRecording(void); /* Stream enabled, NOT a card-close ACK */
 void ULog_Poll(const MecanumChassis_t *chassis);
+void ULog_SetAppSnapshot(const ULogAppSnapshot *snapshot);
 void ULog_Stop(void);            /* Stop UART stream only, NOT a TF file-close command */
 
 /* Inspect these counters in Keil Watch during diagnosis. */

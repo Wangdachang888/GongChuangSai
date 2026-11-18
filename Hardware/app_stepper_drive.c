@@ -8,7 +8,7 @@
  * This keeps the S curve independent from the selected microstep setting.
  */
 #include "app_stepper_drive.h"
-#include "app_stepper_openloop.h"
+#include "stepper_config.h"
 #include "main.h"
 #include "bsp_stepper.h"
 

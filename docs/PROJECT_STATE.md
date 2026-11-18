@@ -144,3 +144,15 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 - `App/app_runtime.c` 在 IMU 初始化和轮询后更新快照；航向零偏重置由 `App/app_square.c`、`App/display_nav.c` 发起，保留原有复位行为。
 - `tests/race/run.ps1`：`PASS`；`tests/ulog/run.ps1`：`PASS`；`git diff --check`：`PASS`。
 - 本批使用 `D:\keil\UV4\UV4.exe -b MDK-ARM\GongChuangSai.uvprojx -j0` 完整编译：`PASS`；ArmCC V5.06 update 5 (build 528)，`0 Error(s), 0 Warning(s)`，生成 AXF/HEX。未执行烧录和实机验收。
+
+## 16. Hardware 职责整理与依赖优化（2026-11-18）
+
+- `Hardware/bsp_ulog.c` 改为接收 `ULogAppSnapshot`，由 `App/app_runtime.c` 组装比赛、方形任务和 IMU 快照；日志公共轮询接口、43 通道含义和停止语义保持不变。
+- `Hardware/vision.c/.h` 移除对 `App/race_fsm.h` 的依赖；二维码任务码校验保留在视觉协议模块内部，`RACE_TASK_CODE_SIZE` 兼容别名保留，OpenMV/V4、旧 `#SEQ` 和圆环协议未改变。
+- `Hardware/bsp_d36_cmd.c` 改为通过 `D36CmdStepperOps` 回调表访问步进业务；文本命令、回复格式、USART3 和阻塞发送行为保持不变。步进配置宏移至 `Config/stepper_config.h`，消除 `Hardware/app_stepper_drive.c` 对 App 头文件的配置依赖。
+- `Hardware/bsp_uart_router.c` 未修改，仍是正式工程唯一 HAL UART 回调入口；`app_imu.c/.h` 的自包含驱动依赖保留。
+- `MDK-ARM/GongChuangSai.uvprojx` 已加入 `Config/stepper_config.h`，IncludePath 继续包含 `../Config`。
+- `tests/race/run.ps1`：`PASS`；`tests/ulog/run.ps1`：`PASS`，包含比赛/非比赛模式、禁用日志和流程场景。
+- Keil UV4/ArmCC 完整构建：`PASS`，ArmCC V5.06 update 5，`0 Error(s), 0 Warning(s)`；程序尺寸 `Code=54276`、`RO-data=8660`、`RW-data=356`、`ZI-data=9564`。
+- 工程路径、重复引用、Hardware→App 依赖和 UART 回调唯一性静态检查：`PASS`；未改变 STM32F407、USART、TIM6/TIM8、GPIO、PWM、编码器、控制参数或协议文本。
+- 实机烧录、OpenMV、D36、IMU、底盘、机械动作和 SD 卡持续写入：`NOT_RUN`。Vision 内部保留一份纯任务码校验逻辑，后续可在不引入层间依赖的前提下统一协议校验实现。

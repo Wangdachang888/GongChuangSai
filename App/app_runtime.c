@@ -16,12 +16,43 @@
 #include "Motor.h"
 #include "tim.h"
 #include "vofa_debug.h"
+#include <math.h>
 
 Motor_t motor_left_front;
 Motor_t motor_right_front;
 Motor_t motor_left_back;
 Motor_t motor_right_back;
 MecanumChassis_t chassis;
+#if APP_RUN_MODE != APP_MODE_RACE
+static uint8_t s_square_seen_running;
+#endif
+
+#if APP_RUN_MODE != APP_MODE_RACE
+static uint8_t d36_stepper_busy(uint8_t axis, void *user)
+{ (void)user; return AppStepper_IsBusy((StepperAxis_t)axis); }
+static uint32_t d36_stepper_remaining(uint8_t axis, void *user)
+{ (void)user; return AppStepper_GetRemainingSteps((StepperAxis_t)axis); }
+static HAL_StatusTypeDef d36_stepper_start(uint8_t axis, int8_t direction,
+                                           uint32_t frequency_hz, void *user)
+{ (void)user; return AppStepper_StartContinuous((StepperAxis_t)axis, direction, frequency_hz); }
+static HAL_StatusTypeDef d36_stepper_move(uint8_t axis, int32_t steps,
+                                          uint32_t frequency_hz, void *user)
+{ (void)user; return AppStepper_MoveSteps((StepperAxis_t)axis, steps, frequency_hz); }
+static void d36_stepper_stop(uint8_t axis, void *user)
+{ (void)user; AppStepper_Stop((StepperAxis_t)axis); }
+static void d36_stepper_stop_all(void *user)
+{ (void)user; AppStepper_StopAll(); }
+static void d36_stepper_enable(uint8_t axis, uint8_t enable, void *user)
+{ (void)user; AppStepper_SetEnable((StepperAxis_t)axis, enable); }
+static void d36_stepper_enable_all(uint8_t enable, void *user)
+{ (void)user; AppStepper_SetEnableAll(enable); }
+
+static const D36CmdStepperOps s_d36_stepper_ops = {
+    d36_stepper_busy, d36_stepper_remaining, d36_stepper_start,
+    d36_stepper_move, d36_stepper_stop, d36_stepper_stop_all,
+    d36_stepper_enable, d36_stepper_enable_all
+};
+#endif
 
 static void stop_chassis_outputs(void)
 {
@@ -39,6 +70,47 @@ static void update_chassis_imu_snapshot(void)
     snapshot.yaw_rad = app_imu_yaw_rad();
     snapshot.valid = app_imu_ok() ? 1u : 0u;
     MecanumChassis_SetImuSnapshot(&chassis, &snapshot);
+}
+
+static void update_ulog_snapshot(void)
+{
+    ULogAppSnapshot snapshot = {0};
+
+    snapshot.imu_yaw_deg = app_imu_yaw_deg();
+#if APP_RUN_MODE == APP_MODE_RACE
+    {
+        const RaceFsm *race = AppRace_Status();
+        const RaceTaskPlan *plan = AppRace_TaskPlan();
+        snapshot.status = (uint8_t)race->state;
+        snapshot.action_index = race->action_index;
+        snapshot.error = (uint8_t)race->error;
+        snapshot.plan_index = plan->index;
+        snapshot.plan_done = RaceTaskPlan_Done(plan);
+        snapshot.finished = AppRace_LogFinished();
+        if (snapshot.finished) snapshot.phase = 4U;
+        else if (race->state != RACE_RUNNING ||
+                 race->action_index >= race->action_count) snapshot.phase = 0U;
+        else if (race->actions[race->action_index].kind == RACE_ACTION_TURN) snapshot.phase = 2U;
+        else if (race->actions[race->action_index].kind == RACE_ACTION_SETTLE ||
+                 race->actions[race->action_index].kind == RACE_ACTION_SCAN) snapshot.phase = 3U;
+        else if (race->actions[race->action_index].kind == RACE_ACTION_MOVE) snapshot.phase = 1U;
+    }
+#else
+    snapshot.status = Square_GetState();
+    snapshot.action_index = Square_GetStep();
+    if (snapshot.status == SQUARE_RUNNING) s_square_seen_running = 1U;
+    snapshot.finished = (snapshot.status == SQUARE_DONE ||
+                         snapshot.status == SQUARE_TIMEOUT ||
+                         (s_square_seen_running && snapshot.status == SQUARE_IDLE));
+    if (snapshot.status == SQUARE_DONE) snapshot.phase = 4U;
+    else if (snapshot.status == SQUARE_RUNNING) {
+        if (chassis.mode != 0U || chassis.target_reached != 0U ||
+            fabsf(chassis.x_target) >= 1e-4f || fabsf(chassis.y_target) >= 1e-4f ||
+            fabsf(chassis.vx_target) >= 1e-4f)
+            snapshot.phase = ((snapshot.action_index & 1U) == 0U) ? 1U : 2U;
+    }
+#endif
+    ULog_SetAppSnapshot(&snapshot);
 }
 static void init_motors_and_chassis(void)
 {
@@ -101,6 +173,7 @@ void AppRuntime_Init(void)
     Servo_Init();
     Servo_SetBothAngle(30.0f, 30.0f);
     OLED_Init();
+    D36Cmd_SetStepperOps(&s_d36_stepper_ops, 0);
     D36Cmd_Init();
 #else
     OLED_Init();
@@ -142,6 +215,7 @@ void AppRuntime_Poll(void)
     update_chassis_imu_snapshot();
     AppRace_Poll();
     Vbat_Poll();
+    update_ulog_snapshot();
     ULog_Poll(&chassis);
 #else
 #if (MOTOR_TUNE != 0)
@@ -155,6 +229,7 @@ void AppRuntime_Poll(void)
     D36Cmd_Poll();
     Vbat_Poll();
     DisplayNav_Poll(&chassis);
+    update_ulog_snapshot();
     ULog_Poll(&chassis);
 #endif
 }
