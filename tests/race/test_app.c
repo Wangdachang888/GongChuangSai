@@ -12,7 +12,8 @@ uint8_t OLED_GRAM[128][8];
 static Motor_t s_motors[4];
 static MecanumChassis_t s_chassis;
 static uint32_t s_now, s_frames, s_irq, s_position_calls, s_stops, s_scans;
-static uint8_t s_key_down, s_imu_ok = 1U, s_bias_ready = 1U, s_link_ok = 1U, s_qr;
+static uint8_t s_key_down, s_imu_ok = 1U, s_bias_ready = 1U, s_link_ok = 1U;
+static uint8_t s_qr, s_scan_failed;
 static VisionContext s_vision;
 
 uint32_t __get_PRIMASK(void) { return s_irq; }
@@ -44,6 +45,7 @@ void OLED_WR_Byte(uint8_t value, uint8_t command) { (void)value; (void)command; 
 uint8_t RaceVision_Init(void) { return s_link_ok; }
 uint8_t RaceVision_Healthy(void) { return s_link_ok; }
 uint8_t RaceVision_BeginScan(void) { s_scans++; return s_link_ok; }
+uint8_t RaceVision_ScanFailed(void) { return s_scan_failed; }
 void RaceVision_EndScan(void) { s_qr = 0U; }
 uint8_t RaceVision_Poll(char code[RACE_TASK_CODE_SIZE])
 {
@@ -119,6 +121,7 @@ static void init(uint8_t held)
     s_chassis.body_frame = 1U;
     s_key_down = held;
     s_now = s_frames = s_irq = s_position_calls = s_scans = 0U;
+    s_qr = s_scan_failed = 0U;
     s_bias_ready = s_imu_ok = s_link_ok = 1U;
     AppRace_Init(&s_chassis);
 }
@@ -186,24 +189,27 @@ int main(void)
     tick(1U);
     assert(AppRace_Status()->error == RACE_ERROR_LINK && !AppRace_ControlTick());
     start();
+    {
+        const RaceFsm *race = AppRace_Status();
+        s_chassis.x_pos = race->target_x;
+        s_chassis.y_pos = race->target_y;
+        s_chassis.theta_pos = race->target_yaw;
+        tick(race->actions[0].hold_ms + 2U);
+    }
+    s_scan_failed = 1U;
+    tick(1U);
+    assert(AppRace_Status()->error == RACE_ERROR_SCAN_TIMEOUT &&
+           !AppRace_ControlTick());
+    start();
     while (AppRace_Status()->action_index < 4U) {
         uint8_t index = AppRace_Status()->action_index;
         const RaceFsm *race = AppRace_Status();
         s_chassis.x_pos = race->target_x;
         s_chassis.y_pos = race->target_y;
         s_chassis.theta_pos = race->target_yaw;
+        if (race->actions[index].scan_start != 0U) s_qr = 1U;
         tick(race->actions[index].hold_ms + 2U);
         assert(AppRace_Status()->action_index == index + 1U);
-    }
-    /* Complete the scan action before exercising the material route. */
-    {
-        const RaceFsm *race = AppRace_Status();
-        s_chassis.x_pos = race->target_x;
-        s_chassis.y_pos = race->target_y;
-        s_chassis.theta_pos = race->target_yaw;
-        s_qr = 1U;
-        tick(1U);
-        assert(AppRace_Status()->action_index == 5U);
     }
     while (AppRace_Status()->action_index < 7U) {
         uint8_t index = AppRace_Status()->action_index;
@@ -213,13 +219,6 @@ int main(void)
         s_chassis.theta_pos = race->target_yaw;
         tick(race->actions[index].hold_ms + 2U);
         assert(AppRace_Status()->action_index == index + 1U);
-    }
-    {
-        const RaceFsm *race = AppRace_Status();
-        s_chassis.x_pos = race->target_x;
-        s_chassis.y_pos = race->target_y;
-        s_chassis.theta_pos = race->target_yaw;
-        tick(race->actions[7].hold_ms + 2U);
     }
     assert(s_scans == 1U && s_position_calls == 5U && s_chassis.mode == 0U);
     assert(AppRace_Status()->state == RACE_DONE && !AppRace_ControlTick());

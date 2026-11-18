@@ -200,6 +200,11 @@ void AppRace_Poll(void)
             Race_Fail(&s_race, RACE_ERROR_CONFIG);
         }
     }
+    if (s_race.state == RACE_RUNNING && s_race.scan_active &&
+        RaceVision_ScanFailed()) {
+        Race_Fail(&s_race, RaceVision_Healthy() ?
+                  RACE_ERROR_SCAN_TIMEOUT : RACE_ERROR_LINK);
+    }
     if (s_ring_control || Vision_RingActive(Vision_GetDefault())) {
         if (s_stalled && Vision_RingActive(Vision_GetDefault()))
             (void)Vision_Cancel(Vision_GetDefault());
@@ -274,7 +279,8 @@ void AppRace_Poll(void)
             Mecanum_SetPositionMode(s_chassis, s_race.target_x, s_race.target_y, s_race.target_yaw);
         }
         __set_PRIMASK(saved_irq);
-        if (action->kind == RACE_ACTION_SCAN && !RaceVision_BeginScan()) {
+        if ((action->kind == RACE_ACTION_SCAN || action->scan_start != 0U) &&
+            !RaceVision_BeginScan()) {
             Race_Fail(&s_race, RACE_ERROR_LINK);
         }
     }

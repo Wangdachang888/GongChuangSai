@@ -40,10 +40,11 @@ static void enter_action(RaceFsm *race, uint32_t now)
         race->target_y = race->origin_y + sine * action->x + cosine * action->y;
         race->target_yaw = wrap_yaw(race->origin_yaw + action->yaw);
     }
-    if (action->kind == RACE_ACTION_SCAN) {
+    if (action->kind == RACE_ACTION_SCAN || action->scan_start != 0U) {
         race->scan_session++;
         if (race->scan_session == 0U) race->scan_session = 1U;
         race->qr_valid = 0U;
+        race->scan_active = 1U;
     }
 }
 
@@ -107,6 +108,7 @@ uint8_t Race_RunActions(RaceFsm *race, const RaceAction *actions, uint8_t count,
     race->target_yaw = feedback->yaw;
     race->task_code[0] = '\0';
     race->qr_valid = 0U;
+    race->scan_active = 0U;
     race->error = RACE_ERROR_NONE;
     race->state = RACE_RUNNING;
     enter_action(race, now);
@@ -115,7 +117,7 @@ uint8_t Race_RunActions(RaceFsm *race, const RaceAction *actions, uint8_t count,
 
 uint8_t Race_StartQrRoute(RaceFsm *race, const RaceFeedback *feedback, uint32_t now)
 {
-    RaceAction actions[8];
+    RaceAction actions[7];
     float along, inward, heading, cosine, sine;
     float local_x, local_y;
     if (race->zone < 1U || race->zone > 2U) return 0U;
@@ -125,34 +127,42 @@ uint8_t Race_StartQrRoute(RaceFsm *race, const RaceFeedback *feedback, uint32_t 
     heading = race->zone == 1U ? RACE_ZONE1_HEADING_RAD : RACE_ZONE2_HEADING_RAD;
     cosine = cosf(heading);
     sine = sinf(heading);
-    actions[0] = (RaceAction){RACE_ACTION_MOVE, sine * inward, cosine * inward, 0.0f,
-                             RACE_MOVE_TIMEOUT_MS, RACE_ARRIVAL_HOLD_MS};
-    actions[1] = (RaceAction){RACE_ACTION_MOVE, cosine * along + sine * inward,
-                             -sine * along + cosine * inward, 0.0f,
-                             RACE_MOVE_TIMEOUT_MS, RACE_ARRIVAL_HOLD_MS};
+    actions[0] = (RaceAction){RACE_ACTION_MOVE, sine * inward, cosine * inward,
+                              0.0f, RACE_MOVE_TIMEOUT_MS,
+                              RACE_ARRIVAL_HOLD_MS, 0U};
+    actions[1] = (RaceAction){RACE_ACTION_MOVE,
+                              cosine * along + sine * inward,
+                              -sine * along + cosine * inward,
+                              0.0f, RACE_MOVE_TIMEOUT_MS,
+                              RACE_ARRIVAL_HOLD_MS, 0U};
+    actions[1].scan_start = 1U;
     actions[2] = actions[1];
     actions[2].kind = RACE_ACTION_TURN;
+    actions[2].scan_start = 0U;
     actions[2].yaw = -heading;
-    actions[3] = (RaceAction){RACE_ACTION_SETTLE, 0.0f, 0.0f, 0.0f, 3000U, RACE_SETTLE_MS};
-    actions[4] = (RaceAction){RACE_ACTION_SCAN, 0.0f, 0.0f, 0.0f, RACE_SCAN_TIMEOUT_MS, 0U};
+    actions[3] = (RaceAction){RACE_ACTION_SETTLE, 0.0f, 0.0f, 0.0f,
+                              3000U, RACE_SETTLE_MS, 0U};
     local_x = cosine * (RACE_MATERIAL_APPROACH_X_M -
                         ((race->zone == 1U) ? RACE_FIELD_SIZE_M - RACE_START_CENTER_M : RACE_START_CENTER_M)) +
               sine * RACE_MATERIAL_CORRIDOR_Y_M;
     local_y = -sine * (RACE_MATERIAL_APPROACH_X_M -
                        ((race->zone == 1U) ? RACE_FIELD_SIZE_M - RACE_START_CENTER_M : RACE_START_CENTER_M)) +
               cosine * RACE_MATERIAL_CORRIDOR_Y_M;
-    actions[5] = (RaceAction){RACE_ACTION_MOVE, local_x, local_y, 0.0f,
-                              RACE_MATERIAL_TIMEOUT_MS, RACE_ARRIVAL_HOLD_MS};
+    actions[4] = (RaceAction){RACE_ACTION_MOVE, local_x, local_y, 0.0f,
+                              RACE_MATERIAL_TIMEOUT_MS,
+                              RACE_ARRIVAL_HOLD_MS, 0U};
     local_x = cosine * (RACE_MATERIAL_APPROACH_X_M -
                         ((race->zone == 1U) ? RACE_FIELD_SIZE_M - RACE_START_CENTER_M : RACE_START_CENTER_M)) +
               sine * RACE_MATERIAL_CENTER_Y_M;
     local_y = -sine * (RACE_MATERIAL_APPROACH_X_M -
                        ((race->zone == 1U) ? RACE_FIELD_SIZE_M - RACE_START_CENTER_M : RACE_START_CENTER_M)) +
               cosine * RACE_MATERIAL_CENTER_Y_M;
-    actions[6] = (RaceAction){RACE_ACTION_MOVE, local_x, local_y, -heading,
-                              RACE_MATERIAL_TIMEOUT_MS, RACE_ARRIVAL_HOLD_MS};
-    actions[7] = (RaceAction){RACE_ACTION_SETTLE, 0.0f, 0.0f, 0.0f, 3000U, RACE_SETTLE_MS};
-    return Race_RunActions(race, actions, 8U, feedback, now);
+    actions[5] = (RaceAction){RACE_ACTION_MOVE, local_x, local_y, -heading,
+                              RACE_MATERIAL_TIMEOUT_MS,
+                              RACE_ARRIVAL_HOLD_MS, 0U};
+    actions[6] = (RaceAction){RACE_ACTION_SETTLE, 0.0f, 0.0f, 0.0f,
+                              3000U, RACE_SETTLE_MS, 0U};
+    return Race_RunActions(race, actions, 7U, feedback, now);
 }
 
 void Race_Tick(RaceFsm *race, const RaceFeedback *feedback, uint32_t now)
@@ -166,7 +176,7 @@ void Race_Tick(RaceFsm *race, const RaceFeedback *feedback, uint32_t now)
     }
     action = &race->actions[race->action_index];
     if ((uint32_t)(now - race->entered_ms) >= action->timeout_ms) {
-        Race_Fail(race, action->kind == RACE_ACTION_SCAN ?
+        Race_Fail(race, (action->kind == RACE_ACTION_SCAN || action->scan_start != 0U) ?
                   RACE_ERROR_SCAN_TIMEOUT : RACE_ERROR_MOVE_TIMEOUT);
         return;
     }
@@ -175,6 +185,10 @@ void Race_Tick(RaceFsm *race, const RaceFeedback *feedback, uint32_t now)
               fabsf(wrap_yaw(race->target_yaw - feedback->yaw)) <= RACE_YAW_TOL_RAD;
     if (!reached) {
         race->holding = 0U;
+        return;
+    }
+    if (action->scan_start != 0U && !race->qr_valid) {
+        Race_Fail(race, RACE_ERROR_SCAN_TIMEOUT);
         return;
     }
     if (action->kind == RACE_ACTION_SCAN) {
@@ -219,10 +233,11 @@ uint8_t Race_ParseTask(const char *code, uint8_t colors[2][3], uint8_t positions
 
 uint8_t Race_SubmitQr(RaceFsm *race, uint32_t session, const char *code)
 {
-    if (race->state != RACE_RUNNING || race->actions[race->action_index].kind != RACE_ACTION_SCAN ||
+    if (race == NULL || race->state != RACE_RUNNING || !race->scan_active ||
         session != race->scan_session || race->qr_valid) return 0U;
     if (!Race_ParseTask(code, race->colors, race->positions)) return 0U;
     memcpy(race->task_code, code, RACE_TASK_CODE_SIZE);
     race->qr_valid = 1U;
+    race->scan_active = 0U;
     return 1U;
 }

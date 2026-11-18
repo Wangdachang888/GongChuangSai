@@ -163,3 +163,11 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 - 网页源码位于 `viewer/`；通过 `node viewer/build.cjs` 生成根目录的 `kart_log_view_mecanum_v3.html` 和 `kart_log_view_mecanum_v4.html`。
 - 网页按四轮编码器重建 `vx`、`vy` 和角速度，四轮轨迹由车体位姿和轮心偏移计算；这些结果是编码器运动学估计，不等于对地真实速度。
 - 当前网页和主机测试不改变固件硬件参数，也不能替代 Keil 构建、烧录、OpenMV、底盘或机械实机验收；相关实机项目继续为 `NOT_RUN`。
+
+## 18. OpenMV 边走边扫二维码（2026-11-18）
+
+- `App/race_fsm.c/.h` 将二维码启动标志附着到搜索路段的 `MOVE` 动作；底盘仍执行原有里程计目标和到位保持，扫描不再占用独立停车状态。
+- `App/app_race.c` 在动作进入时只调用一次 `RaceVision_BeginScan()`，主循环持续调用 `RaceVision_Poll()`；二维码成功后由现有 `Race_SubmitQr()` 校验、保存并只生成一次任务计划。
+- `Hardware/vision.c/.h` 实现 `RaceVision_ScanFailed()`，将 ACK 超时、OpenMV `TIMEOUT` 和协议错误传递给 App；App 进入明确扫码/链路故障并走安全停止路径。UART 中断仍只接收和排队字节。
+- OpenMV `vision_openmv_stm32_v4_redownload/OpenMV/main.py` 的 `QR` 任务在主循环连续调用 `find_qrcodes()`，连续确认三帧后发送 `QR`、`DONE,QR` 和 `IDLE`；本批未修改 OpenMV 工程。
+- `tests/race/run.ps1`、`tests/ulog/run.ps1`：`PASS`；Keil UV4/ArmCC 完整构建：`PASS`，0 Error、0 Warning。二维码板搜索段的起点、终点、行驶方向、摄像头安装角和覆盖速度仍为 `NEED_CONFIRMATION`；OpenMV 通信、底盘运动和机械流程实机验证为 `NOT_RUN`。

@@ -166,6 +166,7 @@ uint8_t RaceVision_Init(void);
 uint8_t RaceVision_BeginScan(void);
 uint8_t RaceVision_Poll(char code[VISION_TASK_CODE_SIZE]);
 uint8_t RaceVision_Healthy(void);
+uint8_t RaceVision_ScanFailed(void);
 void RaceVision_EndScan(void);
 uint8_t RaceVision_ParseSeq(const char *line, char code[VISION_TASK_CODE_SIZE]);
 void RaceVisionDecoder_Reset(RaceVisionDecoder *decoder);

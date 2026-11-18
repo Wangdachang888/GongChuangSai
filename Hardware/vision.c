@@ -795,6 +795,7 @@ uint8_t RaceVision_BeginScan(void)
 {
     static const uint8_t legacy_reset = 'R';
     uint32_t saved_irq = __get_PRIMASK();
+    if (s_scan_active) return RaceVision_Healthy();
     __disable_irq();
     s_default.rx_tail = s_default.rx_head;
     __set_PRIMASK(saved_irq);
@@ -805,6 +806,13 @@ uint8_t RaceVision_BeginScan(void)
     if (!Vision_SendRaw(&s_default, &legacy_reset, 1U)) return 0U;
     s_scan_active = (uint8_t)Vision_StartJob(&s_default, 1U, HAL_GetTick());
     return s_scan_active;
+}
+
+uint8_t RaceVision_ScanFailed(void)
+{
+    if (!s_scan_active) return 0U;
+    return s_default.result == VISION_RESULT_TIMEOUT ||
+           s_default.result == VISION_RESULT_ERROR;
 }
 
 void RaceVision_EndScan(void)

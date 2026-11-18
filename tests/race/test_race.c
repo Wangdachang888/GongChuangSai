@@ -58,6 +58,12 @@ static void test_routes(void)
         assert(!Race_SubmitQr(&race, race.scan_session, "452+321+254+312"));
         while (race.action_index < 4U) {
             uint8_t previous = race.action_index;
+            if (race.actions[previous].scan_start != 0U) {
+                assert(!Race_SubmitQr(&race, race.scan_session,
+                                      "452+321+253+312"));
+                assert(Race_SubmitQr(&race, race.scan_session,
+                                     "452+321+254+312"));
+            }
             at_target(&race, &current);
             Race_Tick(&race, &current, now);
             assert(race.action_index == previous);
@@ -69,17 +75,9 @@ static void test_routes(void)
         assert(race.state == RACE_RUNNING);
         assert(race.scan_session != 0U);
         assert(!Race_SubmitQr(&race, race.scan_session + 1U, "452+321+254+312"));
-        assert(!Race_SubmitQr(&race, race.scan_session, "452+321+253+312"));
-        assert(Race_SubmitQr(&race, race.scan_session, "452+321+254+312"));
         assert(!Race_SubmitQr(&race, race.scan_session, "452+321+254+312"));
         assert(race.colors[1][0] == 2U && race.positions[0][0] == 3U);
         assert(race.action_index == 4U);
-        current.vx = 0.1f;
-        Race_Tick(&race, &current, now);
-        assert(race.state == RACE_RUNNING);
-        current.vx = 0.0f;
-        Race_Tick(&race, &current, now + 1U);
-        assert(race.action_index == 5U && race.state == RACE_RUNNING);
         while (race.action_index < 7U) {
             uint8_t previous = race.action_index;
             at_target(&race, &current);
@@ -89,10 +87,6 @@ static void test_routes(void)
             assert(race.action_index == previous + 1U);
             now += 2U;
         }
-        at_target(&race, &current);
-        Race_Tick(&race, &current, now + 2U);
-        now += race.actions[7].hold_ms;
-        Race_Tick(&race, &current, now + 2U);
         assert(race.state == RACE_DONE);
         assert(!Race_StartQrRoute(&race, &current, now + 2U));
         current.imu_valid = 0U;
@@ -105,7 +99,8 @@ static void test_motion_guards(void)
 {
     RaceFsm race;
     RaceFeedback current = stationary();
-    RaceAction action = {RACE_ACTION_MOVE, 1.0f, 0.0f, 0.0f, 1000U, 200U};
+    RaceAction action = {RACE_ACTION_MOVE, 1.0f, 0.0f, 0.0f,
+                         1000U, 200U, 0U};
     Race_Init(&race);
     assert(Race_RunActions(&race, &action, 1U, &current, 0U));
     at_target(&race, &current);
@@ -141,7 +136,8 @@ static void test_faults(void)
 {
     RaceFsm race;
     RaceFeedback current = stationary();
-    RaceAction action = {RACE_ACTION_SCAN, 0.0f, 0.0f, 0.0f, 1000U, 0U};
+    RaceAction action = {RACE_ACTION_SCAN, 0.0f, 0.0f, 0.0f,
+                         1000U, 0U, 0U};
     uint32_t start = 0xFFFFFF00U;
     Race_Init(&race);
     assert(Race_RunActions(&race, &action, 1U, &current, start));

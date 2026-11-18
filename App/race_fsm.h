@@ -42,6 +42,9 @@ typedef struct {
     float x, y, yaw;
     uint32_t timeout_ms;
     uint32_t hold_ms;
+    /* Start the QR job when this action is entered.  The action itself keeps
+     * its normal MOVE/TURN execution and is not replaced by a scan state. */
+    uint8_t scan_start;
 } RaceAction;
 
 typedef struct {
@@ -52,6 +55,7 @@ typedef struct {
     uint8_t action_count;
     uint8_t holding;
     uint8_t qr_valid;
+    uint8_t scan_active;
     uint32_t entered_ms;
     uint32_t hold_since_ms;
     uint32_t scan_session;

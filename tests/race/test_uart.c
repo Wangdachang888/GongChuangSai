@@ -76,6 +76,13 @@ int main(void)
     assert(!RaceVision_Poll(code));
     assert(RaceVision_BeginScan());
     HAL_UART_TxCpltCallback(&huart3);
+    s_now = VISION_ACK_TIMEOUT_MS + 1U;
+    assert(!RaceVision_Poll(code));
+    assert(RaceVision_ScanFailed());
+    RaceVision_EndScan();
+    s_now = 0U;
+    HAL_UART_TxCpltCallback(&huart3);
+    assert(RaceVision_Init());
     for (index = 0U; index < 260U; index++) receive("x");
     assert(!RaceVision_Healthy());
     assert(!RaceVision_Poll(code));

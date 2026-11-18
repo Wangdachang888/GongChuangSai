@@ -111,3 +111,11 @@
 原因：为迁移到另一个工程提供可直接接续的网页文件清单、构建方式、交互能力、ULog43 通道定义、运动学假设、限制和验证边界。
 验证：`node viewer/build.cjs` PASS；临时使用 `field_assets/logs/log0_kart.csv` 运行 `node viewer/test.cjs` PASS；`git diff --check` PASS。
 实机：NOT_RUN；本单元只新增迁移文档，没有修改固件或网页业务代码。
+
+## OpenMV 边走边扫二维码（2026-11-18）
+
+提交：本轮待提交，提交后不在长期文档中自引用当前 SHA
+范围：`App/app_race.c`、`App/race_fsm.c/.h`、`Hardware/vision.c/.h`、相关 race 主机测试
+原因：让二维码搜索任务在路线 `MOVE` 期间异步运行，保持里程计导航连续，并补充扫描失败向 App 的安全故障传递。
+验证：`tests/race/run.ps1` PASS；`tests/ulog/run.ps1` PASS；UV4/ArmCC 完整构建 PASS（0 Error、0 Warning）；Keil 工程引用、USART3 回调唯一性、USART2/TIM6 未改和 `git diff --check` 检查通过。
+实机：NOT_RUN；二维码搜索段几何和摄像头安装参数 NEED_CONFIRMATION，OpenMV 通信与底盘运动仍需实机验收。
