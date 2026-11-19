@@ -88,6 +88,15 @@
 实机：<NOT_RUN / 已完成的具体硬件验证>
 ```
 
+## PID Burst 独立分析（2026-11-20）
+
+提交：本轮待提交，提交后不在长期文档中自引用当前 SHA
+范围：`tools/bt10_ble_receiver.py`、`tools/BT10_BLE_RECEIVER.md`、`viewer/index.html`、`viewer/viewer.js`、`viewer/viewer.css`、`viewer/test.cjs` 及生成的 v3/v4 页面
+原因：为停车后上传的高频电机内环数据提供独立接收、保存和分析路径，避免把高频样本混入 20 Hz ULog43 任务日志。
+内容：接收 `#BTLOG,PID_BEGIN/PID/PID_END`，保存同名 `.pid.csv`；网页 PID 页面支持四轮目标/实际/输出字段，计算 IAE、ISE、峰值超调、稳定时间、尾段稳态误差和输出饱和占比，并生成有边界的人工候选参数。候选不会自动下发车辆。
+验证：`node --check viewer/viewer.js`、`node viewer/build.cjs`、`node viewer/test.cjs`、`python -m py_compile tools/bt10_ble_receiver.py`、接收器 `--help`、`git diff --check`：`PASS`。
+固件/实机：STM32 高频环形缓存和停车后 BT10 分批上传尚未接入正式固件；230400 吞吐、BLE 连接稳定性、缓存容量和实车验证：`NOT_RUN`。
+
 ## App 阶段：比赛业务模块物理迁移（2026-11-18）
 
 提交：本轮待提交，提交后不在长期文档中自引用当前 SHA

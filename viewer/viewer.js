@@ -21,7 +21,7 @@ var S = {rows:[],times:[],samples:[],points:[],cur:0,tab:'transport',medianDt:.0
   alignment:{x:2.25,y:.15,angle:180},visible:{center:true,fl:true,fr:true,rl:true,rr:true},
   map:{x:1.2,y:1.2,spanX:2.6,spanY:2.6,zoom:1,scale:1,w:0,h:0},
   wave:{start:0,end:1,gain:1,mode:'body',w:0,h:0},
-  pid:[],segments:[],selectedSegment:null,quality:null,tolerances:{lateral:.03,yaw:3,omega:10},
+  pid:[],pidBurst:null,segments:[],selectedSegment:null,quality:null,tolerances:{lateral:.03,yaw:3,omega:10},
   playback:{running:false,rate:1,anchorMs:0,anchorTime:0,request:null,lastPaint:0}};
 const finite = Number.isFinite;
 const clamp = (x,a,b) => Math.max(a,Math.min(b,x));
@@ -73,6 +73,71 @@ function parse(text) {
   if(!rows.length)throw new Error('没有找到 43 列数值日志。请导入本项目 ULog43 CSV；不要直接导入旧 26 列格式。');
   return {rows,skipped,comments,headers,bad,source,header,totalLines:lines.length};
 }
+// PID Burst is deliberately separate from ULog43: it is a high-rate, named-column
+// export used after the vehicle has stopped. It never enters S.rows or the task view.
+function normalizeBurstName(name) {
+  return String(name || '').toLowerCase().replace(/\uFEFF/g,'').replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'');
+}
+function parsePidBurstCsv(text) {
+  const lines=String(text||'').replace(/^\uFEFF/,'').split(/\r?\n/),comments=[],rows=[];let header=null,skipped=0;
+  for(const raw of lines){let line=raw.trim();if(!line)continue;
+    if(line.startsWith('#BTLOG,PID_BEGIN,')){header=line.split(',').slice(2).map(x=>x.trim());continue;}
+    if(line==='#BTLOG,PID_END'||line.startsWith('#BTLOG,PID_END,')){comments.push(line);continue;}
+    if(line.startsWith('#BTLOG,PID,'))line=line.slice('#BTLOG,PID,'.length);
+    else if(line[0]==='#'||line.startsWith('//')){comments.push(line);continue;}
+    const parts=line.split(',').map(x=>x.trim());
+    if(!header){if(parts.some(x=>/[a-zA-Z_]/.test(x))){header=parts;continue;}skipped++;continue;}
+    const row=header.map((_,i)=>{const x=parts[i]||'';return !x||/^(nan|null)$/i.test(x)?NaN:Number(x);});
+    if(row.some(finite))rows.push(row);else skipped++;
+  }
+  if(!header)throw new Error('PID Burst CSV 必须包含字段名表头。');
+  if(!rows.length)throw new Error('PID Burst CSV 没有有效数值行。');
+  const names=header.map(normalizeBurstName),find=aliases=>{for(const alias of aliases){const i=names.indexOf(normalizeBurstName(alias));if(i>=0)return i;}return null;};
+  const fields={time:find(['timestamp_ms','time_ms','timestamp','t_ms','time','t'])};
+  for(const w of WHEELS){
+    fields[w+'_target']=find([`${w}_target`,`${w}_setpoint`,`${w}_reference`,`${w}_ref`,`target_${w}`,`${w}_commanded`]);
+    fields[w+'_actual']=find([`${w}_actual`,`${w}_measured`,`${w}_speed`,`${w}_feedback`,`${w}_measurement`,`actual_${w}`]);
+    fields[w+'_output']=find([`${w}_output`,`${w}_control`,`${w}_cmd`,`${w}_command`,`${w}_pwm`,`${w}_u`]);
+    fields[w+'_error']=find([`${w}_error`,`${w}_err`,`error_${w}`]);
+  }
+  fields.vin=find(['vin','battery_v','voltage','bus_voltage']);fields.flags=find(['flags','status','state']);
+  if(!WHEELS.some(w=>fields[w+'_target']!==null&&fields[w+'_actual']!==null))throw new Error('PID Burst CSV 至少需要一组 *_target 和 *_actual 字段。');
+  return {header,names,rows,fields,comments,skipped,totalLines:lines.length};
+}
+function burstNumber(row,i){return Number.isInteger(i)&&finite(row?.[i])?row[i]:NaN;}
+function analyzePidBurst(data,options={}) {
+  const rate=clamp(Number(options.rate)||100,1,2000),defaultDt=1/rate,times=[];let previous=NaN;
+  data.rows.forEach((row,i)=>{const raw=burstNumber(row,data.fields.time);let t=finite(raw)?raw/1000:i*defaultDt;if(i&&(!finite(raw)||t<=previous))t=previous+defaultDt;times.push(t);previous=t;});
+  const dtAt=i=>i?Math.max(0,times[i]-times[i-1]):0, tol=clamp(Number(options.tolerance)||.02,.001,.5),satLimit=Math.max(0,Number(options.satLimit)||0);
+  const wheels={};
+  for(const w of WHEELS){const ti=data.fields[w+'_target'],ai=data.fields[w+'_actual'],oi=data.fields[w+'_output'],ei=data.fields[w+'_error'];let n=0,iae=0,ise=0,maxAbs=0,maxExcess=0,maxTarget=0,saturated=0,outputCount=0,lastTransition=0,steadyErr=0;
+    const samples=data.rows.map((row,i)=>{const target=burstNumber(row,ti),actual=burstNumber(row,ai),error=finite(burstNumber(row,ei))?burstNumber(row,ei):(finite(target)&&finite(actual)?target-actual:NaN),output=burstNumber(row,oi);if(finite(target))maxTarget=Math.max(maxTarget,Math.abs(target));return {t:times[i],target,actual,error,output};});
+    for(let i=0;i<samples.length;i++){const s=samples[i],dt=dtAt(i);if(finite(s.error)){n++;iae+=Math.abs(s.error)*dt;ise+=s.error*s.error*dt;maxAbs=Math.max(maxAbs,Math.abs(s.error));if(finite(s.target)&&Math.abs(s.target)>1e-9&&finite(s.actual))maxExcess=Math.max(maxExcess,(s.actual-s.target)*(s.target>=0?1:-1));if(finite(s.output)){outputCount++;if(satLimit>0&&Math.abs(s.output)>=satLimit)saturated++;}if(i&&finite(samples[i-1].target)&&finite(s.target)&&Math.abs(s.target-samples[i-1].target)>Math.max(maxTarget*.05,1e-9))lastTransition=i;}}
+    const toleranceAbs=Math.max(maxTarget*tol,1e-9),hold=Math.max(.1,(times.length>1?times[1]-times[0]:defaultDt)*3);let settlingTime=NaN;
+    if(n&&maxTarget>0){for(let i=lastTransition;i<samples.length;i++){if(!finite(samples[i].error))continue;let end=i;while(end+1<samples.length&&times[end+1]-times[i]<hold)end++;if(times[end]-times[i]<hold)continue;let stable=true;for(let j=i;j<=end;j++)if(!finite(samples[j].error)||Math.abs(samples[j].error)>toleranceAbs){stable=false;break;}if(stable){settlingTime=times[i]-times[lastTransition];break;}}}
+    const tailStart=Math.max(lastTransition,Math.floor(samples.length*.9));let tailN=0;for(let i=tailStart;i<samples.length;i++)if(finite(samples[i].error)){steadyErr+=Math.abs(samples[i].error);tailN++;}
+    wheels[w]={samples,n,iae,ise,maxAbsError:maxAbs,overshoot:maxExcess,overshootPct:maxTarget?maxExcess/maxTarget*100:NaN,settlingTime,steadyError:tailN?steadyErr/tailN:NaN,saturationRatio:outputCount?saturated/outputCount:NaN,maxTarget,hasTarget:ti!==null,hasActual:ai!==null,hasOutput:oi!==null};
+  }
+  return {times,wheels,rate,tolerance:tol,satLimit,rows:data.rows.length};
+}
+function boundedPid(value,min,max){return clamp(Number.isFinite(value)?value:min,min,max);}
+function buildPidCandidates(analysis,base={}) {
+  const kp=Math.max(0,Number(base.kp)||0),ki=Math.max(0,Number(base.ki)||0),kd=Math.max(0,Number(base.kd)||0),metrics=WHEELS.map(w=>analysis.wheels[w]).filter(m=>m.n),mean=(key)=>{const a=metrics.map(m=>m[key]).filter(finite);return a.length?a.reduce((x,y)=>x+y,0)/a.length:NaN;};
+  const overshoot=mean('overshootPct'),settling=mean('settlingTime'),sat=mean('saturationRatio'),steady=mean('steadyError'),scale=Math.max(mean('maxTarget')||0,1e-9),steadyRatio=finite(steady)?steady/scale:NaN;
+  const limit=(p)=>({kp:boundedPid(p.kp,.05,10),ki:boundedPid(p.ki,0,8),kd:boundedPid(p.kd,0,3)});
+  const candidates=[{name:'保守阻尼',...limit({kp:kp*.8,ki:ki*.75,kd:Math.max(kd*.9,kd+.05)}),reason:finite(overshoot)&&overshoot>8?'检测到明显超调，降低比例/积分并增加微分阻尼。':'先降低增益作为安全基线，适合首次试车。'},
+    {name:'提高响应',...limit({kp:kp*1.15,ki:ki*1.05,kd:kd}),reason:finite(settling)&&settling>.5&&(!finite(sat)||sat<.1)?'稳定时间偏长且饱和较少，可小幅提高响应。':'仅在输出未频繁饱和时尝试。'},
+    {name:'减小稳态误差',...limit({kp:kp,ki:ki*1.2,kd:kd}),reason:finite(steadyRatio)&&steadyRatio>.02?'尾段稳态误差偏大，可小幅增加积分。':'仅在确认没有积分饱和时尝试。'}];
+  return {candidates,summary:{overshoot,settling,sat,steady,steadyRatio}};
+}
+function renderPidBurst() {
+  const box=$('pid-burst-metrics'),cand=$('pid-burst-candidates'),status=$('pid-burst-status');if(!box||!cand||!status)return;const state=S.pidBurst;
+  if(!state){status.textContent='尚未导入高频 PID CSV。';box.innerHTML='<div class="pid-burst-empty">请在停车后导入带字段名的 PID Burst CSV。</div>';cand.innerHTML='';return;}
+  const a=state.analysis;status.textContent=`已加载 ${state.name}：${a.rows} 帧，${fmt(a.times.at(-1),2)} s，默认 ${a.rate} Hz。${state.data.skipped?'跳过 '+state.data.skipped+' 行。':''}`;
+  box.innerHTML=WHEELS.map(w=>{const m=a.wheels[w];return `<div class="pid-burst-wheel"><h3 style="color:${COLORS[w]}">${NAMES[w]}</h3><table>${tableRows([['有效样本',m.n],['IAE',fmt(m.iae,4)],['ISE',fmt(m.ise,4)],['最大误差',fmt(m.maxAbsError,3)],['峰值超调',finite(m.overshootPct)?fmt(m.overshootPct,1)+' %':'未记录'],['稳定时间',finite(m.settlingTime)?fmt(m.settlingTime,3)+' s':'未达到'],['尾段稳态误差',fmt(m.steadyError,3)],['输出饱和占比',finite(m.saturationRatio)?fmt(m.saturationRatio*100,1)+' %':'未记录']])}</table></div>`;}).join('');
+  const base={kp:Number($('pid-burst-kp').value),ki:Number($('pid-burst-ki').value),kd:Number($('pid-burst-kd').value)},result=buildPidCandidates(a,base);cand.innerHTML='<h3>候选参数（人工验证）</h3>'+result.candidates.map(c=>`<div class="pid-candidate"><h3>${c.name}</h3><strong>Kp ${fmt(c.kp,3)} · Ki ${fmt(c.ki,3)} · Kd ${fmt(c.kd,3)}</strong><small>${c.reason}</small></div>`).join('');
+}
+function loadPidBurst(text,name='pid_burst.csv') {const data=parsePidBurstCsv(text),rate=Number($('pid-burst-rate')?.value)||100,sat=Number($('pid-burst-sat')?.value)||0,tol=Number($('pid-burst-tol')?.value)||.02;S.pidBurst={data,name,analysis:analyzePidBurst(data,{rate,satLimit:sat,tolerance:tol})};renderPidBurst();notify(`已加载独立 PID Burst：${name}。它不会改变 ULog43 任务日志。`);}
 function namedChannels(header) {
   const out={...DEFAULT_CHANNELS},norm=s=>String(s||'').toLowerCase().replace(/[\s()\[\]°/.-]+/g,'_');
   const aliases={time:['time','timestamp','time_ms','ms'],phase:['phase','state_phase'],x:['x','x_pos','position_x'],y:['y','y_pos','position_y'],yaw:['yaw','theta','heading'],imu:['imu_yaw'],xt:['x_target','target_x'],yt:['y_target','target_y'],yawt:['yaw_target','theta_target'],vx:['vx','vx_actual'],vy:['vy','vy_actual'],wt:['omega_target','w_target','wz_target'],wa:['omega_actual','w_actual','wz_actual'],speedTarget:['speed_target','v_target'],lateral:['lateral_error','elat'],yawError:['yaw_error','heading_error'],flt:['fl_target','wheel_fl_target'],fla:['fl_actual','wheel_fl_speed','wheel_fl_actual'],frt:['fr_target','wheel_fr_target'],fra:['fr_actual','wheel_fr_speed','wheel_fr_actual'],rlt:['rl_target','wheel_rl_target'],rla:['rl_actual','wheel_rl_speed','wheel_rl_actual'],rrt:['rr_target','wheel_rr_target'],rra:['rr_actual','wheel_rr_speed','wheel_rr_actual']};
@@ -597,7 +662,7 @@ function setWaveMinimized(minimized) {
   requestAnimationFrame(()=>{drawPath();drawStrip();});
 }
 function init() {
-  showConfig();rebuild();
+  showConfig();rebuild();renderPidBurst();
   document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>activateTab(b.dataset.tab));
   $('ws-connect').onclick=connectRealtime;
   $('bt-connect').onclick=connectBt10;
@@ -634,6 +699,10 @@ function init() {
   $('wave-apply').onclick=()=>{const a=Number($('wave-start').value),b=Number($('wave-end').value);if(!finite(a)||!finite(b)||b<=a){notify('时间窗口的终点必须大于起点。',true);return;}setWindow(a,b);};
   $('apply-tolerance').onclick=()=>{const next={lateral:Number($('tol-lateral').value),yaw:Number($('tol-yaw').value),omega:Number($('tol-omega').value)};if(!Object.values(next).every(v=>finite(v)&&v>0)){notify('参考值必须大于 0。',true);return;}S.tolerances=next;drawStability();drawStrip();};
   $('pid-axis').onchange=()=>{calculatePid();drawPid();};$('pid-apply').onclick=()=>{calculatePid();drawPid();};
+  $('pid-burst-file').onchange=async e=>{const file=e.target.files[0];if(file){try{loadPidBurst(await file.text(),file.name);}catch(err){notify('PID Burst 导入失败：'+err.message,true);}e.target.value='';}};
+  $('pid-burst-analyze').onclick=()=>{if(!S.pidBurst){notify('请先导入 PID Burst CSV。',true);return;}try{const data=S.pidBurst.data;S.pidBurst.analysis=analyzePidBurst(data,{rate:Number($('pid-burst-rate').value),satLimit:Number($('pid-burst-sat').value),tolerance:Number($('pid-burst-tol').value)});renderPidBurst();}catch(err){notify('PID Burst 分析失败：'+err.message,true);}};
+  $('pid-burst-clear').onclick=()=>{S.pidBurst=null;renderPidBurst();};
+  for(const id of ['pid-burst-rate','pid-burst-sat','pid-burst-tol','pid-burst-kp','pid-burst-ki','pid-burst-kd'])$(id).onchange=()=>{if(S.pidBurst&&id!=='pid-burst-kp'&&id!=='pid-burst-ki'&&id!=='pid-burst-kd'){$('pid-burst-analyze').click();}else if(S.pidBurst)renderPidBurst();};
   bindGestures('path','map');bindGestures('strip','wave');
   window.addEventListener('resize',()=>{drawPath();drawStrip();drawDirection(S.samples[S.cur]);});
   if(typeof ResizeObserver!=='undefined'){const observer=new ResizeObserver(()=>{drawPath();drawStrip();});observer.observe($('wave-wrap'));observer.observe($('path').parentElement);}

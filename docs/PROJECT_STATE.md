@@ -63,6 +63,7 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 | PC7 转盘舵机 | 代码保留 | 目标硬件动作未验收 |
 | D36/步进调试模式 | 代码保留 | 需与比赛模式资源隔离，实机未验收 |
 | ULog | 主机测试通过 | SD 卡路径、容量和持续写入未实机验收 |
+| PID Burst 接收与网页分析 | 主机测试通过 | 独立 PID CSV、四轮指标和有边界候选已实现；固件高频缓存、BT10 吞吐和实车上传仍未验证 |
 
 ## 6. 当前默认配置
 
@@ -104,6 +105,7 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 - GCC `-std=c99 -Wall -Wextra -Werror`：随上述脚本通过。
 - Keil/Arm 固件编译：`PASS`，ArmCC V5.06 update 5 (build 528)，`0 Error(s), 0 Warning(s)`。
 - 真实烧录、OpenMV、底盘、圆环、夹取、舵机、步进和 SD 卡：`NOT_RUN`。
+- PID Burst 网页解析/指标/候选、BT10 接收器语法与临时保存测试：`PASS`；STM32 高频缓存发送接口、230400 BT10 吞吐和停车后分批上传：`NOT_RUN`。
 
 ## 11. 给下一位 AI 的交接
 

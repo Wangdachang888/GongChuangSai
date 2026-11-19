@@ -10,6 +10,19 @@ python -m pip install bleak websockets
 python tools/bt10_ble_receiver.py BT10 -o bt10_logs\run01.csv --no-console --websocket
 ```
 
+若固件同时发送独立 PID Burst（以 `#BTLOG,PID_BEGIN` 开始、`#BTLOG,PID,`
+逐行发送、`#BTLOG,PID_END` 结束），可加 `--pid-burst`：
+
+```powershell
+python tools/bt10_ble_receiver.py BT10 -o bt10_logs\run01.csv --pid-burst --no-console --websocket
+```
+
+它会把 PID Burst 保存为同目录的 `run01.pid.csv`，主日志仍原样保存为
+ULog43 CSV。`PID_BEGIN` 后的字段名应使用网页支持的带字段名格式，例如
+`timestamp_ms,fl_target,fl_actual,fl_output,...`；也接受 `#BTLOG,PID,{...}`
+JSON 行并按首个对象的键生成表头。PID 文件在 `PID_END` 或蓝牙断开时执行
+flush/fsync/close；不启用 `--pid-burst` 时这些行仍会原样保存在主日志中。
+
 `BT10` 可以替换为 Windows 蓝牙设置中显示的设备名或地址。程序使用 WHEELTEC
 BT10 的 FFE0 服务、FFE1 通知特征和 FFE2 写入特征。收到
 `#BTLOG,END`（也兼容带附加字段的 `#BTLOG,END,...`）后执行 flush、fsync 并关闭文件；蓝牙断开时也会保存已收到的

@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import csv
 from datetime import datetime
+import json
 import os
 from pathlib import Path
 import sys
@@ -39,15 +41,22 @@ WRITE_UUID = "0000ffe2-0000-1000-8000-00805f9b34fb"
 class LogReceiver:
     """Line assembler and durable CSV writer, independent of BLE transport."""
 
-    def __init__(self, output: Path, on_line: Optional[Callable[[str], None]] = None) -> None:
+    def __init__(self, output: Path, on_line: Optional[Callable[[str], None]] = None,
+                 pid_output: Optional[Path] = None) -> None:
         self.output = output
         self.on_line = on_line
+        self.pid_output = pid_output
         self._file = None
+        self._pid_file = None
+        self._pid_header_written = False
+        self._pid_header_fields: list[str] = []
         self._pending = bytearray()
         self.state = "UNKNOWN"
         self.lines = 0
         self.dropped = 0
         self.closed_by_end = False
+        self.pid_lines = 0
+        self.pid_closed_by_end = False
 
     def _open(self) -> None:
         if self._file is None:
@@ -78,10 +87,78 @@ class LogReceiver:
             return
         if self.on_line is not None:
             self.on_line(line + "\n")
+        self._handle_pid_line(line)
         if line.startswith("#BTLOG,STATE,"):
             self.state = line.split(",", 2)[2].strip().upper()
         elif line == "#BTLOG,END" or line.startswith("#BTLOG,END,"):
             self.close_durable()
+
+    def _open_pid(self) -> None:
+        if self._pid_file is not None or self.pid_output is None:
+            return
+        self.pid_output.parent.mkdir(parents=True, exist_ok=True)
+        self._pid_file = self.pid_output.open("w", encoding="utf-8", newline="")
+
+    def _write_pid_header(self, fields: list[str]) -> None:
+        if self._pid_header_written or self.pid_output is None:
+            return
+        self._open_pid()
+        if self._pid_file is None:
+            return
+        # Use csv.writer so a future field containing a comma remains valid CSV.
+        csv.writer(self._pid_file, lineterminator="\n").writerow(fields)
+        self._pid_header_written = True
+        self._pid_header_fields = list(fields)
+
+    def _handle_pid_line(self, line: str) -> None:
+        """Decode the optional independent PID burst stream.
+
+        Protocol is deliberately additive: normal ULog43 rows are untouched.
+        ``#BTLOG,PID_BEGIN,<field names...>`` starts a CSV file,
+        ``#BTLOG,PID,<CSV row>`` appends one sample, and
+        ``#BTLOG,PID_END`` fsyncs and closes it.  A JSON object payload is also
+        accepted and written as a named CSV row for forward compatibility.
+        """
+        if self.pid_output is None or not line.startswith("#BTLOG,PID"):
+            return
+        if line == "#BTLOG,PID_END" or line.startswith("#BTLOG,PID_END,"):
+            if self._pid_file is not None:
+                self._pid_file.flush()
+                os.fsync(self._pid_file.fileno())
+                self._pid_file.close()
+                self._pid_file = None
+            self.pid_closed_by_end = True
+            return
+        if line.startswith("#BTLOG,PID_BEGIN"):
+            self.pid_closed_by_end = False
+            self._pid_header_written = False
+            self._pid_header_fields = []
+            fields = line.split(",")[2:]
+            if fields:
+                self._write_pid_header(fields)
+            return
+        if not line.startswith("#BTLOG,PID,") or self.pid_closed_by_end:
+            return
+        payload = line[len("#BTLOG,PID,"):]
+        self._open_pid()
+        if self._pid_file is None:
+            return
+        if payload.lstrip().startswith("{"):
+            try:
+                obj = json.loads(payload)
+            except json.JSONDecodeError:
+                obj = None
+            if isinstance(obj, dict):
+                if not self._pid_header_written:
+                    keys = list(obj.keys())
+                    self._write_pid_header(keys)
+                fields = [obj.get(k, "") for k in (self._pid_header_fields or [])]
+                csv.writer(self._pid_file, lineterminator="\n").writerow(fields)
+            else:
+                self._pid_file.write(payload + "\n")
+        else:
+            self._pid_file.write(payload + "\n")
+        self.pid_lines += 1
 
     def close_durable(self) -> None:
         if self._file is None:
@@ -98,6 +175,11 @@ class LogReceiver:
             self.handle_line(bytes(self._pending))
             self._pending.clear()
         self.close_durable()
+        if self._pid_file is not None:
+            self._pid_file.flush()
+            os.fsync(self._pid_file.fileno())
+            self._pid_file.close()
+            self._pid_file = None
 
 
 def default_output() -> Path:
@@ -167,7 +249,10 @@ async def run(args: argparse.Namespace) -> int:
     if websocket is not None:
         await websocket.start()
     on_line = (lambda line: asyncio.create_task(websocket.broadcast(line))) if websocket else None
-    receiver = LogReceiver(Path(args.output), on_line=on_line)
+    pid_output = args.pid_output
+    if pid_output is None and args.pid_burst:
+        pid_output = Path(args.output).with_suffix(".pid.csv")
+    receiver = LogReceiver(Path(args.output), on_line=on_line, pid_output=pid_output)
 
     def on_notification(_characteristic, data: bytearray) -> None:
         receiver.feed(bytes(data))
@@ -176,6 +261,8 @@ async def run(args: argparse.Namespace) -> int:
         async with BleakClient(device) as client:
             await client.start_notify(NOTIFY_UUID, on_notification)
             print(f"已连接 {device.name or device.address}，日志保存到 {receiver.output}")
+            if receiver.pid_output is not None:
+                print(f"PID Burst 独立文件：{receiver.pid_output}")
             if args.command:
                 await send_command(client, args.command, receiver)
             if args.no_console:
@@ -216,6 +303,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--command", help="连接后发送一次命令")
     parser.add_argument("--no-console", action="store_true", help="不启动交互命令行，仅接收日志")
     parser.add_argument("--websocket", action="store_true", help="将每行日志广播到本机 WebSocket")
+    parser.add_argument("--pid-burst", action="store_true",
+                        help="保存 #BTLOG,PID_BEGIN/PID/PID_END 到独立 .pid.csv 文件")
+    parser.add_argument("--pid-output", type=Path,
+                        help="PID Burst 独立 CSV 路径（默认与 --output 同目录同名 .pid.csv）")
     parser.add_argument("--ws-host", default="127.0.0.1", help="WebSocket 监听地址")
     parser.add_argument("--ws-port", type=int, default=8765, help="WebSocket 监听端口")
     return parser
