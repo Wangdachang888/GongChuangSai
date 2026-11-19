@@ -127,6 +127,25 @@ function load(text,name='日志.csv') {
 // Optional live input from the Windows BT10 collector. The collector forwards
 // newline-delimited #BTLOG metadata and ULog43 CSV rows over a local WebSocket.
 const realtime={socket:null,buffer:'',pending:[],flushRequest:0,ended:false};
+const bt10={device:null,characteristic:null,decoder:null,raw:'',ended:false};
+const BT10_SERVICE='0000ffe0-0000-1000-8000-00805f9b34fb';
+const BT10_NOTIFY='0000ffe1-0000-1000-8000-00805f9b34fb';
+function btStatus(text,kind=''){ $('bt-connect').textContent=kind==='connected'?'断开 BT10':'直接连接 BT10'; $('ws-status').textContent=text; }
+function downloadBt10Log(){ if(!bt10.raw)return; const blob=new Blob([bt10.raw],{type:'text/csv;charset=utf-8'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='bt10_'+new Date().toISOString().replace(/[:.]/g,'-')+'.csv'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); }
+function bt10Notification(event){ const text=bt10.decoder.decode(event.target.value,{stream:true}); bt10.raw+=text; receiveRealtimeText(text); if(/(?:^|\r?\n)#BTLOG,END(?:,|\r?$)/m.test(bt10.raw)){ if(!bt10.ended){bt10.ended=true;downloadBt10Log();btStatus('BT10 日志已结束并已下载','connected');} } }
+async function connectBt10(){
+  if(bt10.device){ bt10.device.gatt?.disconnect(); bt10.device=null; bt10.characteristic=null; btStatus('未连接'); return; }
+  if(!navigator.bluetooth){ btStatus('当前浏览器不支持 Web Bluetooth','error'); return; }
+  try{
+    btStatus('选择 BT10…');
+    const device=await navigator.bluetooth.requestDevice({filters:[{services:[BT10_SERVICE]}],optionalServices:[BT10_SERVICE]});
+    const server=await device.gatt.connect(); const service=await server.getPrimaryService(BT10_SERVICE); const ch=await service.getCharacteristic(BT10_NOTIFY);
+    bt10.device=device; bt10.characteristic=ch; bt10.decoder=new TextDecoder(); bt10.raw=''; bt10.ended=false; resetRealtimeSession();
+    ch.addEventListener('characteristicvaluechanged',bt10Notification); await ch.startNotifications();
+    device.addEventListener('gattserverdisconnected',()=>{if(bt10.device===device){bt10.device=null;bt10.characteristic=null;btStatus('BT10 已断开','error');}});
+    btStatus('BT10 已连接，等待日志','connected'); notify('BT10 已连接，日志将实时显示并在 END 后自动下载。');
+  }catch(e){ bt10.device=null; btStatus('BT10 连接失败：'+e.message,'error'); }
+}
 function realtimeStatus(text,kind='') { const box=document.querySelector('.realtime-connect'); $('ws-status').textContent=text; box?.classList.toggle('connected',kind==='connected'); box?.classList.toggle('error',kind==='error'); }
 function resetRealtimeSession() {
   pausePlayback(); config.channels={...DEFAULT_CHANNELS}; S.rows=[]; S.name='BT10 实时日志'; S.cur=0;
@@ -519,6 +538,7 @@ function init() {
   showConfig();rebuild();
   document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>activateTab(b.dataset.tab));
   $('ws-connect').onclick=connectRealtime;
+  $('bt-connect').onclick=connectBt10;
   $('file').onchange=async e=>{const file=e.target.files[0];if(file){try{load(await file.text(),file.name);}catch(err){notify('文件读取失败：'+err.message,true);}e.target.value='';}};
   document.addEventListener('dragover',e=>e.preventDefault());document.addEventListener('drop',async e=>{e.preventDefault();const file=e.dataTransfer?.files[0];if(file){try{load(await file.text(),file.name);}catch(err){notify('文件读取失败：'+err.message,true);}}});
   $('slider').oninput=()=>go(Number($('slider').value));$('play-toggle').onclick=()=>S.playback.running?pausePlayback():startPlayback();$('play-restart').onclick=()=>startPlayback(true);
