@@ -289,7 +289,9 @@ void AppRace_Poll(void)
             s_chassis->body_frame = 0U;
             Mecanum_SetPositionMode(s_chassis, s_race.target_x, s_race.target_y, s_race.target_yaw);
         }
-        if (action->scan_leg != 0U)
+        if (action->scan_leg != 0U ||
+            (s_race.action_index + 1U < s_race.action_count &&
+             s_race.actions[s_race.action_index + 1U].scan_leg == 1U))
             Mecanum_SetSpeedLimit(s_chassis, RACE_QR_SCAN_SPEED_MPS, RACE_TURN_SPEED_RADPS);
         else
             Mecanum_SetSpeedLimit(s_chassis, RACE_MOVE_SPEED_MPS, RACE_TURN_SPEED_RADPS);
