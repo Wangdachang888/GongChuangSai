@@ -127,3 +127,10 @@
 原因：用 BT10 BLE GATT 替代 USART2 日志发送链路，Windows 保存 CSV，运行中只读并支持网页实时查看。
 验证：`tests/ulog/run.ps1` PASS；`tests/race/run.ps1` PASS；`node --check viewer/viewer.js` PASS；`node viewer/test.cjs` PASS（使用 `field_assets/logs/log0_kart.csv`）；Python `py_compile` 和 `--help` PASS；`git diff --check` PASS。
 实机：BT10 BLE 连接、GATT 特征、WebSocket 实时联调、烧录和整车流程验收 `NOT_RUN`；Keil 完整编译待执行。
+
+### 兼容性结论补充
+
+- BT10 继续发送 ULog43 数值行，既有网页解析、vx/vy、位移、轨迹、波形和 43 列 CSV 导入保持兼容；旧 ULog26 仍需转换，转换补零列不代表真实测量。
+- 与 TF 卡相比，BT10 是无线实时通道，文件保存发生在网页 IndexedDB 或 Windows 接收器的电脑硬盘，车辆脱离电脑/接收端后没有车载持久副本；BLE 断链期间的数据无法补回。
+- `#BTLOG,END` 只表示 BT10 接收端和网页会话结束，不等同于 TF 卡文件系统 close。旧 BT10 APP 控制协议、USART3 视觉协议、ULog43 日志格式彼此独立；当前不会把旧控制帧自动转换成日志行。
+- 以上为代码和主机测试结论，真实 BT10 长时间传输、断链恢复及整车结束时序仍为 `NOT_RUN`。
