@@ -35,7 +35,9 @@ assert(draws.some(d=>d.text==='启停 1'),'Field visible before import');assert(
 assert(document.body.classList.contains('transport-wave-mini'),'Preview is visible before any layout interaction');
 for(const [vx,vy,w] of [[.4,0,0],[-.4,0,0],[0,.3,0],[0,-.3,0],[0,0,1],[0,0,-1],[.2,-.3,.7]]){const a=env.actual(makeRow(0,vx,vy,w));near(a.vx,vx);near(a.vy,vy);near(a.omega,w);near(env.sample(makeRow(0,vx,vy,w)).targetSpeed,Math.hypot(vx,vy));}
 const rotating=makeRow(0,0,0,1);rotating[15]=0;near(env.actual(rotating).omega,1);near(env.sample(rotating).speed,0);
-const missing=makeRow(0,.4);missing[29]=NaN;assert(Number.isNaN(env.actual(missing).vx));assert(Number.isNaN(env.value(makeRow(0),'frt')));
+const missing=makeRow(0,.4);missing[29]=NaN;assert(Number.isNaN(env.actual(missing).vx));
+const mapped=makeRow(0,.4,.1,.2);mapped[35]=101;mapped[36]=102;mapped[37]=103;
+assert.equal(env.value(mapped,'flt'),mapped[27]);assert.equal(env.value(mapped,'frt'),101);assert.equal(env.value(mapped,'rlt'),102);assert.equal(env.value(mapped,'rrt'),103);
 const csv=fs.readFileSync('log0_kart.csv','utf8');env.load(csv,'log0_kart.csv');assert.equal(env.S.rows.length,2216);near(env.duration(),111.182);near(env.S.medianDt,.05);
 assert(el('notice').textContent.includes('角速度通道全为 0'));assert(env.S.samples.some(s=>Math.abs(s.vy)>.05));assert(env.S.samples.some(s=>Math.abs(s.omegaDeg)>10));
 const saved=env.S.rows;env.load('invalid','bad.csv');assert.equal(env.S.rows,saved);

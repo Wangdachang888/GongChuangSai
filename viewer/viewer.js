@@ -6,14 +6,16 @@ const COLORS = {center:'#67baff', fl:'#ff7c8d', fr:'#ffc86a', rl:'#c4a0ff', rr:'
 const NAMES = {fl:'FL 左前轮', fr:'FR 右前轮', rl:'RL 左后轮', rr:'RR 右后轮'};
 const DEG = 180 / Math.PI;
 const DEFAULT_CHANNELS = {
-  time:5, phase:1, x:32, y:33, yaw:16, imu:17, xt:21, yt:22, yawt:23,
-  vx:null, vy:null, wt:14, wa:15, speedTarget:19, lateral:39, yawError:42,
-  flt:27, fla:28, frt:null, fra:29, rlt:null, rla:30, rrt:null, rra:31,
+  mode:0, time:5, phase:1, x:32, y:33, yaw:16, imu:17, xt:21, yt:22, yawt:23,
+  vx:null, vy:null, vxTarget:12, vyTarget:13, wt:14, wa:15, speedTarget:19, lateral:39, yawError:42,
+  // ULog43 stores FL target at ch27 and the remaining wheel targets at ch35..37.
+  // Actual wheel speeds remain ch28..31 (FL/FR/RL/RR respectively).
+  flt:27, fla:28, frt:35, fra:29, rlt:36, rla:30, rrt:37, rra:31,
   flo:null, fro:null, rlo:null, rro:null, fle:null, fre:null, rle:null, rre:null
 };
 const CHANNEL_LABELS = {time:'时间戳 / ms',phase:'阶段',x:'位置 X / m',y:'位置 Y / m',yaw:'底盘航向 / °',imu:'IMU 航向 / °',xt:'目标 X / m',yt:'目标 Y / m',yawt:'目标航向 / °',vx:'直接 vx / m/s',vy:'直接 vy / m/s',wt:'目标 ω / rad/s',wa:'实测 ω / rad/s',speedTarget:'目标 |v| / 0.073632',lateral:'目标横向偏差 / m',yawError:'航向误差 / °'};
 for (const w of WHEELS) for (const [suffix,label] of Object.entries({t:'目标',a:'实测',o:'输出',e:'累计编码器'})) CHANNEL_LABELS[w+suffix] = `${NAMES[w]} ${label}`;
-const RAW_LABELS = {0:'底盘模式（0 速度 / 1 位置）',1:'阶段（0 等待 / 1 直行 / 2 转弯 / 4 完成）',2:'方形任务状态',3:'方形任务步骤',4:'到达目标标记',5:'时间戳 ms',8:'阶段副本',14:'目标角速度 rad/s',15:'实测角速度 rad/s（旧转换日志可能未填充）',16:'底盘航向 °',17:'IMU 航向 °',18:'目标角速度 °/s',19:'平移目标速度大小 / 0.073632（无方向）',20:'四轮绝对轮速均值 / 1750 / 0.073632（不是 vx）',21:'目标 X m',22:'目标 Y m',23:'目标航向 °',24:'世界坐标 X 误差 m',25:'世界坐标 Y 误差 m',26:'航向误差 °',27:'左前轮目标 pulse/s',28:'左前轮实测 pulse/s',29:'右前轮实测 pulse/s',30:'左后轮实测 pulse/s',31:'右后轮实测 pulse/s',32:'位置 X m',33:'位置 Y m',34:'累计路程 m',35:'左前轮实测副本 pulse/s',36:'右前轮实测副本 pulse/s',39:'目标位置在车体系的横向偏差 m',41:'目标角速度副本 rad/s',42:'航向误差副本 °'};
+const RAW_LABELS = {0:'底盘模式（0 速度 / 1 位置）',1:'阶段（0 等待 / 1 直行 / 2 转弯 / 4 完成）',2:'方形任务状态',3:'方形任务步骤',4:'到达目标标记',5:'时间戳 ms',8:'阶段副本',14:'目标角速度 rad/s',15:'实测角速度 rad/s（旧转换日志可能未填充）',16:'底盘航向 °',17:'IMU 航向 °',18:'目标角速度 °/s',19:'平移目标速度大小 / 0.073632（无方向）',20:'四轮绝对轮速均值 / 1750 / 0.073632（不是 vx）',21:'目标 X m',22:'目标 Y m',23:'目标航向 °',24:'世界坐标 X 误差 m',25:'世界坐标 Y 误差 m',26:'航向误差 °',27:'左前轮目标 pulse/s',28:'左前轮实测 pulse/s',29:'右前轮实测 pulse/s',30:'左后轮实测 pulse/s',31:'右后轮实测 pulse/s',32:'位置 X m',33:'位置 Y m',34:'累计路程 m',35:'右前轮目标 pulse/s',36:'左后轮目标 pulse/s',37:'右后轮目标 pulse/s',38:'四轮控制输出绝对值最大值',39:'目标位置在车体系的横向偏差 m',41:'目标角速度副本 rad/s',42:'航向误差副本 °'};
 var config = {radius:.04,ppr:440,wheelbase:.186,track:.22,dt:.05,omegaMode:'wheels',channels:{...DEFAULT_CHANNELS},metadata:{firmware:'',test:'',content:'',environment:'',battery:'',notes:''}};
 var S = {rows:[],times:[],samples:[],points:[],cur:0,tab:'transport',medianDt:.05,gaps:0,name:'',
   alignment:{x:2.25,y:.15,angle:180},visible:{center:true,fl:true,fr:true,rl:true,rr:true},
@@ -38,8 +40,15 @@ function actual(row,cfg=config) {
   return {vx:cfg.channels.vx===null?k.vx:value(row,'vx',cfg),vy:cfg.channels.vy===null?k.vy:value(row,'vy',cfg),
     omega:cfg.omegaMode==='logged'?value(row,'wa',cfg):k.omega,wheelOmega:k.omega,wheels};
 }
+function targetBody(row,cfg=config) {
+  const vx=value(row,'vxTarget',cfg),vy=value(row,'vyTarget',cfg),mode=value(row,'mode',cfg);
+  if(!finite(vx)||!finite(vy)) return {vx:NaN,vy:NaN};
+  /* Position mode logs world-frame targets; speed mode logs body-frame targets. */
+  if(mode===1){const yaw=value(row,'yaw',cfg)/DEG,c=Math.cos(yaw),s=Math.sin(yaw);return {vx:vx*c+vy*s,vy:-vx*s+vy*c};}
+  return {vx,vy};
+}
 function sample(row,cfg=config) {
-  const a=actual(row,cfg);return {...a,speed:Math.hypot(a.vx,a.vy),omegaDeg:a.omega*DEG,
+  const a=actual(row,cfg),t=targetBody(row,cfg);return {...a,targetVx:t.vx,targetVy:t.vy,speed:Math.hypot(a.vx,a.vy),omegaDeg:a.omega*DEG,
     targetOmega:value(row,'wt',cfg)*DEG,targetSpeed:value(row,'speedTarget',cfg)*.073632,
     lateral:value(row,'lateral',cfg),yawError:value(row,'yawError',cfg),
     omegaError:(value(row,'wt',cfg)-a.omega)*DEG};
@@ -338,8 +347,8 @@ function waveDefinitions() {
     {name:'目标横向偏差',unit:'m',color:'#50dfae',get:a=>a.lateral,threshold:S.tolerances.lateral},
     {name:'航向误差',unit:'°',color:'#ffc86a',get:a=>a.yawError,threshold:S.tolerances.yaw},
     {name:'角速度误差',unit:'°/s',color:'#c4a0ff',get:a=>a.omegaError,threshold:S.tolerances.omega}];
-  return [{name:'纵向 vx',unit:'m/s',color:'#67baff',get:a=>a.vx},
-    {name:'横向 vy',unit:'m/s',color:'#50dfae',get:a=>a.vy},
+  return [{name:'纵向 vx',unit:'m/s',color:'#67baff',get:a=>a.vx,target:a=>a.targetVx},
+    {name:'横向 vy',unit:'m/s',color:'#50dfae',get:a=>a.vy,target:a=>a.targetVy},
     {name:'角速度 ω',unit:'°/s',color:'#c4a0ff',get:a=>a.omegaDeg,target:a=>a.targetOmega},
     {name:'平移 |v|',unit:'m/s',color:'#ffc86a',get:a=>a.speed,target:a=>a.targetSpeed}];
 }
@@ -453,7 +462,7 @@ function drawMotors() {
   $('motor-cards').innerHTML=WHEELS.map(w=>{
     const act=value(row,w+'a'),target=value(row,w+'t'),v=act*pulseToMeter(),pct=finite(v)?v/max*50:0;
     const read=(key,unit)=>finite(value(row,key))?fmt(value(row,key),1)+' '+unit:'未记录';
-    return `<div class="motor-item"><h3 style="color:${COLORS[w]}">${NAMES[w]}</h3><div class="wheel-speed" style="color:${COLORS[w]}">${signed(v)}</div><small>轮缘线速度 m/s</small><div class="wheel-bar"><i style="left:${pct<0?50+pct:50}%;width:${Math.abs(pct)}%;background:${COLORS[w]}"></i></div><table>${tableRows([['实测',read(w+'a','pulse/s')],['目标',read(w+'t','pulse/s')],['目标 − 实测',finite(target-act)?fmt(target-act,1)+' pulse/s':'未记录'],['控制输出',read(w+'o','原始单位')],['编码器计数',read(w+'e','pulse')]])}</table></div>`;
+    return `<div class="motor-item"><h3 style="color:${COLORS[w]}">${NAMES[w]}</h3><div class="wheel-speed" style="color:${COLORS[w]}">${signed(v)}</div><small>轮缘线速度 m/s（由 pulse/s 换算）</small><div class="wheel-bar"><i style="left:${pct<0?50+pct:50}%;width:${Math.abs(pct)}%;background:${COLORS[w]}"></i></div><table>${tableRows([['实测',read(w+'a','pulse/s')],['目标',read(w+'t','pulse/s')],['目标 − 实测',finite(target-act)?fmt(target-act,1)+' pulse/s':'未记录'],['控制输出',read(w+'o','原始单位')],['编码器计数',read(w+'e','pulse')]])}</table></div>`;
   }).join('');
   $('motor-health').innerHTML='<table>'+tableRows([['vx / vy',`${fmt(a?.vx)} / ${fmt(a?.vy)} m/s`],['四轮估计 ω',fmt(a?.wheelOmega*DEG,2)+' °/s'],['记录 ω − 四轮估计 ω',fmt((value(row,'wa')-a?.wheelOmega)*DEG,2)+' °/s'],['解释','两种 ω 有明显差异时，先检查旧转换占位、单位、轮序及几何参数']])+'</table>';
 }
@@ -616,7 +625,7 @@ function init() {
   $('align').onclick=()=>{const x=Number($('origin-x').value),y=Number($('origin-y').value),angle=Number($('origin-angle').value);if(![x,y,angle].every(finite)){notify('配准参数必须是有限数值。',true);return;}S.alignment={x,y,angle};rebuild();fitMap();render();};
   $('apply-config').onclick=()=>applyConfig();$('reset-config').onclick=()=>applyConfig(true);
   $('save-config').onclick=saveAnalysisConfig;$('load-config').onclick=loadAnalysisConfig;
-  $('wave-mode').onchange=()=>{S.wave.mode=$('wave-mode').value;S.wave.gain=1;updateWindow();drawStrip();$('wave-note').textContent=S.wave.mode==='body'?'vx / vy 没有独立目标通道；|v| 目标只表示平移速度大小，不能当作 vx 目标。':S.wave.mode==='wheels'?'四轮实测使用同一时间轴；当前只有左前轮目标已记录。各轨道纵轴自动定标，请对照数值比较。':'误差为目标减实测；横向偏差是目标位置投影，不等同于到规划轨迹的最短距离。虚线为自设参考值。';};
+  $('wave-mode').onchange=()=>{S.wave.mode=$('wave-mode').value;S.wave.gain=1;updateWindow();drawStrip();$('wave-note').textContent=S.wave.mode==='body'?'vx / vy 目标已按 ch0 模式与航向换算到车体系；位置模式 ch12/ch13 原始值为世界系。':S.wave.mode==='wheels'?'四轮目标与实测均已记录（目标 ch27、ch35～37；实测 ch28～31），共用同一时间轴。各轨道纵轴自动定标，请对照数值比较。':'误差为目标减实测；横向偏差是目标位置投影，不等同于到规划轨迹的最短距离。虚线为自设参考值。';};
   $('wave-full').onclick=()=>{$('wave-window').value='all';setWindow(0,duration()||config.dt);};
   $('wave-window').onchange=()=>{const raw=$('wave-window').value;if(raw==='all')setWindow(0,duration()||config.dt);else{const span=Number(raw),t=S.times[S.cur]||0;setWindow(t-span*.2,t+span*.8);}};
   $('wave-x-in').onclick=()=>zoomWave(2);$('wave-x-out').onclick=()=>zoomWave(.5);
