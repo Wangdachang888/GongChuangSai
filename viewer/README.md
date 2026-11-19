@@ -85,7 +85,7 @@ node test_viewer_render.cjs
 
 ### BT10 实时日志（可选）
 
-在 Chrome/Edge 的安全页面中也可以点击“直接连接 BT10”，网页会通过 Web Bluetooth 连接 FFE0/FFE1，实时显示日志，并在收到 `#BTLOG,END` 后自动下载 CSV。若浏览器禁止从 `file://` 页面使用蓝牙，请在工程根目录执行 `python -m http.server 8000`，再打开 `http://127.0.0.1:8000/kart_log_view_mecanum_v4.html`。
+在 Chrome/Edge 的安全页面中也可以点击“直接连接 BT10”，网页会通过 Web Bluetooth 连接 FFE0/FFE1，实时显示日志，并在收到 `#BTLOG,END` 后自动下载 CSV。连接后点击“发送 BT10 自测”会通过 FFE2 写入 20 行 43 列测试日志；BT10 的 UART 必须回传这些数据（串口回环或 MCU 回显），网页才能验证完整收发链路。若浏览器禁止从 `file://` 页面使用蓝牙，请在工程根目录执行 `python -m http.server 8000`，再打开 `http://127.0.0.1:8000/kart_log_view_mecanum_v4.html`。
 
 Windows 采集器可以把 BT10 收到的换行数据通过本机 WebSocket 转发给页面。打开页面后，在顶部输入采集器地址（默认 `ws://127.0.0.1:8765`），点击“连接实时日志”。采集器应原样转发 `#BTLOG,...` 状态行和 43 列 CSV 行；页面会忽略状态行，按当前 ULog43 通道定义追加数据并实时更新 vx、vy、位姿、轨迹和波形。收到 `#BTLOG,END,...` 后页面保留已接收数据并显示结束状态。
 

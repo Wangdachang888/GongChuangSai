@@ -38,7 +38,7 @@
 }
 </style></head>
 <body>
-<header><div><small class="eyebrow">MECANUM / TELEMETRY LAB</small><h1>智能搬运 <span>· 麦克纳姆调试台</span></h1></div><label id="drop" class="button primary">导入 CSV / 拖入日志<input id="file" type="file" accept=".csv,.txt" hidden></label><div class="realtime-connect"><label>实时地址 <input id="ws-url" value="ws://127.0.0.1:8765" spellcheck="false"></label><button id="ws-connect">连接实时日志</button><button id="bt-connect">直接连接 BT10</button><span id="ws-status" class="note">未连接</span></div><div id="meta">本项目 ULog43 · 等待日志</div></header>
+<header><div><small class="eyebrow">MECANUM / TELEMETRY LAB</small><h1>智能搬运 <span>· 麦克纳姆调试台</span></h1></div><label id="drop" class="button primary">导入 CSV / 拖入日志<input id="file" type="file" accept=".csv,.txt" hidden></label><div class="realtime-connect"><label>实时地址 <input id="ws-url" value="ws://127.0.0.1:8765" spellcheck="false"></label><button id="ws-connect">连接实时日志</button><button id="bt-connect">直接连接 BT10</button><button id="bt-selftest" disabled>发送 BT10 自测</button><span id="ws-status" class="note">未连接</span></div><div id="meta">本项目 ULog43 · 等待日志</div></header>
 <div id="notice" role="status">场地可直接查看。导入本项目 43 通道日志后，显示速度、四轮状态与轨迹。</div>
 <section class="telemetry" aria-label="当前底盘速度">
 <div class="metric"><small>纵向 vx · 车体向前为正</small><strong id="vx">—</strong><span>m/s · 四轮运动学</span><div class="signed"><i id="vx-bar"></i></div></div>
@@ -195,14 +195,17 @@ function load(text,name='日志.csv') {
 // Optional live input from the Windows BT10 collector. The collector forwards
 // newline-delimited #BTLOG metadata and ULog43 CSV rows over a local WebSocket.
 const realtime={socket:null,buffer:'',pending:[],flushRequest:0,ended:false};
-const bt10={device:null,characteristic:null,decoder:null,raw:'',ended:false};
+const bt10={device:null,characteristic:null,writeCharacteristic:null,decoder:null,raw:'',ended:false};
 const BT10_SERVICE='0000ffe0-0000-1000-8000-00805f9b34fb';
 const BT10_NOTIFY='0000ffe1-0000-1000-8000-00805f9b34fb';
+const BT10_WRITE='0000ffe2-0000-1000-8000-00805f9b34fb';
 function btStatus(text,kind=''){ $('bt-connect').textContent=kind==='connected'?'断开 BT10':'直接连接 BT10'; $('ws-status').textContent=text; }
 function downloadBt10Log(){ if(!bt10.raw)return; const blob=new Blob([bt10.raw],{type:'text/csv;charset=utf-8'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='bt10_'+new Date().toISOString().replace(/[:.]/g,'-')+'.csv'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); }
 function bt10Notification(event){ const text=bt10.decoder.decode(event.target.value,{stream:true}); bt10.raw+=text; receiveRealtimeText(text); if(/(?:^|\r?\n)#BTLOG,END(?:,|\r?$)/m.test(bt10.raw)){ if(!bt10.ended){bt10.ended=true;downloadBt10Log();btStatus('BT10 日志已结束并已下载','connected');} } }
+function bt10TestRows(){ const rows=['#BTLOG,BEGIN']; for(let i=0;i<20;i++){const t=i*100,x=i*.01,y=Math.sin(i*.2)*.1; const a=[0,1,1,0,0,t,0,0,1,0,.5,.2,.5,.2,0,0,i*.5,i*.5,0,.5385,.5385,x,y,i*.5,0,0,0,100,100,100,100,x,y,x,100,100,100,20,0,24,12,0]; rows.push(a.map(v=>typeof v==='number'&&v%1?v.toFixed(4):String(v)).join(','));} rows.push('#BTLOG,END'); return rows; }
+async function sendBt10SelfTest(){ if(!bt10.writeCharacteristic){btStatus('请先连接 BT10','error');return;} const button=$('bt-selftest'); button.disabled=true; try{for(const line of bt10TestRows()){await bt10.writeCharacteristic.writeValueWithResponse(new TextEncoder().encode(line+'\r\n')); await new Promise(resolve=>setTimeout(resolve,60));} btStatus('自测已发送，等待回传','connected'); notify('BT10 自测已发送；需要 UART 回传或回环才能在网页收到测试曲线。');}catch(e){btStatus('自测发送失败：'+e.message,'error');}finally{button.disabled=false;} }
 async function connectBt10(){
-  if(bt10.device){ bt10.device.gatt?.disconnect(); bt10.device=null; bt10.characteristic=null; btStatus('未连接'); return; }
+  if(bt10.device){ bt10.device.gatt?.disconnect(); bt10.device=null; bt10.characteristic=null; bt10.writeCharacteristic=null; $('bt-selftest').disabled=true; btStatus('未连接'); return; }
   if(!navigator.bluetooth){ btStatus('当前浏览器不支持 Web Bluetooth','error'); return; }
   try{
     btStatus('选择 BT10…');
@@ -217,10 +220,10 @@ async function connectBt10(){
         break;
       }catch(error){ lastError=error; try{device.gatt?.disconnect();}catch(_){ } if(attempt===2)throw lastError; }
     }
-    bt10.device=device; bt10.characteristic=ch; bt10.decoder=new TextDecoder(); bt10.raw=''; bt10.ended=false; resetRealtimeSession();
+    bt10.device=device; bt10.characteristic=ch; bt10.writeCharacteristic=await service.getCharacteristic(BT10_WRITE); bt10.decoder=new TextDecoder(); bt10.raw=''; bt10.ended=false; resetRealtimeSession();
     ch.addEventListener('characteristicvaluechanged',bt10Notification); await ch.startNotifications();
-    device.addEventListener('gattserverdisconnected',()=>{if(bt10.device===device){bt10.device=null;bt10.characteristic=null;btStatus('BT10 已断开','error');}});
-    btStatus('BT10 已连接，等待日志','connected'); notify('BT10 已连接，日志将实时显示并在 END 后自动下载。');
+    device.addEventListener('gattserverdisconnected',()=>{if(bt10.device===device){bt10.device=null;bt10.characteristic=null;bt10.writeCharacteristic=null;$('bt-selftest').disabled=true;btStatus('BT10 已断开','error');}});
+    $('bt-selftest').disabled=false; btStatus('BT10 已连接，等待日志','connected'); notify('BT10 已连接，日志将实时显示并在 END 后自动下载。');
   }catch(e){ bt10.device=null; btStatus('BT10 连接失败：'+e.message,'error'); }
 }
 function realtimeStatus(text,kind='') { const box=document.querySelector('.realtime-connect'); $('ws-status').textContent=text; box?.classList.toggle('connected',kind==='connected'); box?.classList.toggle('error',kind==='error'); }
@@ -616,6 +619,7 @@ function init() {
   document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>activateTab(b.dataset.tab));
   $('ws-connect').onclick=connectRealtime;
   $('bt-connect').onclick=connectBt10;
+  $('bt-selftest').onclick=sendBt10SelfTest;
   $('file').onchange=async e=>{const file=e.target.files[0];if(file){try{load(await file.text(),file.name);}catch(err){notify('文件读取失败：'+err.message,true);}e.target.value='';}};
   document.addEventListener('dragover',e=>e.preventDefault());document.addEventListener('drop',async e=>{e.preventDefault();const file=e.dataTransfer?.files[0];if(file){try{load(await file.text(),file.name);}catch(err){notify('文件读取失败：'+err.message,true);}}});
   $('slider').oninput=()=>go(Number($('slider').value));$('play-toggle').onclick=()=>S.playback.running?pausePlayback():startPlayback();$('play-restart').onclick=()=>startPlayback(true);
