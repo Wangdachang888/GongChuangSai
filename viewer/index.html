@@ -4,6 +4,7 @@
 <body>
 <header><div><small class="eyebrow">MECANUM / TELEMETRY LAB</small><h1>智能搬运 <span>· 麦克纳姆调试台</span></h1></div><label id="drop" class="button primary">导入 CSV / 拖入日志<input id="file" type="file" accept=".csv,.txt" hidden></label><div class="realtime-connect"><label>电脑日志源 <input id="ws-url" value="ws://127.0.0.1:8765" spellcheck="false"></label><button id="ws-connect">连接电脑日志源</button><button id="bt-connect">直接连接 BT10</button><button id="serial-echo">串口自动回显</button><button id="bt-selftest" disabled>发送 BT10 自测</button><button id="full-selftest">一键自测</button><button id="local-sim">本地模拟</button><span id="ws-status" class="note">电脑日志源未连接；BT10 直连可单独使用</span></div><div id="meta">本项目 ULog43 · 等待日志</div></header>
 <div id="notice" role="status">场地可直接查看。导入本项目 43 通道日志后，显示速度、四轮状态与轨迹。</div>
+<section id="archive-card" class="card archive-card"><div class="card-head"><h2>日志仓库</h2><div class="toolbar"><button id="archive-refresh">刷新</button><button id="archive-clear">清空仓库</button></div></div><p class="note">实时接收的数据会持续保存在本机浏览器。换电脑或清理浏览器数据不会自动迁移这些记录。</p><div id="archive-list" class="archive-list">正在加载…</div></section>
 <section class="telemetry" aria-label="当前底盘速度">
 <div class="metric"><small>纵向 vx · 车体向前为正</small><strong id="vx">—</strong><span>m/s · 四轮运动学</span><div class="signed"><i id="vx-bar"></i></div></div>
 <div class="metric"><small>横向 vy · 车体向左为正</small><strong id="vy">—</strong><span>m/s · 四轮运动学</span><div class="signed"><i id="vy-bar"></i></div></div>

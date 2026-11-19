@@ -127,6 +127,19 @@ function load(text,name='日志.csv') {
 // Optional live input from the Windows BT10 collector. The collector forwards
 // newline-delimited #BTLOG metadata and ULog43 CSV rows over a local WebSocket.
 const realtime={socket:null,buffer:'',pending:[],flushRequest:0,ended:false};
+const archive={db:null,session:null,starting:null,pending:'',flushTimer:null};
+function archiveOpen(){return new Promise((resolve,reject)=>{if(archive.db)return resolve(archive.db);const r=indexedDB.open('mecanum-log-archive',1);r.onupgradeneeded=()=>r.result.createObjectStore('logs',{keyPath:'id',autoIncrement:true});r.onsuccess=()=>{archive.db=r.result;resolve(archive.db)};r.onerror=()=>reject(r.error);});}
+async function archiveStart(){try{const db=await archiveOpen();const now=new Date();const tx=db.transaction('logs','readwrite');const rec={start:now.toISOString(),name:'BT10_'+now.toISOString().replace(/[:.]/g,'-'),text:'',frames:0,ended:false};const req=tx.objectStore('logs').add(rec);req.onsuccess=()=>{archive.session={id:req.result,rec};archive.pending='';clearInterval(archive.flushTimer);archive.flushTimer=setInterval(archiveFlush,1000);archiveRender();};}catch(_){}}
+async function archiveFlush(){if(!archive.session||!archive.pending)return;const chunk=archive.pending;archive.pending='';try{const db=await archiveOpen();const tx=db.transaction('logs','readwrite');const store=tx.objectStore('logs');const rec=await new Promise((res,rej)=>{const r=store.get(archive.session.id);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});rec.text+=chunk;rec.frames=archive.session.rec.frames;store.put(rec);}catch(_){}}
+async function archiveLine(line){if(!archive.session){if(!archive.starting)archive.starting=archiveStart().finally(()=>{archive.starting=null});await archive.starting;}if(!archive.session)return;archive.pending+=line;archive.session.rec.frames+=(line.split(',').length>=43?1:0);}
+async function archiveFinish(ended){await archiveFlush();if(!archive.session)return;try{const db=await archiveOpen();const tx=db.transaction('logs','readwrite');const store=tx.objectStore('logs');const rec=await new Promise((res,rej)=>{const r=store.get(archive.session.id);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});rec.ended=ended;rec.end=new Date().toISOString();store.put(rec);}catch(_){}clearInterval(archive.flushTimer);archive.session=null;archiveRender();}
+async function archiveList(){const db=await archiveOpen();return new Promise((resolve,reject)=>{const r=db.transaction('logs').objectStore('logs').getAll();r.onsuccess=()=>resolve(r.result.reverse());r.onerror=()=>reject(r.error)});}
+async function archiveRender(){const box=$('archive-list');if(!box)return;try{const list=await archiveList();if(!list.length){box.textContent='暂无日志；连接 BT10 后会自动保存。';return;}box.innerHTML=list.map(x=>`<div class="archive-item"><div class="archive-meta"><b>${x.name}</b><small>${x.start} · ${x.frames} 帧 · ${x.ended?'已完成':'未完成/断线保留'}</small></div><div class="archive-actions"><button data-archive-view="${x.id}">查看</button><button data-archive-download="${x.id}">下载</button><button data-archive-delete="${x.id}">删除</button></div></div>`).join('');box.querySelectorAll('[data-archive-view]').forEach(b=>b.onclick=()=>archiveLoad(Number(b.dataset.archiveView)));box.querySelectorAll('[data-archive-download]').forEach(b=>b.onclick=()=>archiveDownload(Number(b.dataset.archiveDownload)));box.querySelectorAll('[data-archive-delete]').forEach(b=>b.onclick=()=>archiveDelete(Number(b.dataset.archiveDelete)));}catch(_){box.textContent='浏览器不支持本地日志仓库。';}}
+async function archiveGet(id){const db=await archiveOpen();return new Promise((resolve,reject)=>{const r=db.transaction('logs').objectStore('logs').get(id);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
+async function archiveLoad(id){const x=await archiveGet(id);if(x?.text)load(x.text,x.name+'.csv');}
+async function archiveDownload(id){const x=await archiveGet(id);if(!x)return;const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([x.text],{type:'text/csv'}));a.download=x.name+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+async function archiveDelete(id){const db=await archiveOpen();db.transaction('logs','readwrite').objectStore('logs').delete(id);setTimeout(archiveRender,100);}
+async function archiveClear(){const db=await archiveOpen();db.transaction('logs','readwrite').objectStore('logs').clear();setTimeout(archiveRender,100);}
 const bt10={device:null,characteristic:null,writeCharacteristic:null,decoder:null,raw:'',ended:false};
 const serialEcho={port:null,reader:null,writer:null,running:false};
 const localSim={running:false,timer:null};
@@ -182,7 +195,7 @@ async function connectBt10(){
     }
     bt10.device=device; bt10.characteristic=ch; bt10.writeCharacteristic=await service.getCharacteristic(BT10_WRITE); bt10.decoder=new TextDecoder(); bt10.raw=''; bt10.ended=false; resetRealtimeSession();
     ch.addEventListener('characteristicvaluechanged',bt10Notification); await ch.startNotifications();
-    device.addEventListener('gattserverdisconnected',()=>{if(bt10.device===device){bt10.device=null;bt10.characteristic=null;bt10.writeCharacteristic=null;$('bt-selftest').disabled=true;btStatus('BT10 已断开','error');}});
+    device.addEventListener('gattserverdisconnected',()=>{if(bt10.device===device){bt10.device=null;bt10.characteristic=null;bt10.writeCharacteristic=null;$('bt-selftest').disabled=true;archiveFinish(false);btStatus('BT10 已断开，日志已保留','error');}});
     $('bt-selftest').disabled=false; btStatus('BT10 已连接，等待日志','connected'); notify('BT10 已连接，日志将实时显示并在 END 后自动下载。');
   }catch(e){ bt10.device=null; btStatus('BT10 连接失败：'+e.message,'error'); }
 }
@@ -205,7 +218,7 @@ function flushRealtime() {
 }
 function receiveRealtimeText(text) {
   realtime.buffer+=text;const lines=realtime.buffer.split(/\r?\n/);realtime.buffer=lines.pop()||'';
-  for(const line of lines){const raw=line.trim();if(!raw)continue;if(/^#BTLOG,END\b/i.test(raw)){realtime.ended=true;realtimeStatus('已收到 END','connected');continue;}if(raw.startsWith('#')||raw.startsWith('//'))continue;
+  for(const line of lines){const raw=line.trim();if(!raw)continue;archiveLine(raw+'\n');if(/^#BTLOG,END\b/i.test(raw)){realtime.ended=true;archiveFinish(true);realtimeStatus('已收到 END','connected');continue;}if(raw.startsWith('#')||raw.startsWith('//'))continue;
     try{const parsed=parse(raw+'\n');if(parsed.rows[0])queueRealtimeRow(parsed.rows[0]);}catch(_){/* Ignore partial/status lines from the collector. */}
   }
 }
@@ -583,6 +596,7 @@ function init() {
   $('serial-echo').onclick=toggleSerialEcho;
   $('local-sim').onclick=toggleLocalSim;
   $('full-selftest').onclick=fullSelfTest;
+  $('archive-refresh').onclick=archiveRender;$('archive-clear').onclick=archiveClear;archiveRender();
   $('file').onchange=async e=>{const file=e.target.files[0];if(file){try{load(await file.text(),file.name);}catch(err){notify('文件读取失败：'+err.message,true);}e.target.value='';}};
   document.addEventListener('dragover',e=>e.preventDefault());document.addEventListener('drop',async e=>{e.preventDefault();const file=e.dataTransfer?.files[0];if(file){try{load(await file.text(),file.name);}catch(err){notify('文件读取失败：'+err.message,true);}}});
   $('slider').oninput=()=>go(Number($('slider').value));$('play-toggle').onclick=()=>S.playback.running?pausePlayback():startPlayback();$('play-restart').onclick=()=>startPlayback(true);
