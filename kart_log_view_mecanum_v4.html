@@ -207,7 +207,16 @@ async function connectBt10(){
   try{
     btStatus('选择 BT10…');
     const device=await navigator.bluetooth.requestDevice({filters:[{services:[BT10_SERVICE]}],optionalServices:[BT10_SERVICE]});
-    const server=await device.gatt.connect(); const service=await server.getPrimaryService(BT10_SERVICE); const ch=await service.getCharacteristic(BT10_NOTIFY);
+    let server,service,ch,lastError;
+    for(let attempt=0;attempt<3;attempt++){
+      try{
+        if(attempt) await new Promise(resolve=>setTimeout(resolve,700));
+        server=await device.gatt.connect();
+        service=await server.getPrimaryService(BT10_SERVICE);
+        ch=await service.getCharacteristic(BT10_NOTIFY);
+        break;
+      }catch(error){ lastError=error; try{device.gatt?.disconnect();}catch(_){ } if(attempt===2)throw lastError; }
+    }
     bt10.device=device; bt10.characteristic=ch; bt10.decoder=new TextDecoder(); bt10.raw=''; bt10.ended=false; resetRealtimeSession();
     ch.addEventListener('characteristicvaluechanged',bt10Notification); await ch.startNotifications();
     device.addEventListener('gattserverdisconnected',()=>{if(bt10.device===device){bt10.device=null;bt10.characteristic=null;btStatus('BT10 已断开','error');}});
