@@ -23,6 +23,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "bsp_stepper.h"
+#include "bsp_ulog.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -212,6 +213,14 @@ void USART3_IRQHandler(void)
   /* USER CODE BEGIN USART3_IRQn 1 */
 
   /* USER CODE END USART3_IRQn 1 */
+}
+
+/**
+  * @brief This function handles USART2 global interrupt (BT10/logger TX).
+  */
+void USART2_IRQHandler(void)
+{
+  HAL_UART_IRQHandler(ULog_GetHandle());
 }
 
 /**

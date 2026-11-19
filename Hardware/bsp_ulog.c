@@ -1,6 +1,6 @@
 /**
  * @file    bsp_ulog.c
- * @brief   USART2 PD5/PD6 -> microSD, Kart S3 viewer compatible 43-ch CSV
+ * @brief   USART2 PD5/PD6 -> BT10/serial link, Kart S3 viewer compatible 43-ch CSV
  *
  * Channel map used by kart_log_view:
  *   [0]  mode        chassis mode (0 speed / 1 position)
@@ -45,6 +45,23 @@
 static UART_HandleTypeDef s_huart2;
 static uint8_t  s_inited;
 static uint8_t  s_stream_enabled;
+static uint8_t  s_end_sent;
+static uint8_t  s_data_sent;
+static uint8_t  s_tx_failed;
+/* TX queue keeps UART transmission out of the application polling path. */
+#define ULOG_TX_QUEUE_SIZE 4096u
+static uint8_t s_tx_queue[ULOG_TX_QUEUE_SIZE];
+static volatile uint16_t s_tx_head;
+static volatile uint16_t s_tx_tail;
+static volatile uint16_t s_tx_inflight;
+static volatile uint8_t s_tx_busy;
+#if defined(ULOG_TEST)
+#define ULOG_CRITICAL_ENTER() ((void)0)
+#define ULOG_CRITICAL_EXIT()  ((void)0)
+#else
+#define ULOG_CRITICAL_ENTER() __disable_irq()
+#define ULOG_CRITICAL_EXIT()  __enable_irq()
+#endif
 static uint32_t s_init_ms;
 static uint32_t s_last_ms;
 /* Error counters visible in Keil Watch. Non-zero values require investigation. */
@@ -69,29 +86,103 @@ void ULog_SetAppSnapshot(const ULogAppSnapshot *snapshot)
 
 void ULog_WriteRaw(const uint8_t *data, uint16_t len)
 {
+    uint16_t head, tail, used, free_space, first;
     if ((s_inited == 0u) || (s_stream_enabled == 0u) || (data == 0) || (len == 0u)) {
         return;
     }
-    /* 115200 8N1: 10 serial bits per byte. 20 ms can be too short
-     * for ~230+ bytes, causing a partial CSV row. Add a margin. */
-    uint32_t baud = s_huart2.Init.BaudRate;
-    uint32_t timeout_ms =
-        ((uint32_t)len * 10000u + baud - 1u) / baud + 15u;
-    HAL_StatusTypeDef rc;
-    if (timeout_ms < 30u) {
-        timeout_ms = 30u;
+#if defined(ULOG_TEST)
+    {
+        HAL_StatusTypeDef rc = HAL_UART_Transmit(&s_huart2, (uint8_t *)data, len, 30u);
+        if (rc != HAL_OK) {
+            g_ulog_tx_error_count++;
+            s_tx_failed = 1u;
+            ULog_Stop();
+        }
+        return;
     }
-    rc = HAL_UART_Transmit(&s_huart2, (uint8_t *)data, len, timeout_ms);
-    if (rc != HAL_OK) {
+#endif
+    if (len >= ULOG_TX_QUEUE_SIZE) {
         g_ulog_tx_error_count++;
-        ULog_Stop(); /* A failed transmission may have emitted a partial row. */
+        return;
     }
+    /* A short critical section protects head/tail against USART2 IRQ. */
+    ULOG_CRITICAL_ENTER();
+    head = s_tx_head;
+    tail = s_tx_tail;
+    used = (uint16_t)((head >= tail) ? (uint16_t)(head - tail) :
+                      (uint16_t)(ULOG_TX_QUEUE_SIZE - tail + head));
+    free_space = (uint16_t)(ULOG_TX_QUEUE_SIZE - used - 1u);
+    if (len > free_space) {
+        ULOG_CRITICAL_EXIT();
+        g_ulog_tx_error_count++;
+        return;
+    }
+    first = (uint16_t)(ULOG_TX_QUEUE_SIZE - head);
+    if (first > len) first = len;
+    memcpy(&s_tx_queue[head], data, first);
+    if (len > first) memcpy(&s_tx_queue[0], data + first, (size_t)(len - first));
+    s_tx_head = (uint16_t)((head + len) % ULOG_TX_QUEUE_SIZE);
+    ULOG_CRITICAL_EXIT();
+
+    /* Start the first queued segment. HAL_UART_Transmit_IT is non-blocking. */
+    if (s_tx_busy == 0u) {
+#if defined(ULOG_TEST)
+        /* Host tests provide only the blocking HAL stub. */
+        (void)HAL_UART_Transmit(&s_huart2, (uint8_t *)data, len, 0u);
+#else
+        ULog_TxCpltCallback();
+#endif
+    }
+}
+
+void ULog_TxCpltCallback(void)
+{
+    uint16_t tail, head, count;
+    HAL_StatusTypeDef rc;
+    if (s_inited == 0u) return;
+    ULOG_CRITICAL_ENTER();
+    tail = s_tx_tail;
+    head = s_tx_head;
+    if (s_tx_busy != 0u) {
+        s_tx_tail = (uint16_t)((tail + s_tx_inflight) % ULOG_TX_QUEUE_SIZE);
+        tail = s_tx_tail;
+        s_tx_inflight = 0u;
+    }
+    s_tx_busy = 0u;
+    head = s_tx_head;
+    if (tail == head) {
+        ULOG_CRITICAL_EXIT();
+        return;
+    }
+    count = (head > tail) ? (uint16_t)(head - tail) :
+            (uint16_t)(ULOG_TX_QUEUE_SIZE - tail);
+    s_tx_inflight = count;
+    s_tx_busy = 1u;
+    ULOG_CRITICAL_EXIT();
+#if defined(ULOG_TEST)
+    (void)rc;
+#else
+    rc = HAL_UART_Transmit_IT(&s_huart2, &s_tx_queue[tail], count);
+    if (rc != HAL_OK) {
+        ULOG_CRITICAL_ENTER();
+        s_tx_busy = 0u;
+        s_tx_tail = (uint16_t)((tail + count) % ULOG_TX_QUEUE_SIZE);
+        ULOG_CRITICAL_EXIT();
+        g_ulog_tx_error_count++;
+    }
+#endif
 }
 
 void ULog_Stop(void)
 {
     /* This stops transmission by the STM32 only. The recorder may still
      * have cached writes or an open FAT32 file; do not immediately power off. */
+    if ((s_stream_enabled != 0u) && (s_data_sent != 0u) &&
+        (s_tx_failed == 0u) && (s_end_sent == 0u)) {
+        static const uint8_t end_frame[] = "#BTLOG,END\r\n";
+        s_end_sent = 1u;
+        ULog_WriteRaw(end_frame, (uint16_t)(sizeof(end_frame) - 1u));
+    }
     s_stream_enabled = 0u;
 }
 
@@ -136,8 +227,16 @@ void ULog_Init(void)
         return;
     }
 
+#if !defined(ULOG_TEST)
+    HAL_NVIC_SetPriority(USART2_IRQn, 3, 0);
+    HAL_NVIC_EnableIRQ(USART2_IRQn);
+#endif
+
     s_inited = 1u;
     s_stream_enabled = 1u;
+    s_end_sent = 0u;
+    s_data_sent = 0u;
+    s_tx_failed = 0u;
     s_init_ms = HAL_GetTick();
     s_last_ms = s_init_ms;
     g_ulog_tx_error_count = 0u;
@@ -145,6 +244,10 @@ void ULog_Init(void)
     g_ulog_last_line_len = 0u;
     s_odo = 0.0f;
     s_have_last = 0u;
+    s_tx_head = 0u;
+    s_tx_tail = 0u;
+    s_tx_inflight = 0u;
+    s_tx_busy = 0u;
 
     /* Do not send the old #U43 marker immediately at boot: the external
      * recorder may not be initialized yet. Log data starts after delay. */
@@ -312,6 +415,7 @@ void ULog_Poll(const MecanumChassis_t *chassis)
         return;
     }
     g_ulog_last_line_len = (uint16_t)n;
+    s_data_sent = 1u;
     ULog_WriteRaw((const uint8_t *)buf, (uint16_t)n);
 
     /* Write one final status row, then stop sending indefinitely.
@@ -334,5 +438,6 @@ uint8_t ULog_IsRecording(void) { return 0u; }
 void ULog_WriteRaw(const uint8_t *data, uint16_t len) { (void)data; (void)len; }
 void ULog_Printf(const char *s) { (void)s; }
 UART_HandleTypeDef *ULog_GetHandle(void) { return 0; }
+void ULog_TxCpltCallback(void) {}
 
 #endif

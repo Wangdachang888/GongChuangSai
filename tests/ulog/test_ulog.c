@@ -109,7 +109,10 @@ int main(int argc, char **argv)
     if (tx_error) assert(g_ulog_tx_error_count == 1);
     if (!strcmp(scenario,"format_error")) assert(g_ulog_format_error_count == 1);
     if (!strcmp(scenario,"nonfinite")) assert(g_ulog_format_error_count == 1);
-    if (!strcmp(scenario,"normal")) assert(writes == 2);
+    if (!strcmp(scenario,"normal")) {
+        assert(writes == 3);
+        assert(!strcmp(last, "#BTLOG,END\r\n"));
+    }
     count=writes;
     for (int i=0;i<1000;i++) { now+=50; ULog_Poll(&c); }
     ULog_WriteRaw((const uint8_t *)"raw",3); ULog_Printf("text");

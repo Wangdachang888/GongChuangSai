@@ -171,3 +171,12 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 - `Hardware/vision.c/.h` 实现 `RaceVision_ScanFailed()`，将 ACK 超时、OpenMV `TIMEOUT` 和协议错误传递给 App；App 进入明确扫码/链路故障并走安全停止路径。UART 中断仍只接收和排队字节。
 - OpenMV `vision_openmv_stm32_v4_redownload/OpenMV/main.py` 的 `QR` 任务在主循环连续调用 `find_qrcodes()`，连续确认三帧后发送 `QR`、`DONE,QR` 和 `IDLE`；本批未修改 OpenMV 工程。
 - `tests/race/run.ps1`、`tests/ulog/run.ps1`：`PASS`；Keil UV4/ArmCC 完整构建：`PASS`，0 Error、0 Warning。二维码板搜索段的起点、终点、行驶方向、摄像头安装角和覆盖速度仍为 `NEED_CONFIRMATION`；OpenMV 通信、底盘运动和机械流程实机验证为 `NOT_RUN`。
+
+## 19. BT10 BLE 日志链路（2026-11-19）
+
+- 固件 USART2 继续使用 PD5/PD6、115200 8N1；发送改为中断发送队列，USART3 视觉链路保持不变。
+- 日志结束时追加 `#BTLOG,END`，Windows 接收端收到后执行 flush/fsync/close；运行中不允许通过主机命令修改参数。
+- 新增 `tools/bt10_ble_receiver.py` 和使用说明，连接 BT10 BLE GATT FFE0/FFE1/FFE2，保存 CSV，可选广播到本机 WebSocket `127.0.0.1:8765`。
+- `viewer/` 增加可选实时 WebSocket 入口，继续使用现有 ULog43 解析和 vx/vy、位移、轨迹曲线。
+- `tests/ulog/run.ps1`：`PASS`；`tests/race/run.ps1`：`PASS`；网页 Node 测试：`PASS`；Python 语法/帮助检查：`PASS`；真实 BT10 BLE、Windows GATT 和网页 WebSocket 联调：`NOT_RUN`。
+- 未修改电机参数、PID 数值、USART3、TIM6 调度和机械控制；未执行烧录与实机验收。

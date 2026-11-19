@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+"""BT10 BLE log receiver and guarded parameter console.
+
+The receiver stores the STM32 text stream verbatim.  CSV rows therefore remain
+compatible with the existing offline viewer, while ``#BTLOG`` metadata is
+retained for diagnostics.  The device is expected to expose the WHEELTEC
+service FFE0, notify characteristic FFE1, and write characteristic FFE2.
+
+Requires: ``pip install bleak``
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+from datetime import datetime
+import os
+from pathlib import Path
+import sys
+from typing import Callable, Optional
+
+try:
+    import websockets
+except ImportError:  # WebSocket forwarding is optional.
+    websockets = None  # type: ignore[assignment]
+
+try:
+    from bleak import BleakClient, BleakScanner
+except ImportError:  # Keep --help and parser tests usable without bleak.
+    BleakClient = None  # type: ignore[assignment,misc]
+    BleakScanner = None  # type: ignore[assignment,misc]
+
+
+SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb"
+NOTIFY_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
+WRITE_UUID = "0000ffe2-0000-1000-8000-00805f9b34fb"
+
+
+class LogReceiver:
+    """Line assembler and durable CSV writer, independent of BLE transport."""
+
+    def __init__(self, output: Path, on_line: Optional[Callable[[str], None]] = None) -> None:
+        self.output = output
+        self.on_line = on_line
+        self._file = None
+        self._pending = bytearray()
+        self.state = "UNKNOWN"
+        self.lines = 0
+        self.dropped = 0
+        self.closed_by_end = False
+
+    def _open(self) -> None:
+        if self._file is None:
+            self.output.parent.mkdir(parents=True, exist_ok=True)
+            # A selected output path represents one capture session.
+            self._file = self.output.open("wb")
+
+    def feed(self, data: bytes) -> None:
+        self._pending.extend(data)
+        while b"\n" in self._pending:
+            raw, _, rest = self._pending.partition(b"\n")
+            self._pending = bytearray(rest)
+            self.handle_line(raw.rstrip(b"\r"))
+
+    def handle_line(self, raw: bytes) -> None:
+        if not raw:
+            return
+        # END is a durable session boundary.  Do not reopen the file if a
+        # delayed notification arrives after that boundary.
+        if self.closed_by_end:
+            return
+        self._open()
+        self._file.write(raw + b"\n")  # type: ignore[union-attr]
+        self.lines += 1
+        try:
+            line = raw.decode("utf-8", errors="replace")
+        except Exception:
+            return
+        if self.on_line is not None:
+            self.on_line(line + "\n")
+        if line.startswith("#BTLOG,STATE,"):
+            self.state = line.split(",", 2)[2].strip().upper()
+        elif line == "#BTLOG,END" or line.startswith("#BTLOG,END,"):
+            self.close_durable()
+
+    def close_durable(self) -> None:
+        if self._file is None:
+            return
+        self._file.flush()
+        os.fsync(self._file.fileno())
+        self._file.close()
+        self._file = None
+        self.closed_by_end = True
+
+    def close(self) -> None:
+        # Preserve a final partial line if the link disappears mid-frame.
+        if self._pending:
+            self.handle_line(bytes(self._pending))
+            self._pending.clear()
+        self.close_durable()
+
+
+def default_output() -> Path:
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return Path("bt10_logs") / f"kart_{stamp}.csv"
+
+
+class LocalWebSocket:
+    """Optional newline broadcaster for the local viewer."""
+
+    def __init__(self, host: str, port: int) -> None:
+        self.host = host
+        self.port = port
+        self.clients = set()
+        self.server = None
+
+    async def _handler(self, websocket, *_args) -> None:
+        self.clients.add(websocket)
+        try:
+            await websocket.wait_closed()
+        finally:
+            self.clients.discard(websocket)
+
+    async def start(self) -> None:
+        if websockets is None:
+            raise RuntimeError("启用 WebSocket 转发需要安装: python -m pip install websockets")
+        self.server = await websockets.serve(self._handler, self.host, self.port)
+        print(f"WebSocket 转发已启动: ws://{self.host}:{self.port}")
+
+    async def broadcast(self, text: str) -> None:
+        if not self.clients:
+            return
+        clients = tuple(self.clients)
+        results = await asyncio.gather(
+            *(client.send(text) for client in clients),
+            return_exceptions=True,
+        )
+        for client, result in zip(clients, results):
+            if isinstance(result, Exception):
+                self.clients.discard(client)
+
+    async def stop(self) -> None:
+        if self.server is not None:
+            self.server.close()
+            await self.server.wait_closed()
+            self.server = None
+
+
+async def find_device(address_or_name: str):
+    if BleakScanner is None:
+        raise RuntimeError("缺少 bleak，请先执行: python -m pip install bleak")
+    # A MAC/address is accepted directly; otherwise scan by display name.
+    devices = await BleakScanner.discover(timeout=8.0)
+    needle = address_or_name.casefold()
+    for device in devices:
+        if device.address.casefold() == needle or (device.name or "").casefold() == needle:
+            return device
+    raise RuntimeError(f"未找到 BT10 设备: {address_or_name}")
+
+
+async def run(args: argparse.Namespace) -> int:
+    if BleakClient is None:
+        print("缺少 bleak，请先执行: python -m pip install bleak", file=sys.stderr)
+        return 2
+    device = await find_device(args.device)
+    websocket = LocalWebSocket(args.ws_host, args.ws_port) if args.websocket else None
+    if websocket is not None:
+        await websocket.start()
+    on_line = (lambda line: asyncio.create_task(websocket.broadcast(line))) if websocket else None
+    receiver = LogReceiver(Path(args.output), on_line=on_line)
+
+    def on_notification(_characteristic, data: bytearray) -> None:
+        receiver.feed(bytes(data))
+
+    try:
+        async with BleakClient(device) as client:
+            await client.start_notify(NOTIFY_UUID, on_notification)
+            print(f"已连接 {device.name or device.address}，日志保存到 {receiver.output}")
+            if args.command:
+                await send_command(client, args.command, receiver)
+            if args.no_console:
+                while client.is_connected:
+                    await asyncio.sleep(0.5)
+            else:
+                print("输入 @GET,STATE / @GET,PARAMS / @SET,...；RUNNING 状态拒绝 @SET。输入 quit 退出。")
+                while client.is_connected:
+                    try:
+                        command = await asyncio.to_thread(input, "> ")
+                    except (EOFError, KeyboardInterrupt):
+                        break
+                    command = command.strip()
+                    if not command or command.casefold() in {"quit", "exit"}:
+                        break
+                    await send_command(client, command, receiver)
+            await client.stop_notify(NOTIFY_UUID)
+    finally:
+        receiver.close()
+        if websocket is not None:
+            await websocket.stop()
+    return 0
+
+
+async def send_command(client, command: str, receiver: LogReceiver) -> None:
+    if not command.endswith("\n"):
+        command += "\n"
+    if command.startswith("@SET,") and receiver.state == "RUNNING":
+        print("拒绝发送：设备处于 RUNNING，当前策略只允许查看。", file=sys.stderr)
+        return
+    await client.write_gatt_char(WRITE_UUID, command.encode("ascii"), response=True)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="WHEELTEC BT10 BLE 日志接收器")
+    parser.add_argument("device", help="BT10 的蓝牙名称或地址")
+    parser.add_argument("-o", "--output", type=Path, default=default_output(), help="CSV 输出路径")
+    parser.add_argument("--command", help="连接后发送一次命令")
+    parser.add_argument("--no-console", action="store_true", help="不启动交互命令行，仅接收日志")
+    parser.add_argument("--websocket", action="store_true", help="将每行日志广播到本机 WebSocket")
+    parser.add_argument("--ws-host", default="127.0.0.1", help="WebSocket 监听地址")
+    parser.add_argument("--ws-port", type=int, default=8765, help="WebSocket 监听端口")
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    try:
+        return asyncio.run(run(args))
+    except KeyboardInterrupt:
+        return 130
+    except Exception as exc:
+        print(f"BT10 接收失败: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

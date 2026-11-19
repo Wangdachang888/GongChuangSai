@@ -1,12 +1,12 @@
 /**
  * @file    bsp_ulog.h
- * @brief   USART2 (PD5=TX / PD6=RX) logger for microSD UART recorder
+ * @brief   USART2 (PD5=TX / PD6=RX) logger for BT10/serial recorder
  *
  * Output format: Kart-log-view v4 compatible 43-channel numeric CSV (no text header).
  * Open with kart_log_view HTML (expects >=43 numeric fields per line).
  *
  * Wiring:
- *   MCU PD5 (USART2_TX) -> microSD-UART module RX
+ *   MCU PD5 (USART2_TX) -> BT10/UART module RX
  *   MCU PD6 (USART2_RX) -> module TX (optional)
  *   GND common, 115200 8N1
  */
@@ -72,6 +72,8 @@ extern volatile uint16_t g_ulog_last_line_len;
 void ULog_WriteRaw(const uint8_t *data, uint16_t len);
 void ULog_Printf(const char *s);
 UART_HandleTypeDef *ULog_GetHandle(void);
+/* Called from the single HAL UART TX-complete callback. */
+void ULog_TxCpltCallback(void);
 
 #ifdef __cplusplus
 }

@@ -124,6 +124,44 @@ function load(text,name='日志.csv') {
     activateTab('transport');
   } catch(error) {notify('未导入：'+error.message,true);}
 }
+// Optional live input from the Windows BT10 collector. The collector forwards
+// newline-delimited #BTLOG metadata and ULog43 CSV rows over a local WebSocket.
+const realtime={socket:null,buffer:'',pending:[],flushRequest:0,ended:false};
+function realtimeStatus(text,kind='') { const box=document.querySelector('.realtime-connect'); $('ws-status').textContent=text; box?.classList.toggle('connected',kind==='connected'); box?.classList.toggle('error',kind==='error'); }
+function resetRealtimeSession() {
+  pausePlayback(); config.channels={...DEFAULT_CHANNELS}; S.rows=[]; S.name='BT10 实时日志'; S.cur=0;
+  Object.assign(S,{times:[],samples:[],points:[],quality:null,segments:[],selectedSegment:null,medianDt:config.dt,gaps:0});
+  $('slider').max=0; rebuild(); fitMap(); updateWindow(); renderEvents(); renderQuality(); render();
+}
+function queueRealtimeRow(row) {
+  if(row.length<43||!row.some(finite))return;
+  realtime.pending.push(row);
+  if(!realtime.flushRequest)realtime.flushRequest=requestAnimationFrame(flushRealtime);
+}
+function flushRealtime() {
+  realtime.flushRequest=0;if(!realtime.pending.length)return;
+  S.rows.push(...realtime.pending.splice(0));
+  const time=timeline(S.rows,config);Object.assign(S,time);S.quality=qualityReport({rows:S.rows,totalLines:S.rows.length,comments:0,headers:0,skipped:0,bad:[],source:'native'},time);S.cur=S.rows.length-1;
+  rebuild();S.wave.start=Math.max(0,duration()-config.dt*200);S.wave.end=duration()||config.dt;$('slider').max=Math.max(0,S.rows.length-1);fitMap();updateWindow();renderEvents();renderQuality();render();
+}
+function receiveRealtimeText(text) {
+  realtime.buffer+=text;const lines=realtime.buffer.split(/\r?\n/);realtime.buffer=lines.pop()||'';
+  for(const line of lines){const raw=line.trim();if(!raw)continue;if(/^#BTLOG,END\b/i.test(raw)){realtime.ended=true;realtimeStatus('已收到 END','connected');continue;}if(raw.startsWith('#')||raw.startsWith('//'))continue;
+    try{const parsed=parse(raw+'\n');if(parsed.rows[0])queueRealtimeRow(parsed.rows[0]);}catch(_){/* Ignore partial/status lines from the collector. */}
+  }
+}
+function disconnectRealtime() { if(realtime.socket){realtime.socket.onclose=null;realtime.socket.close();realtime.socket=null;}realtime.buffer='';realtime.pending=[];realtimeStatus('未连接');$('ws-connect').textContent='连接实时日志'; }
+function connectRealtime() {
+  if(realtime.socket){disconnectRealtime();return;}
+  if(typeof WebSocket==='undefined'){realtimeStatus('当前浏览器不支持 WebSocket','error');return;}
+  const url=$('ws-url').value.trim();if(!/^wss?:\/\//i.test(url)){realtimeStatus('地址必须以 ws:// 或 wss:// 开头','error');return;}
+  try{const socket=new WebSocket(url);realtime.socket=socket;realtime.buffer='';realtime.ended=false;$('ws-connect').textContent='断开实时日志';realtimeStatus('连接中…');
+    socket.onopen=()=>{resetRealtimeSession();realtimeStatus('已连接，等待 BT10 日志','connected');notify('已连接实时日志；等待 #BTLOG,BEGIN 和 ULog43 数据。');};
+    socket.onmessage=e=>{if(typeof e.data==='string')receiveRealtimeText(e.data);else if(e.data?.text)e.data.text().then(receiveRealtimeText);};
+    socket.onerror=()=>realtimeStatus('连接失败，请检查 Windows 采集器','error');
+    socket.onclose=()=>{realtime.socket=null;$('ws-connect').textContent='连接实时日志';if(!realtime.ended)realtimeStatus('连接已断开','error');};
+  }catch(e){realtime.socket=null;$('ws-connect').textContent='连接实时日志';realtimeStatus('连接失败：'+e.message,'error');}
+}
 function rebuild() {
   S.samples=S.rows.map(r=>sample(r));
   S.points=S.rows.map(row=>({center:fieldPoint(value(row,'x'),value(row,'y')),
@@ -480,6 +518,7 @@ function setWaveMinimized(minimized) {
 function init() {
   showConfig();rebuild();
   document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>activateTab(b.dataset.tab));
+  $('ws-connect').onclick=connectRealtime;
   $('file').onchange=async e=>{const file=e.target.files[0];if(file){try{load(await file.text(),file.name);}catch(err){notify('文件读取失败：'+err.message,true);}e.target.value='';}};
   document.addEventListener('dragover',e=>e.preventDefault());document.addEventListener('drop',async e=>{e.preventDefault();const file=e.dataTransfer?.files[0];if(file){try{load(await file.text(),file.name);}catch(err){notify('文件读取失败：'+err.message,true);}}});
   $('slider').oninput=()=>go(Number($('slider').value));$('play-toggle').onclick=()=>S.playback.running?pausePlayback():startPlayback();$('play-restart').onclick=()=>startPlayback(true);

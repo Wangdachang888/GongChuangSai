@@ -119,3 +119,11 @@
 原因：让二维码搜索任务在路线 `MOVE` 期间异步运行，保持里程计导航连续，并补充扫描失败向 App 的安全故障传递。
 验证：`tests/race/run.ps1` PASS；`tests/ulog/run.ps1` PASS；UV4/ArmCC 完整构建 PASS（0 Error、0 Warning）；Keil 工程引用、USART3 回调唯一性、USART2/TIM6 未改和 `git diff --check` 检查通过。
 实机：NOT_RUN；二维码搜索段几何和摄像头安装参数 NEED_CONFIRMATION，OpenMV 通信与底盘运动仍需实机验收。
+
+## BT10 BLE 日志链路（2026-11-19）
+
+提交：本轮待提交，提交后不在长期文档中自引用当前 SHA
+范围：`Hardware/bsp_ulog.c/.h`、`Hardware/bsp_uart_router.c`、`Core/Src/stm32f4xx_it.c`、`tools/bt10_ble_receiver.py`、`tools/BT10_BLE_RECEIVER.md`、`viewer/`、日志测试
+原因：用 BT10 BLE GATT 替代 USART2 日志发送链路，Windows 保存 CSV，运行中只读并支持网页实时查看。
+验证：`tests/ulog/run.ps1` PASS；`tests/race/run.ps1` PASS；`node --check viewer/viewer.js` PASS；`node viewer/test.cjs` PASS（使用 `field_assets/logs/log0_kart.csv`）；Python `py_compile` 和 `--help` PASS；`git diff --check` PASS。
+实机：BT10 BLE 连接、GATT 特征、WebSocket 实时联调、烧录和整车流程验收 `NOT_RUN`；Keil 完整编译待执行。
