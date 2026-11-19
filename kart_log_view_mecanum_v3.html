@@ -38,7 +38,7 @@
 }
 </style></head>
 <body>
-<header><div><small class="eyebrow">MECANUM / TELEMETRY LAB</small><h1>智能搬运 <span>· 麦克纳姆调试台</span></h1></div><label id="drop" class="button primary">导入 CSV / 拖入日志<input id="file" type="file" accept=".csv,.txt" hidden></label><div class="realtime-connect"><label>实时地址 <input id="ws-url" value="ws://127.0.0.1:8765" spellcheck="false"></label><button id="ws-connect">连接实时日志</button><button id="bt-connect">直接连接 BT10</button><button id="serial-echo">串口自动回显</button><button id="bt-selftest" disabled>发送 BT10 自测</button><button id="local-sim">本地模拟</button><span id="ws-status" class="note">未连接</span></div><div id="meta">本项目 ULog43 · 等待日志</div></header>
+<header><div><small class="eyebrow">MECANUM / TELEMETRY LAB</small><h1>智能搬运 <span>· 麦克纳姆调试台</span></h1></div><label id="drop" class="button primary">导入 CSV / 拖入日志<input id="file" type="file" accept=".csv,.txt" hidden></label><div class="realtime-connect"><label>实时地址 <input id="ws-url" value="ws://127.0.0.1:8765" spellcheck="false"></label><button id="ws-connect">连接实时日志</button><button id="bt-connect">直接连接 BT10</button><button id="serial-echo">串口自动回显</button><button id="bt-selftest" disabled>发送 BT10 自测</button><button id="full-selftest">一键自测</button><button id="local-sim">本地模拟</button><span id="ws-status" class="note">未连接</span></div><div id="meta">本项目 ULog43 · 等待日志</div></header>
 <div id="notice" role="status">场地可直接查看。导入本项目 43 通道日志后，显示速度、四轮状态与轨迹。</div>
 <section class="telemetry" aria-label="当前底盘速度">
 <div class="metric"><small>纵向 vx · 车体向前为正</small><strong id="vx">—</strong><span>m/s · 四轮运动学</span><div class="signed"><i id="vx-bar"></i></div></div>
@@ -218,6 +218,19 @@ async function toggleSerialEcho(){
   }
   if(!navigator.serial){btStatus('当前浏览器不支持 Web Serial','error');return;}
   try{ const port=await navigator.serial.requestPort(); await port.open({baudRate:115200,dataBits:8,stopBits:1,parity:'none',bufferSize:4096}); serialEcho.port=port; serialEcho.writer=port.writable.getWriter(); serialEcho.running=true; $('serial-echo').textContent='停止串口回显'; btStatus('串口回显运行中','connected'); notify('网页已打开 BT10 串口，收到数据会自动原样回传。'); serialEchoLoop().catch(e=>btStatus('串口回显失败：'+e.message,'error')); }catch(e){btStatus('串口打开失败：'+e.message,'error');}
+}
+async function fullSelfTest(){
+  const button=$('full-selftest'); button.disabled=true;
+  try{
+    if(!navigator.bluetooth||!navigator.serial) throw new Error('请使用 Chrome/Edge，并通过 localhost 或 HTTPS 打开网页');
+    if(!bt10.device) await connectBt10();
+    if(!bt10.device) throw new Error('BT10 BLE 未连接');
+    if(!serialEcho.running) await toggleSerialEcho();
+    if(!serialEcho.running) throw new Error('串口自动回显未启动');
+    await sendBt10SelfTest();
+    notify('一键自测已启动：等待 43 列日志回传和 END。');
+  }catch(e){btStatus('一键自测失败：'+e.message,'error');}
+  finally{button.disabled=false;}
 }
 async function connectBt10(){
   if(bt10.device){ bt10.device.gatt?.disconnect(); bt10.device=null; bt10.characteristic=null; bt10.writeCharacteristic=null; $('bt-selftest').disabled=true; btStatus('未连接'); return; }
@@ -637,6 +650,7 @@ function init() {
   $('bt-selftest').onclick=sendBt10SelfTest;
   $('serial-echo').onclick=toggleSerialEcho;
   $('local-sim').onclick=toggleLocalSim;
+  $('full-selftest').onclick=fullSelfTest;
   $('file').onchange=async e=>{const file=e.target.files[0];if(file){try{load(await file.text(),file.name);}catch(err){notify('文件读取失败：'+err.message,true);}e.target.value='';}};
   document.addEventListener('dragover',e=>e.preventDefault());document.addEventListener('drop',async e=>{e.preventDefault();const file=e.dataTransfer?.files[0];if(file){try{load(await file.text(),file.name);}catch(err){notify('文件读取失败：'+err.message,true);}}});
   $('slider').oninput=()=>go(Number($('slider').value));$('play-toggle').onclick=()=>S.playback.running?pausePlayback():startPlayback();$('play-restart').onclick=()=>startPlayback(true);

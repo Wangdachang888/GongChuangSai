@@ -151,6 +151,19 @@ async function toggleSerialEcho(){
   if(!navigator.serial){btStatus('当前浏览器不支持 Web Serial','error');return;}
   try{ const port=await navigator.serial.requestPort(); await port.open({baudRate:115200,dataBits:8,stopBits:1,parity:'none',bufferSize:4096}); serialEcho.port=port; serialEcho.writer=port.writable.getWriter(); serialEcho.running=true; $('serial-echo').textContent='停止串口回显'; btStatus('串口回显运行中','connected'); notify('网页已打开 BT10 串口，收到数据会自动原样回传。'); serialEchoLoop().catch(e=>btStatus('串口回显失败：'+e.message,'error')); }catch(e){btStatus('串口打开失败：'+e.message,'error');}
 }
+async function fullSelfTest(){
+  const button=$('full-selftest'); button.disabled=true;
+  try{
+    if(!navigator.bluetooth||!navigator.serial) throw new Error('请使用 Chrome/Edge，并通过 localhost 或 HTTPS 打开网页');
+    if(!bt10.device) await connectBt10();
+    if(!bt10.device) throw new Error('BT10 BLE 未连接');
+    if(!serialEcho.running) await toggleSerialEcho();
+    if(!serialEcho.running) throw new Error('串口自动回显未启动');
+    await sendBt10SelfTest();
+    notify('一键自测已启动：等待 43 列日志回传和 END。');
+  }catch(e){btStatus('一键自测失败：'+e.message,'error');}
+  finally{button.disabled=false;}
+}
 async function connectBt10(){
   if(bt10.device){ bt10.device.gatt?.disconnect(); bt10.device=null; bt10.characteristic=null; bt10.writeCharacteristic=null; $('bt-selftest').disabled=true; btStatus('未连接'); return; }
   if(!navigator.bluetooth){ btStatus('当前浏览器不支持 Web Bluetooth','error'); return; }
@@ -569,6 +582,7 @@ function init() {
   $('bt-selftest').onclick=sendBt10SelfTest;
   $('serial-echo').onclick=toggleSerialEcho;
   $('local-sim').onclick=toggleLocalSim;
+  $('full-selftest').onclick=fullSelfTest;
   $('file').onchange=async e=>{const file=e.target.files[0];if(file){try{load(await file.text(),file.name);}catch(err){notify('文件读取失败：'+err.message,true);}e.target.value='';}};
   document.addEventListener('dragover',e=>e.preventDefault());document.addEventListener('drop',async e=>{e.preventDefault();const file=e.dataTransfer?.files[0];if(file){try{load(await file.text(),file.name);}catch(err){notify('文件读取失败：'+err.message,true);}}});
   $('slider').oninput=()=>go(Number($('slider').value));$('play-toggle').onclick=()=>S.playback.running?pausePlayback():startPlayback();$('play-restart').onclick=()=>startPlayback(true);
