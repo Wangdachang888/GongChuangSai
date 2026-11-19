@@ -209,7 +209,7 @@ function receiveRealtimeText(text) {
     try{const parsed=parse(raw+'\n');if(parsed.rows[0])queueRealtimeRow(parsed.rows[0]);}catch(_){/* Ignore partial/status lines from the collector. */}
   }
 }
-function disconnectRealtime() { if(realtime.socket){realtime.socket.onclose=null;realtime.socket.close();realtime.socket=null;}realtime.buffer='';realtime.pending=[];realtimeStatus('未连接');$('ws-connect').textContent='连接实时日志'; }
+function disconnectRealtime() { if(realtime.socket){realtime.socket.onclose=null;realtime.socket.close();realtime.socket=null;}realtime.buffer='';realtime.pending=[];realtimeStatus('电脑日志源未连接；BT10 直连可单独使用');$('ws-connect').textContent='连接电脑日志源'; }
 function connectRealtime() {
   if(realtime.socket){disconnectRealtime();return;}
   if(typeof WebSocket==='undefined'){realtimeStatus('当前浏览器不支持 WebSocket','error');return;}
@@ -217,8 +217,8 @@ function connectRealtime() {
   try{const socket=new WebSocket(url);realtime.socket=socket;realtime.buffer='';realtime.ended=false;$('ws-connect').textContent='断开实时日志';realtimeStatus('连接中…');
     socket.onopen=()=>{resetRealtimeSession();realtimeStatus('已连接，等待 BT10 日志','connected');notify('已连接实时日志；等待 #BTLOG,BEGIN 和 ULog43 数据。');};
     socket.onmessage=e=>{if(typeof e.data==='string')receiveRealtimeText(e.data);else if(e.data?.text)e.data.text().then(receiveRealtimeText);};
-    socket.onerror=()=>realtimeStatus('连接失败，请检查 Windows 采集器','error');
-    socket.onclose=()=>{realtime.socket=null;$('ws-connect').textContent='连接实时日志';if(!realtime.ended)realtimeStatus('连接已断开','error');};
+    socket.onerror=()=>realtimeStatus('电脑日志源连接失败；BT10 直连不受影响','error');
+    socket.onclose=()=>{realtime.socket=null;$('ws-connect').textContent='连接电脑日志源';if(!realtime.ended)realtimeStatus('电脑日志源已断开；BT10 直连仍可用','error');};
   }catch(e){realtime.socket=null;$('ws-connect').textContent='连接实时日志';realtimeStatus('连接失败：'+e.message,'error');}
 }
 function rebuild() {
