@@ -11,7 +11,8 @@ import utils as U
 # ===== 单次任务模型：原 vision_job.py 已合并至本文件 =====
 # Pure-Python job state; no camera or UART dependency. Compatible with MicroPython.
 class Job:
-    def __init__(self, kind, target, tol_x, tol_y, now, timeout_ms, required_frames):
+    def __init__(self, kind, target, tol_x, tol_y, now, timeout_ms, required_frames,
+                 qr_session=0):
         self.kind = kind
         self.target = target
         self.tol_x = tol_x
@@ -19,6 +20,7 @@ class Job:
         self.started = now
         self.timeout_ms = timeout_ms
         self.required_frames = required_frames
+        self.qr_session = qr_session
         self.streak = 0
         self.track_id = None
         self.last_pos = now
@@ -46,8 +48,8 @@ class Job:
 
 
 def decode_job(parts, now, config):
-    # JOB,id[,tolerance_x_px,tolerance_y_px]
-    if len(parts) not in (2, 4):
+    # JOB,id[,qr_session] or JOB,id[,tolerance_x_px,tolerance_y_px]
+    if len(parts) not in (2, 3, 4):
         raise ValueError('JOB_FORMAT')
     code = int(parts[1])
     if code == 1:
@@ -68,6 +70,13 @@ def decode_job(parts, now, config):
         kind, target = 'BLUE', 0
     else:
         raise ValueError('JOB_CODE')
+    qr_session = 0
+    if len(parts) == 3:
+        if kind != 'QR':
+            raise ValueError('JOB_FORMAT')
+        qr_session = int(parts[2])
+        if not 0 <= qr_session <= 65535:
+            raise ValueError('JOB_SESSION')
     tol_x = config.JOB_TOL_X_PX
     tol_y = config.JOB_TOL_Y_PX
     if len(parts) == 4:
@@ -75,7 +84,9 @@ def decode_job(parts, now, config):
     if not (1 <= tol_x <= 100 and 1 <= tol_y <= 100):
         raise ValueError('JOB_TOL')
     if kind == 'QR':
-        timeout = config.JOB_QR_TIMEOUT_MS
+        # QR scanning is bounded by the STM32 route and explicit CANCEL, not
+        # by an arbitrary wall-clock timeout.  Other jobs retain their limits.
+        timeout = None
     elif kind == 'AREA':
         timeout = config.AREA_JOB_TIMEOUT_MS
     elif kind == 'MATERIAL_ALIGN':
@@ -84,7 +95,8 @@ def decode_job(parts, now, config):
         timeout = config.PICK_JOB_TIMEOUT_MS
     else:
         timeout = config.JOB_TIMEOUT_MS
-    return code, Job(kind, target, tol_x, tol_y, now, timeout, config.JOB_ARRIVED_FRAMES)
+    return code, Job(kind, target, tol_x, tol_y, now, timeout,
+                     config.JOB_ARRIVED_FRAMES, qr_session)
 
 
 
@@ -158,13 +170,16 @@ def main():
     frame = 0
     qr_last = ''
     qr_streak = 0
+    qr_pending_code = ''
+    qr_last_send = 0
     last_wait_report = 0
 
     def idle():
         # Stop processing; keep the verified disk lock across consecutive
         # material jobs, as later pickups can leave fewer than 3 objects.
-        nonlocal job
+        nonlocal job, qr_pending_code
         job = None
+        qr_pending_code = ''
         serial.send('IDLE')
 
     def wait_report(now, *parts):
@@ -210,6 +225,7 @@ def main():
                     rings.reset()
                     disk_locked = False
                     qr_last, qr_streak = '', 0
+                    qr_pending_code, qr_last_send = '', 0
                     serial.reset_rx_sequence()
                     serial.send('ACK', 'RESET')
                     serial.send('IDLE')
@@ -305,6 +321,23 @@ def main():
                     frame = 0
                     job = new_job
                     serial.send('ACK', 'ALIGN', target, session)
+                elif (command == 'ACK' and len(packet) == 3 and
+                      packet[1] == 'QR'):
+                    if (job is None or job.kind != 'QR' or
+                            not qr_pending_code or
+                            int(packet[2]) != job.qr_session):
+                        serial.send('ERR', 'QR_SESSION')
+                    else:
+                        if not board.locked():
+                            board.accept(qr_pending_code)
+                            if lcd:
+                                lcd.update(board)
+                        if board.code() != qr_pending_code:
+                            serial.send('ERR', 'QR_CONFLICT')
+                            idle()
+                        else:
+                            serial.send('DONE', 'QR')
+                            idle()
                 elif command == 'JOB':
                     if job is not None:
                         serial.send('ERR', 'BUSY')
@@ -357,6 +390,7 @@ def main():
                         # A QR job scans fresh; previously displayed task code is
                         # retained until RESET, not overwritten by another scan.
                         qr_last, qr_streak = '', 0
+                        qr_pending_code, qr_last_send = '', 0
                     frame = 0
                     job = new_job
                     serial.send('ACK', 'JOB', code)
@@ -371,7 +405,8 @@ def main():
             time.sleep_ms(C.JOB_IDLE_SLEEP_MS)
             continue
         now = time.ticks_ms()
-        if time.ticks_diff(now, job.started) >= job.timeout_ms:
+        if (job.timeout_ms is not None and
+                time.ticks_diff(now, job.started) >= job.timeout_ms):
             serial.send('TIMEOUT', job.kind, job.target)
             idle()
             continue
@@ -394,18 +429,18 @@ def main():
                 qr_streak += 1
             else:
                 qr_last, qr_streak = found, 1
-            if found and qr_streak >= C.QR_CONFIRM_FRAMES:
-                if not board.locked():
-                    board.accept(found)
-                    if lcd:
-                        lcd.update(board)
-                if board.code() != found:
+            if found and qr_streak >= C.QR_CONFIRM_FRAMES and not qr_pending_code:
+                if board.locked() and board.code() != found:
                     serial.send('ERR', 'QR_CONFLICT')
                     idle()
                     continue
-                serial.send('QR', found)
-                serial.send('DONE', 'QR')
-                idle()
+                qr_pending_code = found
+                qr_last_send = now
+                serial.send('QR', found, job.qr_session)
+            elif qr_pending_code and time.ticks_diff(now, qr_last_send) >= C.ACK_TIMEOUT_MS:
+                qr_last_send = now
+                serial.send('QR', qr_pending_code, job.qr_session)
+            if qr_pending_code:
                 continue
 
         elif job.kind in ('AREA', 'MATERIAL_ALIGN', 'MATERIAL_PICK'):

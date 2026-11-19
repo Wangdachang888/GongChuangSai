@@ -96,7 +96,8 @@ JOB_ARRIVED_FRAMES = 4          # consecutive *fresh* observed frames
 JOB_POS_PERIOD_MS = 100         # position stream while target visible
 JOB_LOST_PERIOD_MS = 500        # rate-limited no-target notification
 JOB_TIMEOUT_MS = 20000         # per task; can be tuned for a slow turntable
-JOB_QR_TIMEOUT_MS = 12000
+# QR scanning remains active until STM32 confirms delivery or sends CANCEL.
+JOB_QR_TIMEOUT_MS = None
 JOB_IDLE_SLEEP_MS = 10
 
 # ===== 固定物料区：新流程 JOB40/41/42（实际装车需标定） =====

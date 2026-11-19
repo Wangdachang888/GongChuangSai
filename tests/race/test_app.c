@@ -45,6 +45,10 @@ void OLED_WR_Byte(uint8_t value, uint8_t command) { (void)value; (void)command; 
 uint8_t RaceVision_Init(void) { return s_link_ok; }
 uint8_t RaceVision_Healthy(void) { return s_link_ok; }
 uint8_t RaceVision_BeginScan(void) { s_scans++; return s_link_ok; }
+uint8_t RaceVision_BeginScanSession(uint32_t session)
+{ (void)session; s_scans++; return s_link_ok; }
+uint8_t RaceVision_AckQr(uint32_t session)
+{ (void)session; return s_link_ok; }
 uint8_t RaceVision_ScanFailed(void) { return s_scan_failed; }
 void RaceVision_EndScan(void) { s_qr = 0U; }
 uint8_t RaceVision_Poll(char code[RACE_TASK_CODE_SIZE])
@@ -196,12 +200,19 @@ int main(void)
         s_chassis.theta_pos = race->target_yaw;
         tick(race->actions[0].hold_ms + 2U);
     }
+    {
+        const RaceFsm *race = AppRace_Status();
+        s_chassis.x_pos = race->target_x;
+        s_chassis.y_pos = race->target_y;
+        s_chassis.theta_pos = race->target_yaw;
+        tick(race->actions[1].hold_ms + 2U);
+    }
     s_scan_failed = 1U;
     tick(1U);
     assert(AppRace_Status()->error == RACE_ERROR_SCAN_TIMEOUT &&
            !AppRace_ControlTick());
     start();
-    while (AppRace_Status()->action_index < 4U) {
+    while (AppRace_Status()->state == RACE_RUNNING) {
         uint8_t index = AppRace_Status()->action_index;
         const RaceFsm *race = AppRace_Status();
         s_chassis.x_pos = race->target_x;
@@ -209,18 +220,10 @@ int main(void)
         s_chassis.theta_pos = race->target_yaw;
         if (race->actions[index].scan_start != 0U) s_qr = 1U;
         tick(race->actions[index].hold_ms + 2U);
-        assert(AppRace_Status()->action_index == index + 1U);
+        assert(AppRace_Status()->action_index > index ||
+               AppRace_Status()->state == RACE_DONE);
     }
-    while (AppRace_Status()->action_index < 7U) {
-        uint8_t index = AppRace_Status()->action_index;
-        const RaceFsm *race = AppRace_Status();
-        s_chassis.x_pos = race->target_x;
-        s_chassis.y_pos = race->target_y;
-        s_chassis.theta_pos = race->target_yaw;
-        tick(race->actions[index].hold_ms + 2U);
-        assert(AppRace_Status()->action_index == index + 1U);
-    }
-    assert(s_scans == 1U && s_position_calls == 5U && s_chassis.mode == 0U);
+    assert(s_scans == 1U && s_position_calls == 3U && s_chassis.mode == 0U);
     assert(AppRace_Status()->state == RACE_DONE && !AppRace_ControlTick());
     assert(strcmp(AppRace_Status()->task_code, "452+321+254+312") == 0);
     puts("PASS: boot-held/warmup keys, zone select, one-shot start/abort, PID transition ownership, stall/IMU/link stops, scan completion");

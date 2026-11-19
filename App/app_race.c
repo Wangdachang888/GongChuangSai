@@ -193,10 +193,14 @@ void AppRace_Poll(void)
         Race_Fail(&s_race, RACE_ERROR_LINK);
     }
     if (RaceVision_Poll(code) && Race_SubmitQr(&s_race, s_race.scan_session, code)) {
-        if (!RaceTaskPlan_Build(&s_plan,
-                                (const uint8_t (*)[3])s_race.colors,
-                                (const uint8_t (*)[3])s_race.positions) ||
-            !RaceTaskPlan_Start(&s_plan)) {
+        /* The code is validated and copied before acknowledging it.  OpenMV
+         * remains in the QR job until this confirmation is queued. */
+        if (!RaceVision_AckQr(s_race.scan_session)) {
+            Race_Fail(&s_race, RACE_ERROR_LINK);
+        } else if (!RaceTaskPlan_Build(&s_plan,
+                                       (const uint8_t (*)[3])s_race.colors,
+                                       (const uint8_t (*)[3])s_race.positions) ||
+                   !RaceTaskPlan_Start(&s_plan)) {
             Race_Fail(&s_race, RACE_ERROR_CONFIG);
         }
     }
@@ -244,7 +248,14 @@ void AppRace_Poll(void)
         start_direct_pick(now, 0U);
  #else
         if (s_race.state == RACE_READY) {
+#if (RACE_QR_FIELD_FRAME_CONFIRMED == 0U)
+            /* Absolute field X needs a measured start pose/orientation before
+             * it may command the chassis.  Keep the FSM host-testable, but
+             * refuse to launch an unverified real route. */
+            Race_Fail(&s_race, RACE_ERROR_CONFIG);
+#else
             (void)Race_StartQrRoute(&s_race, &current, now);
+#endif
         }
  #endif
     }
@@ -278,9 +289,13 @@ void AppRace_Poll(void)
             s_chassis->body_frame = 0U;
             Mecanum_SetPositionMode(s_chassis, s_race.target_x, s_race.target_y, s_race.target_yaw);
         }
+        if (action->scan_leg != 0U)
+            Mecanum_SetSpeedLimit(s_chassis, RACE_QR_SCAN_SPEED_MPS, RACE_TURN_SPEED_RADPS);
+        else
+            Mecanum_SetSpeedLimit(s_chassis, RACE_MOVE_SPEED_MPS, RACE_TURN_SPEED_RADPS);
         __set_PRIMASK(saved_irq);
         if ((action->kind == RACE_ACTION_SCAN || action->scan_start != 0U) &&
-            !RaceVision_BeginScan()) {
+            !RaceVision_BeginScanSession(s_race.scan_session)) {
             Race_Fail(&s_race, RACE_ERROR_LINK);
         }
     }

@@ -5,6 +5,27 @@
 #define RACE_FIELD_SIZE_M           2.400f
 #define RACE_START_CENTER_M         0.150f
 #define RACE_QR_FROM_BOTTOM_M       1.200f
+#ifndef RACE_INITIAL_OFFSET_M
+#define RACE_INITIAL_OFFSET_M        0.140f
+#endif
+#ifndef RACE_QR_SCAN_ENTRY_X_M
+#define RACE_QR_SCAN_ENTRY_X_M       1.000f
+#endif
+#ifndef RACE_QR_SCAN_EXIT_X_M
+#define RACE_QR_SCAN_EXIT_X_M        1.400f
+#endif
+#ifndef RACE_QR_SCAN_SPEED_MPS
+#define RACE_QR_SCAN_SPEED_MPS       0.100f
+#endif
+/* The field-to-odometry transform and the rotation envelope require a real
+ * venue check.  Keep the reverse scan behind an explicit build-time gate. */
+#ifndef RACE_QR_ROTATION_SAFE
+#define RACE_QR_ROTATION_SAFE        0U
+#endif
+#ifndef RACE_QR_FIELD_FRAME_CONFIRMED
+#define RACE_QR_FIELD_FRAME_CONFIRMED 0U
+#endif
+#define RACE_QR_TURN_YAW_RAD         3.14159265358979323846f
 #define RACE_CENTER_FROM_WALL_M     0.275f
 #define RACE_MATERIAL_APPROACH_X_M  2.000f
 #define RACE_MATERIAL_CORRIDOR_Y_M  0.550f

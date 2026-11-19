@@ -45,6 +45,8 @@ typedef struct {
     /* Start the QR job when this action is entered.  The action itself keeps
      * its normal MOVE/TURN execution and is not replaced by a scan state. */
     uint8_t scan_start;
+    /* 1: forward 1000->1400 scan, 2: reverse 1400->1000 scan. */
+    uint8_t scan_leg;
 } RaceAction;
 
 typedef struct {
@@ -56,6 +58,9 @@ typedef struct {
     uint8_t holding;
     uint8_t qr_valid;
     uint8_t scan_active;
+    uint8_t scan_attempt;
+    uint8_t candidate_zone;
+    uint8_t zone_confirmed;
     uint32_t entered_ms;
     uint32_t hold_since_ms;
     uint32_t scan_session;
@@ -76,6 +81,8 @@ void Race_Tick(RaceFsm *race, const RaceFeedback *feedback, uint32_t now);
 void Race_Abort(RaceFsm *race);
 void Race_Fail(RaceFsm *race, RaceError error);
 uint8_t Race_SubmitQr(RaceFsm *race, uint32_t session, const char *code);
+uint8_t Race_QrCandidateZone(const RaceFsm *race);
+uint8_t Race_QrZoneConfirmed(const RaceFsm *race);
 uint8_t Race_ParseTask(const char *code, uint8_t colors[2][3], uint8_t positions[2][3]);
 
 #endif

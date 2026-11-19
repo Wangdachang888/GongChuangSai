@@ -104,6 +104,7 @@ typedef struct {
     uint32_t last_request_ms;
     uint32_t last_probe_ms;
     uint8_t job_code;
+    uint16_t qr_session;
     VisionPhase phase;
     VisionResult result;
     VisionPosition pos;
@@ -133,6 +134,7 @@ void Vision_Poll(VisionContext *vision, uint32_t now_ms);
 int Vision_SendBody(VisionContext *vision, const char *body);
 int Vision_SendRaw(VisionContext *vision, const uint8_t *data, size_t length);
 int Vision_StartJob(VisionContext *vision, unsigned code, uint32_t now_ms);
+int Vision_StartQrJob(VisionContext *vision, uint32_t session, uint32_t now_ms);
 int Vision_StartJobTol(VisionContext *vision, unsigned code,
                        unsigned tolerance_x_px, unsigned tolerance_y_px,
                        uint32_t now_ms);
@@ -164,6 +166,8 @@ void Vision_RingFail(VisionContext *vision, const char *reason);
 /* Compatibility adapters used by the existing QR route. */
 uint8_t RaceVision_Init(void);
 uint8_t RaceVision_BeginScan(void);
+uint8_t RaceVision_BeginScanSession(uint32_t session);
+uint8_t RaceVision_AckQr(uint32_t session);
 uint8_t RaceVision_Poll(char code[VISION_TASK_CODE_SIZE]);
 uint8_t RaceVision_Healthy(void);
 uint8_t RaceVision_ScanFailed(void);
