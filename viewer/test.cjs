@@ -38,7 +38,7 @@ const rotating=makeRow(0,0,0,1);rotating[15]=0;near(env.actual(rotating).omega,1
 const missing=makeRow(0,.4);missing[29]=NaN;assert(Number.isNaN(env.actual(missing).vx));
 const mapped=makeRow(0,.4,.1,.2);mapped[35]=101;mapped[36]=102;mapped[37]=103;
 assert.equal(env.value(mapped,'flt'),mapped[27]);assert.equal(env.value(mapped,'frt'),101);assert.equal(env.value(mapped,'rlt'),102);assert.equal(env.value(mapped,'rrt'),103);
-const csv=fs.readFileSync('log0_kart.csv','utf8');env.load(csv,'log0_kart.csv');assert.equal(env.S.rows.length,2216);near(env.duration(),111.182);near(env.S.medianDt,.05);
+const csv=fs.readFileSync(fs.existsSync('log0_kart.csv')?'log0_kart.csv':'field_assets/logs/log0_kart.csv','utf8');env.load(csv,'log0_kart.csv');assert.equal(env.S.rows.length,2216);near(env.duration(),111.182);near(env.S.medianDt,.05);
 assert(el('notice').textContent.includes('角速度通道全为 0'));assert(env.S.samples.some(s=>Math.abs(s.vy)>.05));assert(env.S.samples.some(s=>Math.abs(s.omegaDeg)>10));
 const saved=env.S.rows;env.load('invalid','bad.csv');assert.equal(env.S.rows,saved);
 env.load([makeRow(100),makeRow(100)].map(r=>r.join(',')).join('\n'),'reset.csv');assert.equal(env.S.rows,saved);
@@ -77,3 +77,28 @@ const burst='timestamp_ms,fl_target,fl_actual,fl_output,fr_target,fr_actual,fr_o
 env.loadPidBurst(burst,'burst.csv');assert(env.S.pidBurst);assert(el('pid-burst-status').textContent.includes('burst.csv'));assert(el('pid-burst-metrics').innerHTML.includes('FL 左前轮'));
 const rawBurst='#BTLOG,PID_BEGIN,timestamp_ms,fl_target,fl_actual\n#BTLOG,PID,0,20,0\n#BTLOG,PID,10,20,20\n#BTLOG,PID_END';const rawBurstData=env.parsePidBurstCsv(rawBurst);assert.equal(rawBurstData.rows.length,2);assert.equal(rawBurstData.fields.fl_actual,2);
 console.log('PASS: firmware mapping; 7 signed kinematic cases; real 2216-frame log; zero angular placeholder; timestamp gaps/wrap/reset; missing values; wheel geometry/solo; map zoom; wave scaling/window statistics; all tabs; playback rates/pause/seek/end; remapping; v3/v4 parity.');
+
+// The same 20-second data must survive arbitrary BLE notification boundaries.
+env.pidWireSelfTest();
+assert.equal(vm.runInContext('pidStream.live.length',env),4000);
+assert.equal(vm.runInContext('pidStream.stored.length',env),2000);
+assert.equal(vm.runInContext('pidStream.complete',env),true);
+assert.equal(env.S.pidBurst.data.rows.length,2000);
+near(env.S.pidBurst.data.rows[1999][0],20000);
+const wireLines=[],wireDecoder=env.createPidWireDecoder(text=>wireLines.push(text));
+if(fs.existsSync('tmp/pid_wire_test.bin')){
+  const wire=fs.readFileSync('tmp/pid_wire_test.bin');
+  for(let i=0;i<wire.length;i+=7)wireDecoder.feed(wire.subarray(i,i+7));
+  const data=env.parsePidBurstCsv(wireLines.join(''));
+  assert.equal(data.rows.length,2000);
+  near(data.rows[0][1],123.4);near(data.rows[0][2],-23.4);
+  near(data.rows[1999][0]-data.rows[0][0],19990);
+  // A corrupt frame must not contaminate the following ASCII or binary frame.
+  const start=wire.indexOf(Buffer.from([165,90,1,2]));
+  const good=wire.subarray(start,start+36),bad=Buffer.from(good);bad[15]^=1;
+  const out=[],d=env.createPidWireDecoder(t=>out.push(t));
+  d.feed(Buffer.concat([bad,Buffer.from('#BTLOG,STATE,READY\n'),good]));
+  assert(out.some(t=>t.includes('STATE,READY')));
+  assert.equal(out.filter(t=>t.startsWith('#BTLOG,PID,')).length,1);
+}
+console.log('PASS: 20-second PID protocol self-test, four-wheel plots, fragmented firmware binary/CSV parity, CRC recovery.');

@@ -110,6 +110,26 @@ static void update_ulog_snapshot(void)
             snapshot.phase = ((snapshot.action_index & 1U) == 0U) ? 1U : 2U;
     }
 #endif
+    {
+        uint8_t parked;
+        uint32_t irq_state=__get_PRIMASK();
+        __disable_irq();
+        parked = (fabsf(motor_left_front.target_cmd) < 0.1f &&
+                  fabsf(motor_right_front.target_cmd) < 0.1f &&
+                  fabsf(motor_left_back.target_cmd) < 0.1f &&
+                  fabsf(motor_right_back.target_cmd) < 0.1f &&
+                  fabsf(motor_left_front.actual_speed) < 10.0f &&
+                  fabsf(motor_right_front.actual_speed) < 10.0f &&
+                  fabsf(motor_left_back.actual_speed) < 10.0f &&
+                  fabsf(motor_right_back.actual_speed) < 10.0f);
+        __set_PRIMASK(irq_state);
+#if APP_RUN_MODE == APP_MODE_RACE
+        if (AppRace_Status()->state == RACE_RUNNING) parked = 0u;
+#else
+        if (Square_GetState() == SQUARE_RUNNING) parked = 0u;
+#endif
+        ULog_PidBurstSetParked(parked);
+    }
     ULog_SetAppSnapshot(&snapshot);
 }
 static void init_motors_and_chassis(void)
@@ -247,11 +267,14 @@ uint8_t AppRuntime_ControlTick(void)
 
 void AppRuntime_MotorTick(void)
 {
+#if (ULOG_ENABLE != 0) && (ULOG_PID_BURST_ENABLE != 0)
     ULogPidSample sample;
+#endif
     Motor_Update(&motor_left_front, 0.001f);
     Motor_Update(&motor_right_front, 0.001f);
     Motor_Update(&motor_left_back, 0.001f);
     Motor_Update(&motor_right_back, 0.001f);
+#if (ULOG_ENABLE != 0) && (ULOG_PID_BURST_ENABLE != 0)
     if (ULog_PidBurstActive()) {
         sample.timestamp_ms = HAL_GetTick();
         sample.fl_target = motor_left_front.target_speed;
@@ -268,6 +291,7 @@ void AppRuntime_MotorTick(void)
         sample.rr_output = motor_right_back.output;
         ULog_PidBurstSampleIsr(&sample);
     }
+#endif
 }
 
 void AppRuntime_ChassisTick(void)

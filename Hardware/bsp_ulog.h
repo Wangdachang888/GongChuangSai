@@ -8,7 +8,7 @@
  * Wiring:
  *   MCU PD5 (USART2_TX) -> BT10/UART module RX
  *   MCU PD6 (USART2_RX) -> module TX (optional)
- *   GND common, 115200 8N1
+ *   GND common, 230400 8N1
  */
 #ifndef __BSP_ULOG_H
 #define __BSP_ULOG_H
@@ -30,15 +30,18 @@ extern "C" {
 #define ULOG_PERIOD_MS        50u
 #endif
 
-/* High-rate inner-loop capture is an explicit diagnostic feature.  It is
- * disabled by default so a competition build cannot consume RAM or UART
- * bandwidth unexpectedly. */
+/* Passive diagnostics: runtime OFF at boot; compile out to reclaim 56KB. */
 #ifndef ULOG_PID_BURST_ENABLE
-#define ULOG_PID_BURST_ENABLE  0
+#define ULOG_PID_BURST_ENABLE  1
 #endif
 
 #ifndef ULOG_PID_BURST_CAPACITY
-#define ULOG_PID_BURST_CAPACITY 256u
+#define ULOG_PID_BURST_CAPACITY 2000u /* 100Hz * 20s */
+#endif
+
+/* BT10 must be configured to this same UART rate. */
+#ifndef ULOG_BAUD_RATE
+#define ULOG_BAUD_RATE 230400u
 #endif
 
 /* Give the external UART -> TF logger time to initialize.
@@ -91,11 +94,16 @@ void ULog_Poll(const MecanumChassis_t *chassis);
 void ULog_SetAppSnapshot(const ULogAppSnapshot *snapshot);
 void ULog_Stop(void);            /* Stop UART stream only, NOT a TF file-close command */
 
-/* Explicit diagnostic capture of the 1 kHz motor inner loop.  Start/stop are
- * expected to be used only in a non-competition test build. */
+/* Explicit passive diagnostics. Motor scheduler remains 1ms; existing speed
+ * PID updates every 5ms. Start is parked-only, upload is parked-only. */
 void ULog_PidBurstStart(void);
 void ULog_PidBurstStop(void);
 uint8_t ULog_PidBurstActive(void);
+void ULog_PidBurstSetParked(uint8_t parked);
+void ULog_RxCpltCallback(void);
+void ULog_ErrorCallback(void);
+extern volatile uint32_t g_ulog_pid_realtime_dropped;
+extern volatile uint32_t g_ulog_pid_quantized_clipped;
 void ULog_PidBurstSampleIsr(const ULogPidSample *sample);
 void ULog_PidBurstPoll(void);
 extern volatile uint32_t g_ulog_pid_burst_overrun;

@@ -24,6 +24,8 @@ int ulog_test_snprintf(char *buf, size_t size, const char *format, ...)
 static RaceFsm race;
 static RaceTaskPlan plan;
 static char last[800];
+static FILE *capture;
+static uint32_t live_frames, stored_frames;
 uint32_t HAL_GetTick(void) { return now; }
 float app_imu_yaw_deg(void) { return 0; }
 uint8_t AppRace_LogFinished(void) { return finished; }
@@ -62,10 +64,36 @@ void HAL_GPIO_Init(void *port, GPIO_InitTypeDef *config) { (void)port; (void)con
 HAL_StatusTypeDef HAL_UART_Init(UART_HandleTypeDef *uart) { (void)uart; return init_error; }
 HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *uart, uint8_t *data, uint16_t len, uint32_t timeout)
 {
-    assert(uart->Init.BaudRate == 115200 && timeout >= 30 && len < sizeof(last));
+    assert(uart->Init.BaudRate == ULOG_BAUD_RATE && timeout >= 30 && len < sizeof(last));
     memcpy(last, data, len); last[len] = 0; writes++;
+    if (capture) {
+        assert(fwrite(data,1,len,capture)==len);
+        if (len==36 && data[0]==0xa5 && data[1]==0x5a) {
+            if (data[3]==1) live_frames++;
+            if (data[3]==2) stored_frames++;
+        }
+    }
     return tx_error;
 }
+#if defined(ULOG_ASYNC_TEST)
+static uint8_t *pending_data;
+static uint16_t pending_len;
+HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *uart, uint8_t *data, uint16_t len)
+{
+    (void)uart;
+    assert(!pending_len);
+    pending_data=data; pending_len=len;
+    return HAL_OK;
+}
+static void complete_tx(void)
+{
+    if (pending_len) {
+        assert(fwrite(pending_data,1,pending_len,capture)==pending_len);
+        pending_len=0;
+        ULog_TxCpltCallback();
+    }
+}
+#endif
 int main(int argc, char **argv)
 {
     Motor_t motors[4] = {{0}};
@@ -84,6 +112,74 @@ int main(int argc, char **argv)
 #endif
     if (init_error) { ULog_Poll(&c); ULog_Printf("x"); assert(!writes && !ULog_IsRecording()); return 0; }
     assert(ULog_IsRecording());
+#if defined(ULOG_ASYNC_TEST)
+    if (!strcmp(scenario,"async")) {
+        ULogPidSample sample={0};
+        uint32_t i, before;
+        now=ULOG_STARTUP_WAIT_MS;
+        capture=fopen("tmp/pid_async_wire.bin","wb"); assert(capture);
+        ULog_PidBurstSetParked(1);
+        ULog_PidBurstStart();
+        before=g_ulog_tx_error_count;
+        ULog_PidBurstSetParked(0);
+        for(i=1;i<=20000;i++){
+            sample.timestamp_ms=++now;
+            sample.fl_target=100.0f; sample.fl_actual=-50.0f;
+            ULog_PidBurstSampleIsr(&sample);
+            ULog_PidBurstPoll(); /* deliberately no TX completion for 20s */
+        }
+        assert(!ULog_PidBurstActive());
+        assert(g_ulog_pid_realtime_dropped>0);
+        assert(g_ulog_tx_error_count==before); /* no queue-full error flood */
+        ULog_Stop();
+        ULog_PidBurstSetParked(1);
+        ULog_PidBurstPoll(); now+=500;
+        for(i=0;i<5000;i++){ complete_tx(); ULog_PidBurstPoll(); }
+        while(pending_len)complete_tx();
+        assert(!ULog_IsRecording());
+        assert(g_ulog_tx_error_count==before);
+        fclose(capture); capture=0;
+        puts("PASS async queue saturation: 20s RAM retained, live drops visible, parked upload retries");
+        return 0;
+    }
+#endif
+    if (!strncmp(scenario,"burst",5)) {
+        ULogPidSample sample={0};
+        uint32_t i;
+        uint32_t ticks=!strcmp(scenario,"burst_short")?1000u:20000u;
+        now=ULOG_STARTUP_WAIT_MS;
+        ULog_PidBurstStart(); assert(!ULog_PidBurstActive()); /* parked gate */
+        ULog_PidBurstSetParked(1);
+        capture=fopen("tmp/pid_wire_test.bin","wb"); assert(capture);
+        ULog_PidBurstStart(); assert(ULog_PidBurstActive());
+        ULog_PidBurstStart(); /* rearm must not reset capture */
+        ULog_PidBurstSetParked(0);
+        sample.fl_target=123.4f; sample.fl_actual=-23.4f; sample.fl_output=1000.0f;
+        sample.fr_target=-123.4f; sample.rr_output=-1000.0f;
+        for (i=1;i<=ticks;i++) {
+            now=ULOG_STARTUP_WAIT_MS+i; sample.timestamp_ms=now;
+            ULog_PidBurstSampleIsr(&sample);
+            if (!strcmp(scenario,"burst_live")) ULog_PidBurstPoll();
+        }
+        if (ticks<20000u) { assert(ULog_PidBurstActive()); ULog_PidBurstStop(); }
+        assert(!ULog_PidBurstActive());
+        assert(!g_ulog_pid_burst_overrun);
+        for (i=0;i<20;i++) { now++; ULog_PidBurstPoll(); }
+        assert(stored_frames==0); /* no upload while running */
+        ULog_Stop(); assert(!ULog_IsRecording());
+        ULog_PidBurstSetParked(1);
+        ULog_PidBurstPoll();
+        now+=499; ULog_PidBurstPoll(); assert(stored_frames==0);
+        now++;
+        for (i=0;i<2010;i++) ULog_PidBurstPoll();
+        assert(stored_frames==ticks/10u);
+        assert(strstr(last,"#BTLOG,END"));
+        if (!strcmp(scenario,"burst_live")) assert(live_frames==4000);
+        else { assert(live_frames==1); assert(g_ulog_pid_realtime_dropped==ticks/5u-1u); }
+        fclose(capture); capture=0;
+        printf("PASS 20s burst / parked gate / retained upload: %s\n",scenario);
+        return 0;
+    }
     ULog_Poll(&c); assert(!writes);
     if (!strcmp(scenario,"early")) { finished=1; square=SQUARE_DONE; }
     sync_snapshot();

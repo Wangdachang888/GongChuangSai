@@ -87,6 +87,7 @@ function parsePidBurstCsv(text) {
     else if(line[0]==='#'||line.startsWith('//')){comments.push(line);continue;}
     const parts=line.split(',').map(x=>x.trim());
     if(!header){if(parts.some(x=>/[a-zA-Z_]/.test(x))){header=parts;continue;}skipped++;continue;}
+    if(parts.length!==header.length){skipped++;continue;}
     const row=header.map((_,i)=>{const x=parts[i]||'';return !x||/^(nan|null)$/i.test(x)?NaN:Number(x);});
     if(row.some(finite))rows.push(row);else skipped++;
   }
@@ -199,6 +200,90 @@ async function connectDeepSeek() {
   const ai=$('pid-ai-advice'); if(ai) ai.innerHTML=`<div class="ai-summary"><strong>本地 AI 辅助建议</strong><span>置信度 ${advice.confidence}% · 仅供人工评估</span></div><p>${advice.ranked[0]?`推荐先验证：<b>${advice.ranked[0].name}</b>（评分 ${advice.ranked[0].score}/100）<br>Kp ${fmt(advice.ranked[0].kp,3)} · Ki ${fmt(advice.ranked[0].ki,3)} · Kd ${fmt(advice.ranked[0].kd,3)}<br><small>${advice.ranked[0].reason}</small>`:'暂无可评分候选'}</p><ol>${advice.ranked.map(c=>`<li><b>${c.name}</b>：${c.score}/100 — Kp ${fmt(c.kp,3)} / Ki ${fmt(c.ki,3)} / Kd ${fmt(c.kd,3)}</li>`).join('')}</ol>${advice.warnings.map(w=>`<p class="warning">${w}</p>`).join('')}<p class="note">建议按低速直行、横移、旋转分别采集 Burst，每次只改一组参数并保留回滚值。网页不会自动写入车辆。</p>`;
 }
 function loadPidBurst(text,name='pid_burst.csv') {const data=parsePidBurstCsv(text),rate=Number($('pid-burst-rate')?.value)||100,sat=Number($('pid-burst-sat')?.value)||0,tol=Number($('pid-burst-tol')?.value)||.02;S.pidBurst={data,name,analysis:analyzePidBurst(data,{rate,satLimit:sat,tolerance:tol})};renderPidBurst();notify(`已加载独立 PID Burst：${name}。它不会改变 ULog43 任务日志。`);}
+
+const PID_HEADER='timestamp_ms,fl_target,fl_actual,fl_output,fr_target,fr_actual,fr_output,rl_target,rl_actual,rl_output,rr_target,rr_actual,rr_output';
+const pidStream={live:[],stored:[],lastSeq:null,gaps:0,crc:0,expected:null,stats:'',lastDraw:0,complete:false};
+function pidCrc(bytes){let crc=65535;for(const b of bytes){crc^=b<<8;for(let i=0;i<8;i++)crc=((crc&32768)?(crc<<1)^0x1021:crc<<1)&65535;}return crc;}
+function createPidWireDecoder(onText){
+  let pending=[],resync=false;
+  return {feed(bytes){pending.push(...bytes);
+    while(pending.length){
+      if(resync){let at=-1;for(let i=0;i<pending.length;i++){if((pending[i]===165&&pending[i+1]===90)||String.fromCharCode(...pending.slice(i,i+7))==='#BTLOG,'){at=i;break;}}if(at<0){pending=pending.slice(-6);return;}pending.splice(0,at);resync=false;}
+      if(pending[0]===165){
+        if(pending.length<2)return;
+        if(pending[1]!==90){pending.shift();continue;}
+        if(pending.length<36)return;
+        const f=pending.slice(0,36),crc=pidCrc(f.slice(2,34));
+        if(f[2]!==1||![1,2].includes(f[3])||crc!==(f[34]|f[35]<<8)){pidStream.crc++;pending.shift();resync=true;continue;}
+        pending.splice(0,36);
+        const seq=f[4]|f[5]<<8,ms=(f[6]+f[7]*256+f[8]*65536+f[9]*16777216)>>>0,row=[ms];
+        for(let i=0;i<12;i++){let v=f[10+i*2]|f[11+i*2]<<8;if(v&32768)v-=65536;row.push(v/10);}
+        onText((f[3]===1?'#BTLOG,PID_LIVE,'+seq+',':'#BTLOG,PID,')+row.join(',')+'\n');
+        continue;
+      }
+      const nl=pending.indexOf(10),magic=pending.indexOf(165);
+      if(magic>=0&&(nl<0||magic<nl)){pending.splice(0,magic);continue;}
+      if(nl<0){if(pending.length>4096)pending=[];return;}
+      onText(String.fromCharCode(...pending.splice(0,nl+1)));
+    }
+  },reset(){pending=[];resync=false;}};
+}
+function resetPidStream(){Object.assign(pidStream,{live:[],stored:[],lastSeq:null,gaps:0,crc:0,expected:null,stats:'',lastDraw:0,complete:false});}
+function pidCsv(){return PID_HEADER+'\n'+pidStream.stored.map(r=>r.join(',')).join('\n')+'\n'+(pidStream.stats?pidStream.stats+'\n':'');}
+function receivePidLine(line){
+  if(line.startsWith('#BTLOG,PID_ARMED')){resetPidStream();$('pid-live-status').textContent='已开始：200 Hz 实时 / 100 Hz 缓存，最多 20 秒；停止后等待停车上传。';return true;}
+  if(line.startsWith('#BTLOG,PID_REJECTED')){$('pid-live-status').textContent='启动被拒绝：请停车、等待开机至少 2 秒，并等待上次上传完成。';return true;}
+  if(line.startsWith('#BTLOG,PID_BEGIN')){pidStream.stored=[];pidStream.complete=false;return true;}
+  const live=line.startsWith('#BTLOG,PID_LIVE,'),stored=line.startsWith('#BTLOG,PID,');
+  if(live||stored){
+    const a=line.split(',').slice(2).map(Number);let row=a;
+    if(live){const seq=a.shift();row=a;if(pidStream.lastSeq!==null)pidStream.gaps+=Math.max(0,((seq-pidStream.lastSeq)&65535)-1);pidStream.lastSeq=seq;}
+    if(row.length!==13||!row.every(finite))return true;
+    const dest=live?pidStream.live:pidStream.stored;dest.push(row);if(dest.length>(live?4000:2000))dest.shift();
+    const now=performance.now();if(now-pidStream.lastDraw>=100){pidStream.lastDraw=now;renderPidStream();}
+    return true;
+  }
+  if(line.startsWith('#BTLOG,PID_STATS,')){pidStream.stats=line;const m=line.match(/count=(\d+)/);pidStream.expected=m?Number(m[1]):null;return true;}
+  if(line==='#BTLOG,PID_END'){
+    pidStream.complete=pidStream.expected!==null&&pidStream.expected===pidStream.stored.length;
+    if(pidStream.stored.length)loadPidBurst(pidCsv(),'停车上传_PID_100Hz.csv');
+    renderPidStream();return true;
+  }
+  return false;
+}
+function renderPidStream(){
+  const stored=pidStream.stored,rows=stored.length?stored:pidStream.live,wheel=$('pid-live-wheel').value||'fl',wi=WHEELS.indexOf(wheel),base=1+Math.max(0,wi)*3;
+  $('pid-live-status').textContent='实时 '+pidStream.live.length+' 帧 · 实时缺口 '+pidStream.gaps+' · CRC 错误 '+pidStream.crc+' · 停车上传 '+stored.length+'/2000 帧 / 应收 '+pidStream.expected+' · '+(pidStream.complete?'上传完成':'采集/等待上传，断线时可能不完整')+' · '+pidStream.stats;
+  for(const [id,cols,colors,title] of [['pid-live-speed',[base,base+1],['#fbbf24','#38bdf8'],'目标速度（黄） / 实测速度（蓝），pulse/s'],['pid-live-output',[base+2],['#c084fc'],'实际控制输出（含前馈、PID、kick 与限幅）']]){
+    const ctx=canvasContext(id);if(!ctx)continue;const {g,w,h}=ctx;
+    g.fillStyle='#a9bfd4';g.font='12px sans-serif';g.fillText(title,12,18);if(rows.length<2)continue;
+    const t0=rows[0][0],span=Math.max(1,rows.at(-1)[0]-t0),values=rows.flatMap(r=>cols.map(c=>r[c])),lo=Math.min(0,...values),hi=Math.max(1,...values),range=Math.max(1,hi-lo);
+    g.fillText(fmt(lo,1)+' … '+fmt(hi,1)+' · '+fmt(span/1000,2)+' s',12,h-6);
+    cols.forEach((col,k)=>{g.strokeStyle=colors[k];g.lineWidth=1.5;g.beginPath();rows.forEach((r,i)=>{const x=40+(r[0]-t0)/span*(w-54),y=30+(hi-r[col])/range*(h-60);if(i===0||r[0]-rows[i-1][0]>30)g.moveTo(x,y);else g.lineTo(x,y);});g.stroke();});
+  }
+}
+function downloadPidStream(){if(!pidStream.stored.length){notify('尚未收到停车上传的 PID 数据。',true);return;}const a=document.createElement('a'),url=URL.createObjectURL(new Blob([pidCsv()],{type:'text/csv;charset=utf-8'}));a.href=url;a.download='pid_100Hz_'+Date.now()+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+async function sendPidCommand(command){
+  if(!bt10.writeCharacteristic){notify('请先直接连接 BT10；电脑日志源只接收数据。',true);return;}
+  try{await bt10.writeCharacteristic.writeValueWithResponse(new TextEncoder().encode('@PID '+command+'\n'));$('pid-live-status').textContent='命令已发送，等待车辆确认；不会让车辆运动或修改 PID。';}catch(e){notify('PID 命令发送失败：'+e.message,true);}
+}
+function pidWireSelfTest(){
+  if(bt10.device||realtime.socket){notify('请断开实时连接后运行模拟自测，避免混入实车数据。',true);return;}
+  resetPidStream();
+  const decoder=createPidWireDecoder(text=>text.trim().split(/\r?\n/).forEach(receivePidLine));
+  const encode=(kind,seq,ms)=>{
+    const f=new Uint8Array(36),v=new DataView(f.buffer);f[0]=165;f[1]=90;f[2]=1;f[3]=kind;v.setUint16(4,seq,true);v.setUint32(6,ms,true);
+    for(let w=0;w<4;w++){const target=100+20*Math.sin(ms/800),actual=target*(1-Math.exp(-ms/150));[target,actual,actual*2].forEach((x,i)=>v.setInt16(10+(w*3+i)*2,Math.round(x*10),true));}
+    v.setUint16(34,pidCrc(f.slice(2,34)),true);return f;
+  };
+  receivePidLine('#BTLOG,PID_ARMED');
+  for(let i=0;i<4000;i++){const f=encode(1,i+1,(i+1)*5);decoder.feed(f.slice(0,7));decoder.feed(f.slice(7,19));decoder.feed(f.slice(19));}
+  receivePidLine('#BTLOG,PID_BEGIN,'+PID_HEADER);
+  for(let i=0;i<2000;i++)decoder.feed(encode(2,i,(i+1)*10));
+  receivePidLine('#BTLOG,PID_STATS,count=2000,live_drop=0,clipped=0,overrun=0');
+  receivePidLine('#BTLOG,PID_END');
+  notify('网页协议自测完成：4000 帧实时 / 2000 帧停车上传，模拟 20 秒；未经过真实 BT10。');
+}
 function namedChannels(header) {
   const out={...DEFAULT_CHANNELS},norm=s=>String(s||'').toLowerCase().replace(/[\s()\[\]°/.-]+/g,'_');
   const aliases={time:['time','timestamp','time_ms','ms'],phase:['phase','state_phase'],x:['x','x_pos','position_x'],y:['y','y_pos','position_y'],yaw:['yaw','theta','heading'],imu:['imu_yaw'],xt:['x_target','target_x'],yt:['y_target','target_y'],yawt:['yaw_target','theta_target'],vx:['vx','vx_actual'],vy:['vy','vy_actual'],wt:['omega_target','w_target','wz_target'],wa:['omega_actual','w_actual','wz_actual'],speedTarget:['speed_target','v_target'],lateral:['lateral_error','elat'],yawError:['yaw_error','heading_error'],flt:['fl_target','wheel_fl_target'],fla:['fl_actual','wheel_fl_speed','wheel_fl_actual'],frt:['fr_target','wheel_fr_target'],fra:['fr_actual','wheel_fr_speed','wheel_fr_actual'],rlt:['rl_target','wheel_rl_target'],rla:['rl_actual','wheel_rl_speed','wheel_rl_actual'],rrt:['rr_target','wheel_rr_target'],rra:['rr_actual','wheel_rr_speed','wheel_rr_actual']};
@@ -264,12 +349,12 @@ function load(text,name='日志.csv') {
 const realtime={socket:null,buffer:'',pending:[],flushRequest:0,ended:false};
 const archive={db:null,session:null,starting:null,pending:'',flushTimer:null};
 function archiveOpen(){return new Promise((resolve,reject)=>{if(archive.db)return resolve(archive.db);const r=indexedDB.open('mecanum-log-archive',1);r.onupgradeneeded=()=>r.result.createObjectStore('logs',{keyPath:'id',autoIncrement:true});r.onsuccess=()=>{archive.db=r.result;resolve(archive.db)};r.onerror=()=>reject(r.error);});}
-async function archiveStart(){try{const db=await archiveOpen();const now=new Date();const tx=db.transaction('logs','readwrite');const rec={start:now.toISOString(),name:'BT10_'+now.toISOString().replace(/[:.]/g,'-'),text:'',frames:0,ended:false};const req=tx.objectStore('logs').add(rec);req.onsuccess=()=>{archive.session={id:req.result,rec};archive.pending='';clearInterval(archive.flushTimer);archive.flushTimer=setInterval(archiveFlush,1000);archiveRender();};}catch(_){}}
+async function archiveStart(){try{const db=await archiveOpen();const now=new Date();const tx=db.transaction('logs','readwrite');const rec={start:now.toISOString(),name:'BT10_'+now.toISOString().replace(/[:.]/g,'-'),text:'',frames:0,ended:false};const req=tx.objectStore('logs').add(rec);await new Promise((resolve,reject)=>{req.onsuccess=()=>{archive.session={id:req.result,rec};archive.pending='';clearInterval(archive.flushTimer);archive.flushTimer=setInterval(archiveFlush,1000);archiveRender();resolve();};req.onerror=()=>reject(req.error);});}catch(_){}}
 async function archiveFlush(){if(!archive.session||!archive.pending)return;const chunk=archive.pending;archive.pending='';try{const db=await archiveOpen();const tx=db.transaction('logs','readwrite');const store=tx.objectStore('logs');const rec=await new Promise((res,rej)=>{const r=store.get(archive.session.id);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});rec.text+=chunk;rec.frames=archive.session.rec.frames;store.put(rec);}catch(_){}}
 async function archiveLine(line){if(!archive.session){if(!archive.starting)archive.starting=archiveStart().finally(()=>{archive.starting=null});await archive.starting;}if(!archive.session)return;archive.pending+=line;archive.session.rec.frames+=(line.split(',').length>=43?1:0);}
 async function archiveFinish(ended){if(archive.starting)await archive.starting;await archiveFlush();if(!archive.session)return;try{const db=await archiveOpen();const tx=db.transaction('logs','readwrite');const store=tx.objectStore('logs');const rec=await new Promise((res,rej)=>{const r=store.get(archive.session.id);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});rec.ended=ended;rec.end=new Date().toISOString();store.put(rec);}catch(_){}clearInterval(archive.flushTimer);archive.session=null;archiveRender();}
 async function archiveList(){const db=await archiveOpen();return new Promise((resolve,reject)=>{const r=db.transaction('logs').objectStore('logs').getAll();r.onsuccess=()=>resolve(r.result.reverse());r.onerror=()=>reject(r.error)});}
-async function archiveRender(){const box=$('archive-list');if(!box)return;try{const list=await archiveList();if(!list.length){box.textContent='暂无日志；连接 BT10 后会自动保存。';return;}box.innerHTML=list.map(x=>`<div class="archive-item"><div class="archive-meta"><b>${x.name}</b><small>${x.start} · ${x.frames} 帧 · ${x.ended?'已完成':'未完成/断线保留'}</small></div><div class="archive-actions"><button data-archive-view="${x.id}">查看</button><button data-archive-download="${x.id}">下载</button><button data-archive-delete="${x.id}">删除</button></div></div>`).join('');box.querySelectorAll('[data-archive-view]').forEach(b=>b.onclick=()=>archiveLoad(Number(b.dataset.archiveView)));box.querySelectorAll('[data-archive-download]').forEach(b=>b.onclick=()=>archiveDownload(Number(b.dataset.archiveDownload)));box.querySelectorAll('[data-archive-delete]').forEach(b=>b.onclick=()=>archiveDelete(Number(b.dataset.archiveDelete)));}catch(_){box.textContent='浏览器不支持本地日志仓库。';}}
+async function archiveRender(){const box=$('archive-list');if(!box)return;try{const list=await archiveList();if(!list.length){box.textContent='暂无日志；连接 BT10 后会自动保存。';return;}box.innerHTML=list.map(x=>`<div class="archive-item"><div class="archive-meta"><b>${x.name}</b><small>${x.start} · ${x.frames} 帧 · ${x.ended?'已完成':'未完成/断线保留'}</small></div><div class="archive-actions"><button data-archive-view="${x.id}">查看</button><button data-archive-download="${x.id}">下载</button>${x.text.includes('#BTLOG,PID_BEGIN')?'<button data-archive-pid="'+x.id+'">PID 分析</button>':''}<button data-archive-delete="${x.id}">删除</button></div></div>`).join('');box.querySelectorAll('[data-archive-view]').forEach(b=>b.onclick=()=>archiveLoad(Number(b.dataset.archiveView)));box.querySelectorAll('[data-archive-download]').forEach(b=>b.onclick=()=>archiveDownload(Number(b.dataset.archiveDownload)));box.querySelectorAll('[data-archive-pid]').forEach(b=>b.onclick=async()=>{const rec=await archiveGet(Number(b.dataset.archivePid));if(rec){loadPidBurst(rec.text,rec.name+'_PID.csv');activateTab('pid');}});box.querySelectorAll('[data-archive-delete]').forEach(b=>b.onclick=()=>archiveDelete(Number(b.dataset.archiveDelete)));}catch(_){box.textContent='浏览器不支持本地日志仓库。';}}
 async function archiveGet(id){const db=await archiveOpen();return new Promise((resolve,reject)=>{const r=db.transaction('logs').objectStore('logs').get(id);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
 async function archiveLoad(id){const x=await archiveGet(id);if(x?.text)load(x.text,x.name+'.csv');}
 async function archiveDownload(id){const x=await archiveGet(id);if(!x)return;const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([x.text],{type:'text/csv'}));a.download=x.name+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
@@ -283,7 +368,8 @@ const BT10_NOTIFY='0000ffe1-0000-1000-8000-00805f9b34fb';
 const BT10_WRITE='0000ffe2-0000-1000-8000-00805f9b34fb';
 function btStatus(text,kind=''){ $('bt-connect').textContent=kind==='connected'?'断开 BT10':'直接连接 BT10'; $('ws-status').textContent=text; }
 function downloadBt10Log(){ if(!bt10.raw)return; const blob=new Blob([bt10.raw],{type:'text/csv;charset=utf-8'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='bt10_'+new Date().toISOString().replace(/[:.]/g,'-')+'.csv'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); }
-function bt10Notification(event){ const text=bt10.decoder.decode(event.target.value,{stream:true}); bt10.raw+=text; receiveRealtimeText(text); if(/(?:^|\r?\n)#BTLOG,END(?:,|\r?$)/m.test(bt10.raw)){ if(!bt10.ended){bt10.ended=true;downloadBt10Log();btStatus('BT10 日志已结束并已下载','connected');} } }
+function bt10DecodedText(text){bt10.raw+=text;receiveRealtimeText(text);if(text.trim()==='#BTLOG,END'&&!bt10.ended){bt10.ended=true;downloadBt10Log();btStatus('BT10 日志已结束并已下载','connected');}}
+function bt10Notification(event){const v=event.target.value;bt10.wire.feed(new Uint8Array(v.buffer,v.byteOffset,v.byteLength));}
 function bt10TestRows(){ const rows=['#BTLOG,BEGIN']; for(let i=0;i<20;i++){const t=i*100,x=i*.01,y=Math.sin(i*.2)*.1; const a=[0,1,1,0,0,t,0,0,1,0,.5,.2,.5,.2,0,0,i*.5,i*.5,0,.5385,.5385,x,y,i*.5,0,0,0,100,100,100,100,100,x,y,x,100,100,100,20,0,24,12,0]; rows.push(a.map(v=>typeof v==='number'&&v%1?v.toFixed(4):String(v)).join(','));} rows.push('#BTLOG,END'); return rows; }
 async function sendBt10SelfTest(){ if(!bt10.writeCharacteristic){btStatus('请先连接 BT10','error');return;} const button=$('bt-selftest'); button.disabled=true; try{for(const line of bt10TestRows()){await bt10.writeCharacteristic.writeValueWithResponse(new TextEncoder().encode(line+'\r\n')); await new Promise(resolve=>setTimeout(resolve,60));} btStatus('自测已发送，等待回传','connected'); notify('BT10 自测已发送；需要 UART 回传或回环才能在网页收到测试曲线。');}catch(e){btStatus('自测发送失败：'+e.message,'error');}finally{button.disabled=false;} }
 function toggleLocalSim(){
@@ -328,7 +414,7 @@ async function connectBt10(){
         break;
       }catch(error){ lastError=error; try{device.gatt?.disconnect();}catch(_){ } if(attempt===2)throw lastError; }
     }
-    bt10.device=device; bt10.characteristic=ch; bt10.writeCharacteristic=await service.getCharacteristic(BT10_WRITE); bt10.decoder=new TextDecoder(); bt10.raw=''; bt10.ended=false; resetRealtimeSession();
+    bt10.device=device; bt10.characteristic=ch; bt10.writeCharacteristic=await service.getCharacteristic(BT10_WRITE); bt10.decoder=new TextDecoder(); bt10.wire=createPidWireDecoder(bt10DecodedText); resetPidStream(); bt10.raw=''; bt10.ended=false; resetRealtimeSession();
     ch.addEventListener('characteristicvaluechanged',bt10Notification); await ch.startNotifications();
     device.addEventListener('gattserverdisconnected',()=>{if(bt10.device===device){bt10.device=null;bt10.characteristic=null;bt10.writeCharacteristic=null;$('bt-selftest').disabled=true;archiveFinish(false);btStatus('BT10 已断开，日志已保留','error');}});
     $('bt-selftest').disabled=false; btStatus('BT10 已连接，等待日志','connected'); notify('BT10 已连接，日志将实时显示并在 END 后自动下载。');
@@ -353,7 +439,7 @@ function flushRealtime() {
 }
 function receiveRealtimeText(text) {
   realtime.buffer+=text;const lines=realtime.buffer.split(/\r?\n/);realtime.buffer=lines.pop()||'';
-  for(const line of lines){const raw=line.trim();if(!raw)continue;archiveLine(raw+'\n');if(/^#BTLOG,END\b/i.test(raw)){realtime.ended=true;archiveFinish(true);realtimeStatus('已收到 END','connected');continue;}if(raw.startsWith('#')||raw.startsWith('//'))continue;
+  for(const line of lines){const raw=line.trim();if(!raw)continue;archiveLine(raw+'\n');if(receivePidLine(raw))continue;if(/^#BTLOG,END\b/i.test(raw)){realtime.ended=true;archiveFinish(true);realtimeStatus('已收到 END','connected');continue;}if(raw.startsWith('#')||raw.startsWith('//'))continue;
     try{const parsed=parse(raw+'\n');if(parsed.rows[0])queueRealtimeRow(parsed.rows[0]);}catch(_){/* Ignore partial/status lines from the collector. */}
   }
 }
@@ -760,6 +846,11 @@ function init() {
   $('wave-apply').onclick=()=>{const a=Number($('wave-start').value),b=Number($('wave-end').value);if(!finite(a)||!finite(b)||b<=a){notify('时间窗口的终点必须大于起点。',true);return;}setWindow(a,b);};
   $('apply-tolerance').onclick=()=>{const next={lateral:Number($('tol-lateral').value),yaw:Number($('tol-yaw').value),omega:Number($('tol-omega').value)};if(!Object.values(next).every(v=>finite(v)&&v>0)){notify('参考值必须大于 0。',true);return;}S.tolerances=next;drawStability();drawStrip();};
   $('pid-axis').onchange=()=>{calculatePid();drawPid();};$('pid-apply').onclick=()=>{calculatePid();drawPid();};
+  $('pid-live-start').onclick=()=>sendPidCommand('START');
+  $('pid-live-stop').onclick=()=>sendPidCommand('STOP');
+  $('pid-live-test').onclick=pidWireSelfTest;
+  $('pid-live-download').onclick=downloadPidStream;
+  $('pid-live-wheel').onchange=renderPidStream;
   $('pid-burst-file').onchange=async e=>{const file=e.target.files[0];if(file){try{loadPidBurst(await file.text(),file.name);}catch(err){notify('PID Burst 导入失败：'+err.message,true);}e.target.value='';}};
   $('pid-burst-analyze').onclick=()=>{if(!S.pidBurst){notify('请先导入 PID Burst CSV。',true);return;}try{const data=S.pidBurst.data;S.pidBurst.analysis=analyzePidBurst(data,{rate:Number($('pid-burst-rate').value),satLimit:Number($('pid-burst-sat').value),tolerance:Number($('pid-burst-tol').value)});renderPidBurst();}catch(err){notify('PID Burst 分析失败：'+err.message,true);}};
   $('pid-burst-clear').onclick=()=>{S.pidBurst=null;renderPidBurst();};

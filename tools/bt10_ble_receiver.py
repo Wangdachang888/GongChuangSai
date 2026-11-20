@@ -12,6 +12,8 @@ Requires: ``pip install bleak``
 from __future__ import annotations
 
 import argparse
+import binascii
+import struct
 import asyncio
 import csv
 from datetime import datetime
@@ -49,8 +51,10 @@ class LogReceiver:
         self._file = None
         self._pid_file = None
         self._pid_header_written = False
+        self._pid_session = 0
         self._pid_header_fields: list[str] = []
         self._pending = bytearray()
+        self._wire_resync = False
         self.state = "UNKNOWN"
         self.lines = 0
         self.dropped = 0
@@ -65,11 +69,54 @@ class LogReceiver:
             self._file = self.output.open("wb")
 
     def feed(self, data: bytes) -> None:
+        """Demux bounded ASCII lines and 36-byte PID binary frames."""
         self._pending.extend(data)
-        while b"\n" in self._pending:
-            raw, _, rest = self._pending.partition(b"\n")
-            self._pending = bytearray(rest)
-            self.handle_line(raw.rstrip(b"\r"))
+        while self._pending:
+            if self._wire_resync:
+                candidates = [x for x in (self._pending.find(b"\xa5\x5a"),
+                                         self._pending.find(b"#BTLOG,")) if x >= 0]
+                if not candidates:
+                    if len(self._pending) > 6:
+                        del self._pending[:-6]
+                    return
+                del self._pending[:min(candidates)]
+                self._wire_resync = False
+            if self._pending[0] == 0xA5:
+                if len(self._pending) < 2:
+                    return
+                if self._pending[1] != 0x5A:
+                    del self._pending[0]
+                    self.dropped += 1
+                    continue
+                if len(self._pending) < 36:
+                    return
+                f = bytes(self._pending[:36])
+                crc = binascii.crc_hqx(f[2:34], 0xFFFF)
+                if f[2] != 1 or f[3] not in (1, 2) or crc != int.from_bytes(f[34:36], "little"):
+                    del self._pending[0]
+                    self.dropped += 1
+                    self._wire_resync = True
+                    continue
+                del self._pending[:36]
+                seq, ms, *values = struct.unpack("<HI12h", f[4:34])
+                row = ",".join([str(ms)] + [f"{v / 10:.1f}" for v in values])
+                prefix = f"#BTLOG,PID_LIVE,{seq}," if f[3] == 1 else "#BTLOG,PID,"
+                self.handle_line((prefix + row).encode("ascii"))
+                continue
+            newline = self._pending.find(b"\n")
+            magic = self._pending.find(b"\xa5")
+            if magic >= 0 and (newline < 0 or magic < newline):
+                del self._pending[:magic]
+                self.dropped += 1
+                continue
+            if newline < 0:
+                if len(self._pending) > 4096:
+                    self._pending.clear()
+                    self.dropped += 1
+                return
+            raw = bytes(self._pending[:newline]).rstrip(b"\r")
+            del self._pending[:newline + 1]
+            self.handle_line(raw)
 
     def handle_line(self, raw: bytes) -> None:
         if not raw:
@@ -97,7 +144,10 @@ class LogReceiver:
         if self._pid_file is not None or self.pid_output is None:
             return
         self.pid_output.parent.mkdir(parents=True, exist_ok=True)
-        self._pid_file = self.pid_output.open("w", encoding="utf-8", newline="")
+        path = self.pid_output
+        if self._pid_session > 1:
+            path = path.with_name(f"{path.stem}_{self._pid_session}{path.suffix}")
+        self._pid_file = path.open("w", encoding="utf-8", newline="")
 
     def _write_pid_header(self, fields: list[str]) -> None:
         if self._pid_header_written or self.pid_output is None:
@@ -129,7 +179,17 @@ class LogReceiver:
                 self._pid_file = None
             self.pid_closed_by_end = True
             return
+        if line.startswith("#BTLOG,PID_STATS,"):
+            if self._pid_file is not None:
+                self._pid_file.write(line + "\n")
+            return
         if line.startswith("#BTLOG,PID_BEGIN"):
+            if self._pid_file is not None:
+                self._pid_file.flush()
+                os.fsync(self._pid_file.fileno())
+                self._pid_file.close()
+                self._pid_file = None
+            self._pid_session += 1
             self.pid_closed_by_end = False
             self._pid_header_written = False
             self._pid_header_fields = []
@@ -161,6 +221,11 @@ class LogReceiver:
         self.pid_lines += 1
 
     def close_durable(self) -> None:
+        if self._pid_file is not None:
+            self._pid_file.flush()
+            os.fsync(self._pid_file.fileno())
+            self._pid_file.close()
+            self._pid_file = None
         if self._file is None:
             return
         self._file.flush()
@@ -171,7 +236,7 @@ class LogReceiver:
 
     def close(self) -> None:
         # Preserve a final partial line if the link disappears mid-frame.
-        if self._pending:
+        if self._pending and all(b < 128 for b in self._pending):
             self.handle_line(bytes(self._pending))
             self._pending.clear()
         self.close_durable()

@@ -62,7 +62,7 @@
 <details><summary>场地配准（当前为示例位置，需按实车起点调整）</summary><div class="inline-fields"><label>日志原点 X / m<input id="origin-x" type="number" step="0.01" value="2.25"></label><label>日志原点 Y / m<input id="origin-y" type="number" step="0.01" value="0.15"></label><label>坐标旋转 / °<input id="origin-angle" type="number" step="1" value="180"></label><button id="align">应用配准</button></div><p class="note">场地左下角为 (0,0)，向右 X+，向上 Y+。配准只改变叠图，不改变原始位姿和车体速度；本图不自动判定越界或比赛得分。</p></details>
 </div><aside><div class="card"><h2>窗口内的跟踪表现</h2><p id="window-label" class="note">随下方波形时间窗口更新</p><div id="stability"></div><p class="note">色条比较窗口内 RMS 与自设参考值。目标切换、转弯也会增大误差；请选稳态片段分析，不把全程波动直接判为不稳定。</p><details><summary>调整参考值（非比赛标准）</summary><div class="inline-fields"><label>横向目标偏差 / m<input id="tol-lateral" type="number" min="0.001" step="0.01" value="0.03"></label><label>航向误差 / °<input id="tol-yaw" type="number" min="0.1" step="0.5" value="3"></label><label>角速度误差 / °/s<input id="tol-omega" type="number" min="0.1" step="1" value="10"></label><button id="apply-tolerance">更新参考值</button></div></details></div><div class="card"><h2>当前位姿</h2><table id="state"></table></div><div class="card"><h2>运动分段</h2><div id="events"></div><p class="note">点击分段后，地图、波形和指标同步切换到该段。旧日志缺少动作子阶段时，标记为网站推断。</p></div><div class="card"><h2>停车响应（估计）</h2><div id="parking"></div><p class="note">当前固件未记录独立停止事件，停止指令和稳定时刻由速度阈值推断。</p></div></aside></div></section>
 <section id="motor" class="pane"><div class="card"><div class="card-head"><h2>四轮速度与输出</h2><span class="note">有符号速度 · 轮序 FL / FR / RL / RR</span></div><div class="motor-grid" id="motor-cards"></div><p class="note">当前固件记录四轮目标脉冲速度（FL ch27、FR ch35、RL ch36、RR ch37）和四轮实测速度（ch28～31）。控制输出与累计编码器计数仍未记录，显示“未记录”；不能用实测速度冒充控制输出。</p></div><div class="card"><h2>底盘一致性</h2><div id="motor-health"></div><p class="note">轮速运动学是一种编码器估计，不能单凭这些通道判定轮胎打滑。横移与旋转本来就会让四轮速度不同。</p></div></section>
-<section id="pid" class="pane"><div class="card"><h2>离线 PID 误差分析</h2><p class="note">对已记录误差计算 P / I / D 项，不会驱动车辆，也不预测调参后的真实响应。纵向、横向目标速度未记录，不能计算 vx / vy 速度环跟踪误差。</p><div class="inline-fields"><label>分析通道<select id="pid-axis"><option value="omega">角速度 ω（°/s）</option><option value="fl">左前轮（pulse/s）</option><option value="x">世界坐标 X 位置（m）</option><option value="y">世界坐标 Y 位置（m）</option></select></label><label>Kp<input id="pid-p" type="number" value="1" step="0.01"></label><label>Ki<input id="pid-i" type="number" value="0" step="0.01"></label><label>Kd<input id="pid-d" type="number" value="0" step="0.01"></label><button id="pid-apply">计算</button></div><div id="pid-readout" class="pid-readout"></div><p class="note">积分从日志首帧开始，使用真实时间间隔；无输出限幅、无抗积分饱和。缺帧大间隔重置积分/微分；数值仅为理想 PID 分解，不能直接照搬为固件参数。</p></div><div class="card pid-burst-card"><div class="card-head"><h2>高频内环 PID 分析</h2><div class="toolbar"><label class="button">导入 PID Burst CSV<input id="pid-burst-file" type="file" accept=".csv,.txt" hidden></label><button id="pid-burst-clear">清除</button></div></div><p class="note">独立分析停车后上传的高频 CSV，不混入 ULog43 任务日志。推荐表头：timestamp_ms、fl_target、fl_actual、fl_output、fr_target、fr_actual、fr_output、rl_target、rl_actual、rl_output、rr_target、rr_actual、rr_output。只生成候选参数，不会通过蓝牙下发。</p><div class="inline-fields"><label>默认采样率 / Hz<input id="pid-burst-rate" type="number" min="1" max="2000" step="1" value="100"></label><label>输出饱和阈值<input id="pid-burst-sat" type="number" min="0" step="1" value="1000"></label><label>稳态误差比例<input id="pid-burst-tol" type="number" min="0.001" max="0.5" step="0.001" value="0.02"></label><label>基准 Kp<input id="pid-burst-kp" type="number" min="0" step="0.01" value="2.5"></label><label>基准 Ki<input id="pid-burst-ki" type="number" min="0" step="0.01" value="1.6"></label><label>基准 Kd<input id="pid-burst-kd" type="number" min="0" step="0.01" value="0"></label><button id="pid-burst-analyze" class="primary">重新分析</button></div><div id="pid-burst-status" class="note">尚未导入高频 PID CSV。</div><div id="pid-burst-metrics" class="pid-burst-metrics"></div><div id="pid-burst-candidates" class="pid-burst-candidates"></div><div class="ai-tuner"><h3>AI 辅助自动调参（离线、可解释）</h3><div class="inline-fields"><label><input id="pid-ai-low-speed" type="checkbox" checked>低速精准模式</label><label><input id="pid-ai-feedforward" type="checkbox" checked>保留前馈结构</label></div><p class="note">本地算法根据 Burst 指标对有限候选评分，输出置信度和原因。它不会调用网络服务，不会自动下发或修改车辆参数。</p><div id="pid-ai-advice" class="ai-advice">导入 Burst 后生成建议。</div><div class="toolbar"><label>本地代理地址<input id="pid-deepseek-url" value="http://127.0.0.1:8787" spellcheck="false"></label><button id="pid-deepseek-connect">连接 DeepSeek</button><button id="pid-deepseek" class="primary" disabled>调用 DeepSeek 复核</button><span id="pid-deepseek-status" class="note">未连接；密钥只保存在本机代理环境变量中。</span></div><div id="pid-deepseek-advice" class="ai-advice"></div></div><p class="note">IAE/ISE、超调和稳定时间只对文件中实际存在的目标/实测字段计算；饱和占比依赖你填写的输出限幅。候选值已限制在基准参数的安全范围内，必须在停车、限幅和可回滚条件下人工验证。</p></div></section>
+<section id="pid" class="pane"><div class="card"><h2>离线 PID 误差分析</h2><p class="note">对已记录误差计算 P / I / D 项，不会驱动车辆，也不预测调参后的真实响应。纵向、横向目标速度未记录，不能计算 vx / vy 速度环跟踪误差。</p><div class="inline-fields"><label>分析通道<select id="pid-axis"><option value="omega">角速度 ω（°/s）</option><option value="fl">左前轮（pulse/s）</option><option value="x">世界坐标 X 位置（m）</option><option value="y">世界坐标 Y 位置（m）</option></select></label><label>Kp<input id="pid-p" type="number" value="1" step="0.01"></label><label>Ki<input id="pid-i" type="number" value="0" step="0.01"></label><label>Kd<input id="pid-d" type="number" value="0" step="0.01"></label><button id="pid-apply">计算</button></div><div id="pid-readout" class="pid-readout"></div><p class="note">积分从日志首帧开始，使用真实时间间隔；无输出限幅、无抗积分饱和。缺帧大间隔重置积分/微分；数值仅为理想 PID 分解，不能直接照搬为固件参数。</p></div><div class="card pid-burst-card"><div class="card-head"><h2>高频内环 PID 分析</h2><div class="toolbar"><label class="button">导入 PID Burst CSV<input id="pid-burst-file" type="file" accept=".csv,.txt" hidden></label><button id="pid-burst-clear">清除</button></div></div><p class="note">独立分析停车后上传的高频 CSV，不混入 ULog43 任务日志。推荐表头：timestamp_ms、fl_target、fl_actual、fl_output、fr_target、fr_actual、fr_output、rl_target、rl_actual、rl_output、rr_target、rr_actual、rr_output。只生成候选参数，不会通过蓝牙下发。</p><div class="inline-fields"><label>默认采样率 / Hz<input id="pid-burst-rate" type="number" min="1" max="2000" step="1" value="100"></label><label>输出饱和阈值<input id="pid-burst-sat" type="number" min="0" step="1" value="1000"></label><label>稳态误差比例<input id="pid-burst-tol" type="number" min="0.001" max="0.5" step="0.001" value="0.02"></label><label>基准 Kp<input id="pid-burst-kp" type="number" min="0" step="0.01" value="2.5"></label><label>基准 Ki<input id="pid-burst-ki" type="number" min="0" step="0.01" value="1.6"></label><label>基准 Kd<input id="pid-burst-kd" type="number" min="0" step="0.01" value="0"></label><button id="pid-burst-analyze" class="primary">重新分析</button></div><div class="pid-realtime"><h3>BT10 内环实时记录</h3><p class="note">先直接连接 BT10，停车时开始记录，再按原有方式运行车辆。200 Hz 实时上传、100 Hz 保存 20 秒；停止采集不等于停车，网页不会控制电机。车辆停车且退出运行状态 500 ms 后自动上传记录。串口需为 230400。</p><div class="toolbar"><button id="pid-live-start">开始 20 秒采集</button><button id="pid-live-stop">停止采集 / 等待停车上传</button><button id="pid-live-download">下载停车记录 CSV</button><button id="pid-live-test">网页协议自测（模拟）</button><select id="pid-live-wheel"><option value="fl">FL 左前</option><option value="fr">FR 右前</option><option value="rl">RL 左后</option><option value="rr">RR 右后</option></select></div><p id="pid-live-status" class="note">未采集；网页自测不代表真实蓝牙通过。</p><canvas id="pid-live-speed" style="width:100%;height:220px"></canvas><canvas id="pid-live-output" style="width:100%;height:160px"></canvas></div><div id="pid-burst-status" class="note">尚未导入高频 PID CSV。</div><div id="pid-burst-metrics" class="pid-burst-metrics"></div><div id="pid-burst-candidates" class="pid-burst-candidates"></div><div class="ai-tuner"><h3>AI 辅助自动调参（离线、可解释）</h3><div class="inline-fields"><label><input id="pid-ai-low-speed" type="checkbox" checked>低速精准模式</label><label><input id="pid-ai-feedforward" type="checkbox" checked>保留前馈结构</label></div><p class="note">本地算法根据 Burst 指标对有限候选评分，输出置信度和原因。它不会调用网络服务，不会自动下发或修改车辆参数。</p><div id="pid-ai-advice" class="ai-advice">导入 Burst 后生成建议。</div><div class="toolbar"><label>本地代理地址<input id="pid-deepseek-url" value="http://127.0.0.1:8787" spellcheck="false"></label><button id="pid-deepseek-connect">连接 DeepSeek</button><button id="pid-deepseek" class="primary" disabled>调用 DeepSeek 复核</button><span id="pid-deepseek-status" class="note">未连接；密钥只保存在本机代理环境变量中。</span></div><div id="pid-deepseek-advice" class="ai-advice"></div></div><p class="note">IAE/ISE、超调和稳定时间只对文件中实际存在的目标/实测字段计算；饱和占比依赖你填写的输出限幅。候选值已限制在基准参数的安全范围内，必须在停车、限幅和可回滚条件下人工验证。</p></div></section>
 <section id="channels" class="pane"><div class="card"><h2>当前帧 · 原始通道</h2><p class="note">通道从 0 开始。未使用的占位 0 不代表视觉有效性、电机输出或调度状态。</p><div class="channel-wrap"><table><thead><tr><th>通道</th><th>本项目含义</th><th>原始值</th></tr></thead><tbody id="channel-table"></tbody></table></div></div></section>
 <section id="quality" class="pane"><div class="card"><div class="card-head"><h2>日志数据质量</h2><span id="quality-format" class="quality-badge">等待日志</span></div><div id="quality-summary" class="quality-grid"></div><div class="quality-table"><table><tbody id="quality-details"></tbody></table></div><p id="quality-note" class="note">导入日志后显示原始行号、时间戳和缺失字段检查结果。</p></div><div class="card"><h2>数据来源说明</h2><p id="quality-source" class="note">未加载日志。</p><p class="note">采样间隔正常不等于内部控制周期正常；网站只根据日志时间戳报告外部采样。缺失值保留为空，不替换为零；长时间缺口处轨迹和积分会断开。</p></div></section>
 <section id="settings" class="pane"><div class="card"><h2>本工程 ULog43 数据定义</h2><p>默认映射已按 Hardware/bsp_ulog.c 与 mecanum_chassis.c 核对。43 列只表示列数一致；其他固件或其他 VOFA 格式必须先核对映射与单位。</p><div class="inline-fields"><label>轮半径 / m<input id="radius" type="number" min="0.001" step="0.001" value="0.04"></label><label>每轮一转脉冲数<input id="ppr" type="number" min="1" step="1" value="440"></label><label>完整轴距 / m<input id="wheelbase" type="number" min="0.01" step="0.001" value="0.186"></label><label>完整轮距 / m<input id="track" type="number" min="0.01" step="0.001" value="0.22"></label><label>无时间戳时帧周期 / s<input id="fallback-dt" type="number" min="0.001" step="0.001" value="0.05"></label><label>角速度来源<select id="omega-mode"><option value="wheels">四轮运动学（兼容旧转换日志）</option><option value="logged">日志实测通道（rad/s）</option></select></label></div><p class="note">每轮一转脉冲数 = 编码器四倍频脉冲数 × 减速比。车体 vx 前正、vy 左正、ω 逆时针正；轮速为 pulse/s，角速度原始通道为 rad/s，显示时转换成 °/s。若实车几何或编码器设置改变，请同步修改。</p><details><summary>高级通道映射（空白表示未记录）</summary><div id="mapping" class="mapping"></div><p class="note">可选直接 vx / vy 通道单位必须为车体系 m/s。四轮目标 / 实测单位为 pulse/s；输出与累计编码器按原始单位显示。时间戳必须为 ms，位置 m，航向 °。</p></details><div class="card metadata-card"><h3>测试信息（人工补充）</h3><div class="inline-fields"><label>固件版本<input id="meta-firmware" placeholder="例如 2026-10-20"></label><label>测试编号<input id="meta-test" placeholder="例如 A-03"></label><label>测试内容<input id="meta-content" placeholder="前进 / 横移 / 转弯"></label><label>地面与负载<input id="meta-environment" placeholder="地胶 / 负载 kg"></label><label>电池初始电压<input id="meta-battery" placeholder="例如 12.4 V"></label><label>人工备注<input id="meta-notes" placeholder="修改参数与观察结果"></label></div><div class="toolbar"><button id="save-config">保存分析配置</button><button id="load-config">载入保存配置</button><span id="config-status" class="note">配置只保存在本机浏览器。</span></div></div><div class="toolbar"><button id="apply-config" class="primary">应用并重新计算</button><button id="reset-config">恢复本工程定义</button></div><div id="source-info" class="note"></div></div></section>
@@ -159,6 +159,7 @@ function parsePidBurstCsv(text) {
     else if(line[0]==='#'||line.startsWith('//')){comments.push(line);continue;}
     const parts=line.split(',').map(x=>x.trim());
     if(!header){if(parts.some(x=>/[a-zA-Z_]/.test(x))){header=parts;continue;}skipped++;continue;}
+    if(parts.length!==header.length){skipped++;continue;}
     const row=header.map((_,i)=>{const x=parts[i]||'';return !x||/^(nan|null)$/i.test(x)?NaN:Number(x);});
     if(row.some(finite))rows.push(row);else skipped++;
   }
@@ -271,6 +272,90 @@ async function connectDeepSeek() {
   const ai=$('pid-ai-advice'); if(ai) ai.innerHTML=`<div class="ai-summary"><strong>本地 AI 辅助建议</strong><span>置信度 ${advice.confidence}% · 仅供人工评估</span></div><p>${advice.ranked[0]?`推荐先验证：<b>${advice.ranked[0].name}</b>（评分 ${advice.ranked[0].score}/100）<br>Kp ${fmt(advice.ranked[0].kp,3)} · Ki ${fmt(advice.ranked[0].ki,3)} · Kd ${fmt(advice.ranked[0].kd,3)}<br><small>${advice.ranked[0].reason}</small>`:'暂无可评分候选'}</p><ol>${advice.ranked.map(c=>`<li><b>${c.name}</b>：${c.score}/100 — Kp ${fmt(c.kp,3)} / Ki ${fmt(c.ki,3)} / Kd ${fmt(c.kd,3)}</li>`).join('')}</ol>${advice.warnings.map(w=>`<p class="warning">${w}</p>`).join('')}<p class="note">建议按低速直行、横移、旋转分别采集 Burst，每次只改一组参数并保留回滚值。网页不会自动写入车辆。</p>`;
 }
 function loadPidBurst(text,name='pid_burst.csv') {const data=parsePidBurstCsv(text),rate=Number($('pid-burst-rate')?.value)||100,sat=Number($('pid-burst-sat')?.value)||0,tol=Number($('pid-burst-tol')?.value)||.02;S.pidBurst={data,name,analysis:analyzePidBurst(data,{rate,satLimit:sat,tolerance:tol})};renderPidBurst();notify(`已加载独立 PID Burst：${name}。它不会改变 ULog43 任务日志。`);}
+
+const PID_HEADER='timestamp_ms,fl_target,fl_actual,fl_output,fr_target,fr_actual,fr_output,rl_target,rl_actual,rl_output,rr_target,rr_actual,rr_output';
+const pidStream={live:[],stored:[],lastSeq:null,gaps:0,crc:0,expected:null,stats:'',lastDraw:0,complete:false};
+function pidCrc(bytes){let crc=65535;for(const b of bytes){crc^=b<<8;for(let i=0;i<8;i++)crc=((crc&32768)?(crc<<1)^0x1021:crc<<1)&65535;}return crc;}
+function createPidWireDecoder(onText){
+  let pending=[],resync=false;
+  return {feed(bytes){pending.push(...bytes);
+    while(pending.length){
+      if(resync){let at=-1;for(let i=0;i<pending.length;i++){if((pending[i]===165&&pending[i+1]===90)||String.fromCharCode(...pending.slice(i,i+7))==='#BTLOG,'){at=i;break;}}if(at<0){pending=pending.slice(-6);return;}pending.splice(0,at);resync=false;}
+      if(pending[0]===165){
+        if(pending.length<2)return;
+        if(pending[1]!==90){pending.shift();continue;}
+        if(pending.length<36)return;
+        const f=pending.slice(0,36),crc=pidCrc(f.slice(2,34));
+        if(f[2]!==1||![1,2].includes(f[3])||crc!==(f[34]|f[35]<<8)){pidStream.crc++;pending.shift();resync=true;continue;}
+        pending.splice(0,36);
+        const seq=f[4]|f[5]<<8,ms=(f[6]+f[7]*256+f[8]*65536+f[9]*16777216)>>>0,row=[ms];
+        for(let i=0;i<12;i++){let v=f[10+i*2]|f[11+i*2]<<8;if(v&32768)v-=65536;row.push(v/10);}
+        onText((f[3]===1?'#BTLOG,PID_LIVE,'+seq+',':'#BTLOG,PID,')+row.join(',')+'\n');
+        continue;
+      }
+      const nl=pending.indexOf(10),magic=pending.indexOf(165);
+      if(magic>=0&&(nl<0||magic<nl)){pending.splice(0,magic);continue;}
+      if(nl<0){if(pending.length>4096)pending=[];return;}
+      onText(String.fromCharCode(...pending.splice(0,nl+1)));
+    }
+  },reset(){pending=[];resync=false;}};
+}
+function resetPidStream(){Object.assign(pidStream,{live:[],stored:[],lastSeq:null,gaps:0,crc:0,expected:null,stats:'',lastDraw:0,complete:false});}
+function pidCsv(){return PID_HEADER+'\n'+pidStream.stored.map(r=>r.join(',')).join('\n')+'\n'+(pidStream.stats?pidStream.stats+'\n':'');}
+function receivePidLine(line){
+  if(line.startsWith('#BTLOG,PID_ARMED')){resetPidStream();$('pid-live-status').textContent='已开始：200 Hz 实时 / 100 Hz 缓存，最多 20 秒；停止后等待停车上传。';return true;}
+  if(line.startsWith('#BTLOG,PID_REJECTED')){$('pid-live-status').textContent='启动被拒绝：请停车、等待开机至少 2 秒，并等待上次上传完成。';return true;}
+  if(line.startsWith('#BTLOG,PID_BEGIN')){pidStream.stored=[];pidStream.complete=false;return true;}
+  const live=line.startsWith('#BTLOG,PID_LIVE,'),stored=line.startsWith('#BTLOG,PID,');
+  if(live||stored){
+    const a=line.split(',').slice(2).map(Number);let row=a;
+    if(live){const seq=a.shift();row=a;if(pidStream.lastSeq!==null)pidStream.gaps+=Math.max(0,((seq-pidStream.lastSeq)&65535)-1);pidStream.lastSeq=seq;}
+    if(row.length!==13||!row.every(finite))return true;
+    const dest=live?pidStream.live:pidStream.stored;dest.push(row);if(dest.length>(live?4000:2000))dest.shift();
+    const now=performance.now();if(now-pidStream.lastDraw>=100){pidStream.lastDraw=now;renderPidStream();}
+    return true;
+  }
+  if(line.startsWith('#BTLOG,PID_STATS,')){pidStream.stats=line;const m=line.match(/count=(\d+)/);pidStream.expected=m?Number(m[1]):null;return true;}
+  if(line==='#BTLOG,PID_END'){
+    pidStream.complete=pidStream.expected!==null&&pidStream.expected===pidStream.stored.length;
+    if(pidStream.stored.length)loadPidBurst(pidCsv(),'停车上传_PID_100Hz.csv');
+    renderPidStream();return true;
+  }
+  return false;
+}
+function renderPidStream(){
+  const stored=pidStream.stored,rows=stored.length?stored:pidStream.live,wheel=$('pid-live-wheel').value||'fl',wi=WHEELS.indexOf(wheel),base=1+Math.max(0,wi)*3;
+  $('pid-live-status').textContent='实时 '+pidStream.live.length+' 帧 · 实时缺口 '+pidStream.gaps+' · CRC 错误 '+pidStream.crc+' · 停车上传 '+stored.length+'/2000 帧 / 应收 '+pidStream.expected+' · '+(pidStream.complete?'上传完成':'采集/等待上传，断线时可能不完整')+' · '+pidStream.stats;
+  for(const [id,cols,colors,title] of [['pid-live-speed',[base,base+1],['#fbbf24','#38bdf8'],'目标速度（黄） / 实测速度（蓝），pulse/s'],['pid-live-output',[base+2],['#c084fc'],'实际控制输出（含前馈、PID、kick 与限幅）']]){
+    const ctx=canvasContext(id);if(!ctx)continue;const {g,w,h}=ctx;
+    g.fillStyle='#a9bfd4';g.font='12px sans-serif';g.fillText(title,12,18);if(rows.length<2)continue;
+    const t0=rows[0][0],span=Math.max(1,rows.at(-1)[0]-t0),values=rows.flatMap(r=>cols.map(c=>r[c])),lo=Math.min(0,...values),hi=Math.max(1,...values),range=Math.max(1,hi-lo);
+    g.fillText(fmt(lo,1)+' … '+fmt(hi,1)+' · '+fmt(span/1000,2)+' s',12,h-6);
+    cols.forEach((col,k)=>{g.strokeStyle=colors[k];g.lineWidth=1.5;g.beginPath();rows.forEach((r,i)=>{const x=40+(r[0]-t0)/span*(w-54),y=30+(hi-r[col])/range*(h-60);if(i===0||r[0]-rows[i-1][0]>30)g.moveTo(x,y);else g.lineTo(x,y);});g.stroke();});
+  }
+}
+function downloadPidStream(){if(!pidStream.stored.length){notify('尚未收到停车上传的 PID 数据。',true);return;}const a=document.createElement('a'),url=URL.createObjectURL(new Blob([pidCsv()],{type:'text/csv;charset=utf-8'}));a.href=url;a.download='pid_100Hz_'+Date.now()+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+async function sendPidCommand(command){
+  if(!bt10.writeCharacteristic){notify('请先直接连接 BT10；电脑日志源只接收数据。',true);return;}
+  try{await bt10.writeCharacteristic.writeValueWithResponse(new TextEncoder().encode('@PID '+command+'\n'));$('pid-live-status').textContent='命令已发送，等待车辆确认；不会让车辆运动或修改 PID。';}catch(e){notify('PID 命令发送失败：'+e.message,true);}
+}
+function pidWireSelfTest(){
+  if(bt10.device||realtime.socket){notify('请断开实时连接后运行模拟自测，避免混入实车数据。',true);return;}
+  resetPidStream();
+  const decoder=createPidWireDecoder(text=>text.trim().split(/\r?\n/).forEach(receivePidLine));
+  const encode=(kind,seq,ms)=>{
+    const f=new Uint8Array(36),v=new DataView(f.buffer);f[0]=165;f[1]=90;f[2]=1;f[3]=kind;v.setUint16(4,seq,true);v.setUint32(6,ms,true);
+    for(let w=0;w<4;w++){const target=100+20*Math.sin(ms/800),actual=target*(1-Math.exp(-ms/150));[target,actual,actual*2].forEach((x,i)=>v.setInt16(10+(w*3+i)*2,Math.round(x*10),true));}
+    v.setUint16(34,pidCrc(f.slice(2,34)),true);return f;
+  };
+  receivePidLine('#BTLOG,PID_ARMED');
+  for(let i=0;i<4000;i++){const f=encode(1,i+1,(i+1)*5);decoder.feed(f.slice(0,7));decoder.feed(f.slice(7,19));decoder.feed(f.slice(19));}
+  receivePidLine('#BTLOG,PID_BEGIN,'+PID_HEADER);
+  for(let i=0;i<2000;i++)decoder.feed(encode(2,i,(i+1)*10));
+  receivePidLine('#BTLOG,PID_STATS,count=2000,live_drop=0,clipped=0,overrun=0');
+  receivePidLine('#BTLOG,PID_END');
+  notify('网页协议自测完成：4000 帧实时 / 2000 帧停车上传，模拟 20 秒；未经过真实 BT10。');
+}
 function namedChannels(header) {
   const out={...DEFAULT_CHANNELS},norm=s=>String(s||'').toLowerCase().replace(/[\s()\[\]°/.-]+/g,'_');
   const aliases={time:['time','timestamp','time_ms','ms'],phase:['phase','state_phase'],x:['x','x_pos','position_x'],y:['y','y_pos','position_y'],yaw:['yaw','theta','heading'],imu:['imu_yaw'],xt:['x_target','target_x'],yt:['y_target','target_y'],yawt:['yaw_target','theta_target'],vx:['vx','vx_actual'],vy:['vy','vy_actual'],wt:['omega_target','w_target','wz_target'],wa:['omega_actual','w_actual','wz_actual'],speedTarget:['speed_target','v_target'],lateral:['lateral_error','elat'],yawError:['yaw_error','heading_error'],flt:['fl_target','wheel_fl_target'],fla:['fl_actual','wheel_fl_speed','wheel_fl_actual'],frt:['fr_target','wheel_fr_target'],fra:['fr_actual','wheel_fr_speed','wheel_fr_actual'],rlt:['rl_target','wheel_rl_target'],rla:['rl_actual','wheel_rl_speed','wheel_rl_actual'],rrt:['rr_target','wheel_rr_target'],rra:['rr_actual','wheel_rr_speed','wheel_rr_actual']};
@@ -336,12 +421,12 @@ function load(text,name='日志.csv') {
 const realtime={socket:null,buffer:'',pending:[],flushRequest:0,ended:false};
 const archive={db:null,session:null,starting:null,pending:'',flushTimer:null};
 function archiveOpen(){return new Promise((resolve,reject)=>{if(archive.db)return resolve(archive.db);const r=indexedDB.open('mecanum-log-archive',1);r.onupgradeneeded=()=>r.result.createObjectStore('logs',{keyPath:'id',autoIncrement:true});r.onsuccess=()=>{archive.db=r.result;resolve(archive.db)};r.onerror=()=>reject(r.error);});}
-async function archiveStart(){try{const db=await archiveOpen();const now=new Date();const tx=db.transaction('logs','readwrite');const rec={start:now.toISOString(),name:'BT10_'+now.toISOString().replace(/[:.]/g,'-'),text:'',frames:0,ended:false};const req=tx.objectStore('logs').add(rec);req.onsuccess=()=>{archive.session={id:req.result,rec};archive.pending='';clearInterval(archive.flushTimer);archive.flushTimer=setInterval(archiveFlush,1000);archiveRender();};}catch(_){}}
+async function archiveStart(){try{const db=await archiveOpen();const now=new Date();const tx=db.transaction('logs','readwrite');const rec={start:now.toISOString(),name:'BT10_'+now.toISOString().replace(/[:.]/g,'-'),text:'',frames:0,ended:false};const req=tx.objectStore('logs').add(rec);await new Promise((resolve,reject)=>{req.onsuccess=()=>{archive.session={id:req.result,rec};archive.pending='';clearInterval(archive.flushTimer);archive.flushTimer=setInterval(archiveFlush,1000);archiveRender();resolve();};req.onerror=()=>reject(req.error);});}catch(_){}}
 async function archiveFlush(){if(!archive.session||!archive.pending)return;const chunk=archive.pending;archive.pending='';try{const db=await archiveOpen();const tx=db.transaction('logs','readwrite');const store=tx.objectStore('logs');const rec=await new Promise((res,rej)=>{const r=store.get(archive.session.id);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});rec.text+=chunk;rec.frames=archive.session.rec.frames;store.put(rec);}catch(_){}}
 async function archiveLine(line){if(!archive.session){if(!archive.starting)archive.starting=archiveStart().finally(()=>{archive.starting=null});await archive.starting;}if(!archive.session)return;archive.pending+=line;archive.session.rec.frames+=(line.split(',').length>=43?1:0);}
 async function archiveFinish(ended){if(archive.starting)await archive.starting;await archiveFlush();if(!archive.session)return;try{const db=await archiveOpen();const tx=db.transaction('logs','readwrite');const store=tx.objectStore('logs');const rec=await new Promise((res,rej)=>{const r=store.get(archive.session.id);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});rec.ended=ended;rec.end=new Date().toISOString();store.put(rec);}catch(_){}clearInterval(archive.flushTimer);archive.session=null;archiveRender();}
 async function archiveList(){const db=await archiveOpen();return new Promise((resolve,reject)=>{const r=db.transaction('logs').objectStore('logs').getAll();r.onsuccess=()=>resolve(r.result.reverse());r.onerror=()=>reject(r.error)});}
-async function archiveRender(){const box=$('archive-list');if(!box)return;try{const list=await archiveList();if(!list.length){box.textContent='暂无日志；连接 BT10 后会自动保存。';return;}box.innerHTML=list.map(x=>`<div class="archive-item"><div class="archive-meta"><b>${x.name}</b><small>${x.start} · ${x.frames} 帧 · ${x.ended?'已完成':'未完成/断线保留'}</small></div><div class="archive-actions"><button data-archive-view="${x.id}">查看</button><button data-archive-download="${x.id}">下载</button><button data-archive-delete="${x.id}">删除</button></div></div>`).join('');box.querySelectorAll('[data-archive-view]').forEach(b=>b.onclick=()=>archiveLoad(Number(b.dataset.archiveView)));box.querySelectorAll('[data-archive-download]').forEach(b=>b.onclick=()=>archiveDownload(Number(b.dataset.archiveDownload)));box.querySelectorAll('[data-archive-delete]').forEach(b=>b.onclick=()=>archiveDelete(Number(b.dataset.archiveDelete)));}catch(_){box.textContent='浏览器不支持本地日志仓库。';}}
+async function archiveRender(){const box=$('archive-list');if(!box)return;try{const list=await archiveList();if(!list.length){box.textContent='暂无日志；连接 BT10 后会自动保存。';return;}box.innerHTML=list.map(x=>`<div class="archive-item"><div class="archive-meta"><b>${x.name}</b><small>${x.start} · ${x.frames} 帧 · ${x.ended?'已完成':'未完成/断线保留'}</small></div><div class="archive-actions"><button data-archive-view="${x.id}">查看</button><button data-archive-download="${x.id}">下载</button>${x.text.includes('#BTLOG,PID_BEGIN')?'<button data-archive-pid="'+x.id+'">PID 分析</button>':''}<button data-archive-delete="${x.id}">删除</button></div></div>`).join('');box.querySelectorAll('[data-archive-view]').forEach(b=>b.onclick=()=>archiveLoad(Number(b.dataset.archiveView)));box.querySelectorAll('[data-archive-download]').forEach(b=>b.onclick=()=>archiveDownload(Number(b.dataset.archiveDownload)));box.querySelectorAll('[data-archive-pid]').forEach(b=>b.onclick=async()=>{const rec=await archiveGet(Number(b.dataset.archivePid));if(rec){loadPidBurst(rec.text,rec.name+'_PID.csv');activateTab('pid');}});box.querySelectorAll('[data-archive-delete]').forEach(b=>b.onclick=()=>archiveDelete(Number(b.dataset.archiveDelete)));}catch(_){box.textContent='浏览器不支持本地日志仓库。';}}
 async function archiveGet(id){const db=await archiveOpen();return new Promise((resolve,reject)=>{const r=db.transaction('logs').objectStore('logs').get(id);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
 async function archiveLoad(id){const x=await archiveGet(id);if(x?.text)load(x.text,x.name+'.csv');}
 async function archiveDownload(id){const x=await archiveGet(id);if(!x)return;const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([x.text],{type:'text/csv'}));a.download=x.name+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
@@ -355,7 +440,8 @@ const BT10_NOTIFY='0000ffe1-0000-1000-8000-00805f9b34fb';
 const BT10_WRITE='0000ffe2-0000-1000-8000-00805f9b34fb';
 function btStatus(text,kind=''){ $('bt-connect').textContent=kind==='connected'?'断开 BT10':'直接连接 BT10'; $('ws-status').textContent=text; }
 function downloadBt10Log(){ if(!bt10.raw)return; const blob=new Blob([bt10.raw],{type:'text/csv;charset=utf-8'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='bt10_'+new Date().toISOString().replace(/[:.]/g,'-')+'.csv'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); }
-function bt10Notification(event){ const text=bt10.decoder.decode(event.target.value,{stream:true}); bt10.raw+=text; receiveRealtimeText(text); if(/(?:^|\r?\n)#BTLOG,END(?:,|\r?$)/m.test(bt10.raw)){ if(!bt10.ended){bt10.ended=true;downloadBt10Log();btStatus('BT10 日志已结束并已下载','connected');} } }
+function bt10DecodedText(text){bt10.raw+=text;receiveRealtimeText(text);if(text.trim()==='#BTLOG,END'&&!bt10.ended){bt10.ended=true;downloadBt10Log();btStatus('BT10 日志已结束并已下载','connected');}}
+function bt10Notification(event){const v=event.target.value;bt10.wire.feed(new Uint8Array(v.buffer,v.byteOffset,v.byteLength));}
 function bt10TestRows(){ const rows=['#BTLOG,BEGIN']; for(let i=0;i<20;i++){const t=i*100,x=i*.01,y=Math.sin(i*.2)*.1; const a=[0,1,1,0,0,t,0,0,1,0,.5,.2,.5,.2,0,0,i*.5,i*.5,0,.5385,.5385,x,y,i*.5,0,0,0,100,100,100,100,100,x,y,x,100,100,100,20,0,24,12,0]; rows.push(a.map(v=>typeof v==='number'&&v%1?v.toFixed(4):String(v)).join(','));} rows.push('#BTLOG,END'); return rows; }
 async function sendBt10SelfTest(){ if(!bt10.writeCharacteristic){btStatus('请先连接 BT10','error');return;} const button=$('bt-selftest'); button.disabled=true; try{for(const line of bt10TestRows()){await bt10.writeCharacteristic.writeValueWithResponse(new TextEncoder().encode(line+'\r\n')); await new Promise(resolve=>setTimeout(resolve,60));} btStatus('自测已发送，等待回传','connected'); notify('BT10 自测已发送；需要 UART 回传或回环才能在网页收到测试曲线。');}catch(e){btStatus('自测发送失败：'+e.message,'error');}finally{button.disabled=false;} }
 function toggleLocalSim(){
@@ -400,7 +486,7 @@ async function connectBt10(){
         break;
       }catch(error){ lastError=error; try{device.gatt?.disconnect();}catch(_){ } if(attempt===2)throw lastError; }
     }
-    bt10.device=device; bt10.characteristic=ch; bt10.writeCharacteristic=await service.getCharacteristic(BT10_WRITE); bt10.decoder=new TextDecoder(); bt10.raw=''; bt10.ended=false; resetRealtimeSession();
+    bt10.device=device; bt10.characteristic=ch; bt10.writeCharacteristic=await service.getCharacteristic(BT10_WRITE); bt10.decoder=new TextDecoder(); bt10.wire=createPidWireDecoder(bt10DecodedText); resetPidStream(); bt10.raw=''; bt10.ended=false; resetRealtimeSession();
     ch.addEventListener('characteristicvaluechanged',bt10Notification); await ch.startNotifications();
     device.addEventListener('gattserverdisconnected',()=>{if(bt10.device===device){bt10.device=null;bt10.characteristic=null;bt10.writeCharacteristic=null;$('bt-selftest').disabled=true;archiveFinish(false);btStatus('BT10 已断开，日志已保留','error');}});
     $('bt-selftest').disabled=false; btStatus('BT10 已连接，等待日志','connected'); notify('BT10 已连接，日志将实时显示并在 END 后自动下载。');
@@ -425,7 +511,7 @@ function flushRealtime() {
 }
 function receiveRealtimeText(text) {
   realtime.buffer+=text;const lines=realtime.buffer.split(/\r?\n/);realtime.buffer=lines.pop()||'';
-  for(const line of lines){const raw=line.trim();if(!raw)continue;archiveLine(raw+'\n');if(/^#BTLOG,END\b/i.test(raw)){realtime.ended=true;archiveFinish(true);realtimeStatus('已收到 END','connected');continue;}if(raw.startsWith('#')||raw.startsWith('//'))continue;
+  for(const line of lines){const raw=line.trim();if(!raw)continue;archiveLine(raw+'\n');if(receivePidLine(raw))continue;if(/^#BTLOG,END\b/i.test(raw)){realtime.ended=true;archiveFinish(true);realtimeStatus('已收到 END','connected');continue;}if(raw.startsWith('#')||raw.startsWith('//'))continue;
     try{const parsed=parse(raw+'\n');if(parsed.rows[0])queueRealtimeRow(parsed.rows[0]);}catch(_){/* Ignore partial/status lines from the collector. */}
   }
 }
@@ -832,6 +918,11 @@ function init() {
   $('wave-apply').onclick=()=>{const a=Number($('wave-start').value),b=Number($('wave-end').value);if(!finite(a)||!finite(b)||b<=a){notify('时间窗口的终点必须大于起点。',true);return;}setWindow(a,b);};
   $('apply-tolerance').onclick=()=>{const next={lateral:Number($('tol-lateral').value),yaw:Number($('tol-yaw').value),omega:Number($('tol-omega').value)};if(!Object.values(next).every(v=>finite(v)&&v>0)){notify('参考值必须大于 0。',true);return;}S.tolerances=next;drawStability();drawStrip();};
   $('pid-axis').onchange=()=>{calculatePid();drawPid();};$('pid-apply').onclick=()=>{calculatePid();drawPid();};
+  $('pid-live-start').onclick=()=>sendPidCommand('START');
+  $('pid-live-stop').onclick=()=>sendPidCommand('STOP');
+  $('pid-live-test').onclick=pidWireSelfTest;
+  $('pid-live-download').onclick=downloadPidStream;
+  $('pid-live-wheel').onchange=renderPidStream;
   $('pid-burst-file').onchange=async e=>{const file=e.target.files[0];if(file){try{loadPidBurst(await file.text(),file.name);}catch(err){notify('PID Burst 导入失败：'+err.message,true);}e.target.value='';}};
   $('pid-burst-analyze').onclick=()=>{if(!S.pidBurst){notify('请先导入 PID Burst CSV。',true);return;}try{const data=S.pidBurst.data;S.pidBurst.analysis=analyzePidBurst(data,{rate:Number($('pid-burst-rate').value),satLimit:Number($('pid-burst-sat').value),tolerance:Number($('pid-burst-tol').value)});renderPidBurst();}catch(err){notify('PID Burst 分析失败：'+err.message,true);}};
   $('pid-burst-clear').onclick=()=>{S.pidBurst=null;renderPidBurst();};

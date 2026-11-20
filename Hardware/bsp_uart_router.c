@@ -5,11 +5,16 @@
 /* Keep the router independent of the STM32 HAL-heavy logger header. */
 #if defined(USART2)
 void ULog_TxCpltCallback(void);
+void ULog_RxCpltCallback(void);
+void ULog_ErrorCallback(void);
 UART_HandleTypeDef *ULog_GetHandle(void);
 #endif
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
+#if defined(USART2)
+    if (huart && huart == ULog_GetHandle()) { ULog_RxCpltCallback(); return; }
+#endif
 #if APP_RUN_MODE == APP_MODE_RACE
     Vision_RxCpltCallback(huart);
 #elif (APP_D36_UART_CMD_ENABLE != 0)
@@ -21,6 +26,9 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
+#if defined(USART2)
+    if (huart && huart == ULog_GetHandle()) { ULog_ErrorCallback(); return; }
+#endif
 #if APP_RUN_MODE == APP_MODE_RACE
     Vision_ErrorCallback(huart);
 #elif (APP_D36_UART_CMD_ENABLE != 0)

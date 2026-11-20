@@ -5,6 +5,7 @@
 int ulog_test_snprintf(char *buf, size_t size, const char *format, ...);
 #include "usart.h"
 typedef struct { uint32_t Pin, Mode, Pull, Speed, Alternate; } GPIO_InitTypeDef;
+#define __DMB() ((void)0)
 #define __HAL_RCC_GPIOD_CLK_ENABLE() ((void)0)
 #define __HAL_RCC_USART2_CLK_ENABLE() ((void)0)
 #define GPIOD ((void *)4)
@@ -24,4 +25,5 @@ typedef struct { uint32_t Pin, Mode, Pull, Speed, Alternate; } GPIO_InitTypeDef;
 void HAL_GPIO_Init(void *port, GPIO_InitTypeDef *config);
 HAL_StatusTypeDef HAL_UART_Init(UART_HandleTypeDef *uart);
 HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *uart, uint8_t *data, uint16_t len, uint32_t timeout);
+HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *uart, uint8_t *data, uint16_t len);
 #endif
