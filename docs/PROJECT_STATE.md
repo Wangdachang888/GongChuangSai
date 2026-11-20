@@ -110,6 +110,7 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 - PID Burst 网页解析/指标/候选、BT10 接收器语法与临时保存测试：`PASS`；STM32 高频缓存发送接口、230400 BT10 吞吐和停车后分批上传：`NOT_RUN`。
 - 本地 AI 辅助候选排序、前馈低速回归诊断和安全边界测试：`PASS`；真实参数试验、回滚和实车闭环效果：`NOT_RUN`。
 - DeepSeek 代理语法、无密钥拒绝和网页调用接口检查：`PASS`；真实 API 调用：`NOT_RUN`。
+- 网页代理地址、`/health` 连接检查和按钮门控：`PASS`；浏览器自动启动本地 Python 进程：不支持，仍需手动启动代理。
 
 ## 11. 给下一位 AI 的交接
 

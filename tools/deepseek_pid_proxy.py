@@ -104,6 +104,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self) -> None:  # noqa: N802
         self._reply(204, {})
 
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path != "/health":
+            self._reply(404, {"error": "not found"})
+            return
+        self._reply(200, {"ok": True, "provider": "deepseek", "key_configured": bool(os.environ.get("DEEPSEEK_API_KEY", "").strip())})
+
     def do_POST(self) -> None:  # noqa: N802
         if self.path != "/v1/pid-advice":
             self._reply(404, {"error": "not found"})

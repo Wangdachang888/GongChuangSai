@@ -175,14 +175,21 @@ async function requestDeepSeekAdvice() {
   const payload={summary:local.summary,candidates:local.ranked.map(({name,kp,ki,kd,score,reason})=>({name,kp,ki,kd,score,reason})),lowSpeed:$('pid-ai-low-speed')?.checked!==false,feedforward:$('pid-ai-feedforward')?.checked!==false};
   if(status)status.textContent='正在请求本机 DeepSeek 代理…';
   try{
-    const response=await fetch('http://127.0.0.1:8787/v1/pid-advice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const endpoint=String($('pid-deepseek-url')?.value||'http://127.0.0.1:8787').replace(/\/$/,''); const response=await fetch(endpoint+'/v1/pid-advice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const result=await response.json();if(!response.ok)throw new Error(result.error||`HTTP ${response.status}`);
     const ranked=Array.isArray(result.ranked)?result.ranked:[];
     if(out)out.innerHTML='<h4>DeepSeek 复核结果（仅供人工确认）</h4>'+(ranked.length?'<ol>'+ranked.map(x=>`<li><b>${String(x.name||'候选')}</b>：${Math.max(0,Math.min(100,Number(x.score)||0))}/100 — ${String(x.reason||'无解释')}</li>`).join('')+'</ol>':'<p>模型未返回有效排序。</p>')+(Array.isArray(result.warnings)?result.warnings.map(x=>`<p class="warning">${String(x)}</p>`).join(''):'')+'<p class="note">requires_manual_test=true；代理不会写入车辆。</p>';
     if(status)status.textContent='DeepSeek 复核完成。';
   }catch(err){if(status)status.textContent='DeepSeek 不可用：'+err.message+'；已保留本地离线建议。';}
 }
-function renderPidBurst() {
+async function connectDeepSeek() {
+  const input=$('pid-deepseek-url'), status=$('pid-deepseek-status'), button=$('pid-deepseek');
+  const endpoint=String(input?.value||'').replace(/\/$/,'');
+  if(!/^https?:\/\//i.test(endpoint)){if(status)status.textContent='代理地址必须以 http:// 或 https:// 开头。';return false;}
+  if(status)status.textContent='正在检查本地代理…';
+  try { const response=await fetch(endpoint+'/health',{cache:'no-store'}); const data=await response.json(); if(!response.ok||!data.ok)throw new Error(data.error||`HTTP ${response.status}`); if(!data.key_configured)throw new Error('代理未配置 DEEPSEEK_API_KEY'); if(button)button.disabled=false; if(status)status.textContent='DeepSeek 已连接，允许调用复核。'; return true; }
+  catch(err){if(button)button.disabled=true;if(status)status.textContent='连接失败：'+err.message+'；请先启动本机代理。';return false;}
+}function renderPidBurst() {
   const box=$('pid-burst-metrics'),cand=$('pid-burst-candidates'),status=$('pid-burst-status');if(!box||!cand||!status)return;const state=S.pidBurst;
   if(!state){status.textContent='尚未导入高频 PID CSV。';box.innerHTML='<div class="pid-burst-empty">请在停车后导入带字段名的 PID Burst CSV。</div>';cand.innerHTML='';return;}
   const a=state.analysis;status.textContent=`已加载 ${state.name}：${a.rows} 帧，${fmt(a.times.at(-1),2)} s，默认 ${a.rate} Hz。${state.data.skipped?'跳过 '+state.data.skipped+' 行。':''}`;
