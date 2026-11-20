@@ -112,6 +112,7 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 - DeepSeek 代理语法、无密钥拒绝和网页调用接口检查：`PASS`；真实 API 调用：`NOT_RUN`。
 - 网页代理地址、`/health` 连接检查和按钮门控：`PASS`；浏览器自动启动本地 Python 进程：不支持，仍需手动启动代理。
 - 本地一键启动脚本语法检查：`PASS`；实际双击启动和浏览器关联：`NOT_RUN`。
+- 启动脚本读取用户级密钥、Python 命令选择和健康重试：`PASS`；实际 DeepSeek 网络调用：`NOT_RUN`。
 
 ## 11. 给下一位 AI 的交接
 

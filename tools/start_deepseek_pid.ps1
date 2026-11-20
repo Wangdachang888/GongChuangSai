@@ -6,6 +6,10 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $ProjectRoot
 
+$userKey = [Environment]::GetEnvironmentVariable('DEEPSEEK_API_KEY', 'User')
+if ([string]::IsNullOrWhiteSpace($env:DEEPSEEK_API_KEY) -and -not [string]::IsNullOrWhiteSpace($userKey)) {
+    $env:DEEPSEEK_API_KEY = $userKey
+}
 if ([string]::IsNullOrWhiteSpace($env:DEEPSEEK_API_KEY)) {
     Write-Host 'DEEPSEEK_API_KEY is not set.'
     Write-Host '$env:DEEPSEEK_API_KEY="your-new-key"'
@@ -21,12 +25,18 @@ if (-not (Test-Path -LiteralPath $proxy) -or -not (Test-Path -LiteralPath $viewe
 }
 
 $args = @($proxy, '--host', '127.0.0.1', '--port', $Port)
-$process = Start-Process -FilePath 'python' -ArgumentList $args -WorkingDirectory $ProjectRoot -WindowStyle Hidden -PassThru
-Start-Sleep -Milliseconds 700
+$python = (Get-Command python -ErrorAction SilentlyContinue).Source
+if ([string]::IsNullOrWhiteSpace($python)) { $python = (Get-Command py -ErrorAction SilentlyContinue).Source }
+if ([string]::IsNullOrWhiteSpace($python)) { throw 'Python 3 was not found. Install Python and add it to PATH.' }
+$process = Start-Process -FilePath $python -ArgumentList $args -WorkingDirectory $ProjectRoot -WindowStyle Hidden -PassThru
 try {
-    $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 3
-    if (-not $health.ok -or -not $health.key_configured) {
-        throw 'Proxy started but key health check failed.'
+    $health = $null
+    for ($i = 0; $i -lt 10 -and $null -eq $health; $i++) {
+        Start-Sleep -Milliseconds 300
+        try { $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 2 } catch { }
+    }
+    if ($null -eq $health -or -not $health.ok -or -not $health.key_configured) {
+        throw 'Proxy did not start or key health check failed. Check port 8787 and DEEPSEEK_API_KEY.'
     }
 } catch {
     if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }

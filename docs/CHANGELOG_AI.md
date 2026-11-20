@@ -117,6 +117,7 @@
 补充：网页 PID 页面现在提供代理地址、连接检查和“调用 DeepSeek 复核”按钮。连接检查调用本机 `/health`，只有确认代理和密钥已配置后才启用复核按钮；浏览器不会启动后台 Python 进程。
 
 补充：新增 `tools/start_deepseek_pid.ps1`，检查环境变量后后台启动代理并打开 `kart_log_view_mecanum_v4.html`，用于简化本机启动流程。
+补充：启动脚本现在同时读取当前进程和 Windows 用户级 `DEEPSEEK_API_KEY`，自动选择 `python`/`py`，并等待健康接口最多 3 秒，减少双击启动失败。
 
 ## App 阶段：比赛业务模块物理迁移（2026-11-18）
 
