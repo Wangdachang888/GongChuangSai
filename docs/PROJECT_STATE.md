@@ -206,6 +206,14 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 - 扫描动作是普通 MOVE 的 `scan_start` 标记，速度限制为 100 mm/s；二维码接收继续在主循环异步完成。二维码校验并保存后由 `RaceVision_AckQr()` 发送 `ACK,QR,<session>`，当前扫描段仍完整执行，不会因提前成功跳过返程。
 - OpenMV QR 任务取消固定识别超时，保留同一任务会话并限频重发待确认二维码；只有收到匹配确认后才发送 `DONE,QR` 并进入 `IDLE`。
 - 不再按扫码次数推断启停区，不再执行扫码失败后的 180°旋转或反向补扫；二维码无效或扫描段结束仍未确认时进入故障并安全停止。`RACE_QR_FIELD_FRAME_CONFIRMED` 默认关闭，未完成场地原点、航向和路点实测前，App 拒绝启动绝对坐标路线。
+
+## 22. 内环 PID 高频日志采样（2026-11-20）
+
+- `Hardware/bsp_ulog.c/.h` 增加独立 PID Burst 环形缓冲接口，快照包含 1 ms 电机内环的四轮目标速度、实际速度和控制输出。
+- TIM6 中断路径只复制固定大小标量到 256 帧 RAM 环，不执行格式化、浮点计算或 UART 发送；主循环通过现有 USART2 非阻塞队列逐帧发送 `#BTLOG,PID`，结束时发送 `#BTLOG,PID_END`。
+- `ULOG_PID_BURST_ENABLE` 默认关闭，比赛构建不会自动占用 RAM、串口带宽或改变控制行为；仅在明确的诊断构建/测试流程中调用 `ULog_PidBurstStart/Stop`。
+- 环形缓冲满时丢弃新样本并递增 `g_ulog_pid_burst_overrun`，不会阻塞 1 ms 电机更新。256 帧约覆盖 256 ms，不能表示无限长过程；长时间测试需分段或停车后分批上传。
+- 主机编译、ULog 测试、Keil 完整构建和 `git diff --check` 已执行；BT10 实际吞吐、启停命令接入、停车后完整上传和实车内环效果仍为 `NOT_RUN`。
 - `tests/race/run.ps1`、`tests/ulog/run.ps1`：`PASS`；UV4/ArmCC 完整构建：`PASS`，0 Error、0 Warning；OpenMV Python 语法检查：`PASS`；OpenMV、场地路点、旋转空间、摄像头和整车动作：`NOT_RUN`/`NEED_CONFIRMATION`。
 
 ## 21. 二维码后的原料区导航与视觉对准（2026-11-20）

@@ -216,6 +216,7 @@ void AppRuntime_Poll(void)
     AppRace_Poll();
     Vbat_Poll();
     update_ulog_snapshot();
+    ULog_PidBurstPoll();
     ULog_Poll(&chassis);
 #else
 #if (MOTOR_TUNE != 0)
@@ -230,6 +231,7 @@ void AppRuntime_Poll(void)
     Vbat_Poll();
     DisplayNav_Poll(&chassis);
     update_ulog_snapshot();
+    ULog_PidBurstPoll();
     ULog_Poll(&chassis);
 #endif
 }
@@ -245,10 +247,27 @@ uint8_t AppRuntime_ControlTick(void)
 
 void AppRuntime_MotorTick(void)
 {
+    ULogPidSample sample;
     Motor_Update(&motor_left_front, 0.001f);
     Motor_Update(&motor_right_front, 0.001f);
     Motor_Update(&motor_left_back, 0.001f);
     Motor_Update(&motor_right_back, 0.001f);
+    if (ULog_PidBurstActive()) {
+        sample.timestamp_ms = HAL_GetTick();
+        sample.fl_target = motor_left_front.target_speed;
+        sample.fl_actual = motor_left_front.actual_speed;
+        sample.fl_output = motor_left_front.output;
+        sample.fr_target = motor_right_front.target_speed;
+        sample.fr_actual = motor_right_front.actual_speed;
+        sample.fr_output = motor_right_front.output;
+        sample.rl_target = motor_left_back.target_speed;
+        sample.rl_actual = motor_left_back.actual_speed;
+        sample.rl_output = motor_left_back.output;
+        sample.rr_target = motor_right_back.target_speed;
+        sample.rr_actual = motor_right_back.actual_speed;
+        sample.rr_output = motor_right_back.output;
+        ULog_PidBurstSampleIsr(&sample);
+    }
 }
 
 void AppRuntime_ChassisTick(void)

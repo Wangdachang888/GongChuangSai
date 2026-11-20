@@ -30,6 +30,17 @@ extern "C" {
 #define ULOG_PERIOD_MS        50u
 #endif
 
+/* High-rate inner-loop capture is an explicit diagnostic feature.  It is
+ * disabled by default so a competition build cannot consume RAM or UART
+ * bandwidth unexpectedly. */
+#ifndef ULOG_PID_BURST_ENABLE
+#define ULOG_PID_BURST_ENABLE  0
+#endif
+
+#ifndef ULOG_PID_BURST_CAPACITY
+#define ULOG_PID_BURST_CAPACITY 256u
+#endif
+
 /* Give the external UART -> TF logger time to initialize.
  * This is only a startup delay; it is NOT a card-ready handshake. */
 #ifndef ULOG_STARTUP_WAIT_MS
@@ -57,12 +68,37 @@ typedef struct {
     float imu_yaw_deg;
 } ULogAppSnapshot;
 
+typedef struct {
+    uint32_t timestamp_ms;
+    float fl_target;
+    float fl_actual;
+    float fl_output;
+    float fr_target;
+    float fr_actual;
+    float fr_output;
+    float rl_target;
+    float rl_actual;
+    float rl_output;
+    float rr_target;
+    float rr_actual;
+    float rr_output;
+} ULogPidSample;
+
 /* Init once per boot. Stop stays latched until MCU reset. */
 void ULog_Init(void);
 uint8_t ULog_IsRecording(void); /* Stream enabled, NOT a card-close ACK */
 void ULog_Poll(const MecanumChassis_t *chassis);
 void ULog_SetAppSnapshot(const ULogAppSnapshot *snapshot);
 void ULog_Stop(void);            /* Stop UART stream only, NOT a TF file-close command */
+
+/* Explicit diagnostic capture of the 1 kHz motor inner loop.  Start/stop are
+ * expected to be used only in a non-competition test build. */
+void ULog_PidBurstStart(void);
+void ULog_PidBurstStop(void);
+uint8_t ULog_PidBurstActive(void);
+void ULog_PidBurstSampleIsr(const ULogPidSample *sample);
+void ULog_PidBurstPoll(void);
+extern volatile uint32_t g_ulog_pid_burst_overrun;
 
 /* Inspect these counters in Keil Watch during diagnosis. */
 extern volatile uint32_t g_ulog_tx_error_count;

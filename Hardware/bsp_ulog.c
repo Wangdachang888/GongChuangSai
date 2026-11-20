@@ -74,6 +74,15 @@ static float    s_last_y;
 static uint8_t  s_have_last;
 static ULogAppSnapshot s_app_snapshot;
 
+#if (ULOG_PID_BURST_ENABLE != 0)
+static volatile ULogPidSample s_pid_ring[ULOG_PID_BURST_CAPACITY];
+static volatile uint16_t s_pid_head;
+static volatile uint16_t s_pid_tail;
+static volatile uint8_t s_pid_active;
+static volatile uint8_t s_pid_end_pending;
+volatile uint32_t g_ulog_pid_burst_overrun;
+#endif
+
 UART_HandleTypeDef *ULog_GetHandle(void)
 {
     return &s_huart2;
@@ -177,6 +186,11 @@ void ULog_Stop(void)
 {
     /* This stops transmission by the STM32 only. The recorder may still
      * have cached writes or an open FAT32 file; do not immediately power off. */
+    if ((s_stream_enabled != 0u) && (ULog_PidBurstActive() != 0u)) {
+        static const uint8_t pid_end_frame[] = "#BTLOG,PID_END\r\n";
+        ULog_PidBurstStop();
+        ULog_WriteRaw(pid_end_frame, (uint16_t)(sizeof(pid_end_frame) - 1u));
+    }
     if ((s_stream_enabled != 0u) && (s_data_sent != 0u) &&
         (s_tx_failed == 0u) && (s_end_sent == 0u)) {
         static const uint8_t end_frame[] = "#BTLOG,END\r\n";
@@ -184,6 +198,100 @@ void ULog_Stop(void)
         ULog_WriteRaw(end_frame, (uint16_t)(sizeof(end_frame) - 1u));
     }
     s_stream_enabled = 0u;
+}
+
+void ULog_PidBurstStart(void)
+{
+#if (ULOG_PID_BURST_ENABLE != 0)
+    if (!ULog_IsRecording()) return;
+    ULOG_CRITICAL_ENTER();
+    s_pid_head = 0u;
+    s_pid_tail = 0u;
+    s_pid_active = 1u;
+    s_pid_end_pending = 0u;
+    g_ulog_pid_burst_overrun = 0u;
+    ULOG_CRITICAL_EXIT();
+    ULog_Printf("#BTLOG,PID_BEGIN,timestamp_ms,fl_target,fl_actual,fl_output,fr_target,fr_actual,fr_output,rl_target,rl_actual,rl_output,rr_target,rr_actual,rr_output\r\n");
+#endif
+}
+
+void ULog_PidBurstStop(void)
+{
+#if (ULOG_PID_BURST_ENABLE != 0)
+    ULOG_CRITICAL_ENTER();
+    s_pid_active = 0u;
+    s_pid_end_pending = 1u;
+    ULOG_CRITICAL_EXIT();
+#endif
+}
+
+uint8_t ULog_PidBurstActive(void)
+{
+#if (ULOG_PID_BURST_ENABLE != 0)
+    return s_pid_active;
+#else
+    return 0u;
+#endif
+}
+
+void ULog_PidBurstSampleIsr(const ULogPidSample *sample)
+{
+#if (ULOG_PID_BURST_ENABLE != 0)
+    uint16_t next;
+    if ((sample == 0) || (s_pid_active == 0u)) return;
+    next = (uint16_t)((s_pid_head + 1u) % ULOG_PID_BURST_CAPACITY);
+    if (next == s_pid_tail) {
+        g_ulog_pid_burst_overrun++;
+        return;
+    }
+    s_pid_ring[s_pid_head] = *sample;
+    s_pid_head = next;
+#else
+    (void)sample;
+#endif
+}
+
+void ULog_PidBurstPoll(void)
+{
+#if (ULOG_PID_BURST_ENABLE != 0)
+    static char line[256];
+    ULogPidSample sample;
+    uint16_t tail;
+    int n;
+
+    if (!ULog_IsRecording()) return;
+    ULOG_CRITICAL_ENTER();
+    if (s_pid_tail == s_pid_head) {
+        if ((s_pid_active == 0u) && (s_pid_end_pending != 0u)) {
+            static const uint8_t end_frame[] = "#BTLOG,PID_END\r\n";
+            s_pid_end_pending = 0u;
+            ULOG_CRITICAL_EXIT();
+            ULog_WriteRaw(end_frame, (uint16_t)(sizeof(end_frame) - 1u));
+            return;
+        }
+        ULOG_CRITICAL_EXIT();
+        return;
+    }
+    tail = s_pid_tail;
+    sample = s_pid_ring[tail];
+    s_pid_tail = (uint16_t)((tail + 1u) % ULOG_PID_BURST_CAPACITY);
+    ULOG_CRITICAL_EXIT();
+
+    n = snprintf(line, sizeof(line),
+        "#BTLOG,PID,%lu,%.4f,%.4f,%.3f,%.4f,%.4f,%.3f,%.4f,%.4f,%.3f,%.4f,%.4f,%.3f\r\n",
+        (unsigned long)sample.timestamp_ms,
+        sample.fl_target, sample.fl_actual, sample.fl_output,
+        sample.fr_target, sample.fr_actual, sample.fr_output,
+        sample.rl_target, sample.rl_actual, sample.rl_output,
+        sample.rr_target, sample.rr_actual, sample.rr_output);
+    if ((n > 0) && ((size_t)n < sizeof(line))) {
+        ULog_WriteRaw((const uint8_t *)line, (uint16_t)n);
+    } else {
+        g_ulog_format_error_count++;
+    }
+#else
+    /* Compile-time no-op keeps the application call site unchanged. */
+#endif
 }
 
 uint8_t ULog_IsRecording(void)
@@ -248,6 +356,13 @@ void ULog_Init(void)
     s_tx_tail = 0u;
     s_tx_inflight = 0u;
     s_tx_busy = 0u;
+#if (ULOG_PID_BURST_ENABLE != 0)
+    s_pid_head = 0u;
+    s_pid_tail = 0u;
+    s_pid_active = 0u;
+    s_pid_end_pending = 0u;
+    g_ulog_pid_burst_overrun = 0u;
+#endif
 
     /* Do not send the old #U43 marker immediately at boot: the external
      * recorder may not be initialized yet. Log data starts after delay. */
@@ -439,5 +554,11 @@ void ULog_WriteRaw(const uint8_t *data, uint16_t len) { (void)data; (void)len; }
 void ULog_Printf(const char *s) { (void)s; }
 UART_HandleTypeDef *ULog_GetHandle(void) { return 0; }
 void ULog_TxCpltCallback(void) {}
+void ULog_PidBurstStart(void) {}
+void ULog_PidBurstStop(void) {}
+uint8_t ULog_PidBurstActive(void) { return 0u; }
+void ULog_PidBurstSampleIsr(const ULogPidSample *sample) { (void)sample; }
+void ULog_PidBurstPoll(void) {}
+volatile uint32_t g_ulog_pid_burst_overrun;
 
 #endif
