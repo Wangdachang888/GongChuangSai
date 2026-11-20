@@ -20,7 +20,9 @@ static RaceInput s_input;
 static PickFsm s_pick;
 static RaceTaskPlan s_plan;
 static AppRingAlign s_ring;
-static uint8_t s_direct_cycle_done;
+#if (RACE_PICK_DIRECT_KEY_TEST != 0U)
+    static uint8_t s_direct_cycle_done;
+#endif
 static uint8_t s_ring_control;
 #if (RACE_PICK_DIRECT_KEY_TEST != 0U)
 static void start_direct_pick(uint32_t now, uint8_t reverse)
@@ -121,7 +123,9 @@ static uint8_t warmed_up(uint32_t now)
 void AppRace_Init(MecanumChassis_t *chassis)
 {
     s_chassis = chassis;
+#if (RACE_PICK_DIRECT_KEY_TEST != 0U)
     s_direct_cycle_done = 0U;
+#endif
     s_ring_control = 0U;
     Race_Init(&s_race);
     s_boot = HAL_GetTick();
@@ -289,9 +293,7 @@ void AppRace_Poll(void)
             s_chassis->body_frame = 0U;
             Mecanum_SetPositionMode(s_chassis, s_race.target_x, s_race.target_y, s_race.target_yaw);
         }
-        if (action->scan_leg != 0U ||
-            (s_race.action_index + 1U < s_race.action_count &&
-             s_race.actions[s_race.action_index + 1U].scan_leg == 1U))
+        if (action->scan_start != 0U)
             Mecanum_SetSpeedLimit(s_chassis, RACE_QR_SCAN_SPEED_MPS, RACE_TURN_SPEED_RADPS);
         else
             Mecanum_SetSpeedLimit(s_chassis, RACE_MOVE_SPEED_MPS, RACE_TURN_SPEED_RADPS);

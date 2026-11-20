@@ -54,7 +54,7 @@ TIM6 的计数周期是 1 ms。`Core/Src/main.c` 的唯一周期回调先执行�
 2. 处理视觉帧并提交二维码任务计划。
 3. 若圆环闭环正在运行，则把底盘控制权交给 `app_ring_align.c`，其他动作暂停。
 4. 处理按键启动、长按选区、短按开始和运行中取消。
-5. 调用 `Race_Tick` 推进移动、转向、扫码、等待和故障状态。
+5. 调用 `Race_Tick` 推进固定路点 MOVE、扫描段、等待和故障状态；扫描段通过动作标志与底盘运动并行。
 6. 进入夹取任务时只启动 `PickFsm`，夹取完成后推进任务计划。
 7. 在状态切换时由比赛协调层设置一次位置目标，底盘位置环在 TIM6 的 10 ms 链路中执行。
 
@@ -63,9 +63,8 @@ stateDiagram-v2
     [*] --> READY
     READY --> RUNNING: 按键/路线开始
     RUNNING --> MOVE: 移动动作
-    MOVE --> TURN: 到位
-    TURN --> SCAN: 到位
-    SCAN --> RUNNING: 收到二维码/任务计划
+    MOVE --> MOVE: 扫描段内继续运动
+    MOVE --> RUNNING: 路点到位/扫描确认
     RUNNING --> PICK: 当前动作是夹取
     PICK --> RUNNING: PickFsm 完成
     RUNNING --> DONE: 计划完成
@@ -74,7 +73,7 @@ stateDiagram-v2
     RUNNING --> FAULT: 超时/停滞
 ```
 
-`RACE_PICK_DIRECT_KEY_TEST` 当前默认开启，因此按键可以直接启动夹取测试。该模式是当前代码事实，不能描述为完整比赛任务链已完成。
+`RACE_PICK_DIRECT_KEY_TEST` 当前默认关闭，正式比赛短按进入二维码路线；机械夹取测试仍可通过测试构建配置显式开启。二维码阶段只负责读取并确认任务码，不能描述为完整比赛任务链已完成。
 
 ## 5.1 智能搬运规则约束
 

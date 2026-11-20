@@ -46,14 +46,12 @@ static void enter_action(RaceFsm *race, uint32_t now)
         race->qr_valid = 0U;
         race->scan_active = 1U;
     }
-    if (action->scan_leg != 0U) race->scan_attempt = action->scan_leg;
 }
 
 void Race_Init(RaceFsm *race)
 {
     memset(race, 0, sizeof(*race));
     race->zone = RACE_DEFAULT_START_ZONE;
-    race->candidate_zone = 0U;
     race->state = RACE_READY;
 }
 
@@ -111,9 +109,6 @@ uint8_t Race_RunActions(RaceFsm *race, const RaceAction *actions, uint8_t count,
     race->task_code[0] = '\0';
     race->qr_valid = 0U;
     race->scan_active = 0U;
-    race->scan_attempt = 0U;
-    race->candidate_zone = 0U;
-    race->zone_confirmed = 0U;
     race->error = RACE_ERROR_NONE;
     race->state = RACE_RUNNING;
     enter_action(race, now);
@@ -122,8 +117,9 @@ uint8_t Race_RunActions(RaceFsm *race, const RaceAction *actions, uint8_t count,
 
 uint8_t Race_StartQrRoute(RaceFsm *race, const RaceFeedback *feedback, uint32_t now)
 {
-    RaceAction actions[6];
-    float heading, cosine, sine, start_x, entry_x, exit_x;
+    RaceAction actions[5];
+    float heading, cosine, sine, start_x, scan_start_x, scan_end_x;
+    uint8_t action_count;
     if (race == NULL || race->zone < 1U || race->zone > 2U) return 0U;
     heading = race->zone == 1U ? RACE_ZONE1_HEADING_RAD : RACE_ZONE2_HEADING_RAD;
     cosine = cosf(heading);
@@ -133,34 +129,44 @@ uint8_t Race_StartQrRoute(RaceFsm *race, const RaceFeedback *feedback, uint32_t 
      * from being mistaken for odometry increments. */
     start_x = race->zone == 1U ? (RACE_FIELD_SIZE_M - RACE_START_CENTER_M) :
                                  RACE_START_CENTER_M;
-    entry_x = RACE_QR_SCAN_ENTRY_X_M - start_x;
-    exit_x = RACE_QR_SCAN_EXIT_X_M - start_x;
+    /* Zone 1 scans 1400->1000 mm and then returns to the common merge point;
+     * zone 2 scans 1000->1400 mm.  These are absolute field X coordinates,
+     * converted here to local displacements from the selected start centre. */
+    scan_start_x = race->zone == 1U ? RACE_QR_SCAN_EXIT_X_M :
+                                      RACE_QR_SCAN_ENTRY_X_M;
+    scan_end_x = race->zone == 1U ? RACE_QR_SCAN_ENTRY_X_M :
+                                    RACE_QR_SCAN_EXIT_X_M;
     actions[0] = (RaceAction){RACE_ACTION_MOVE, 0.0f, RACE_INITIAL_OFFSET_M,
                               0.0f, RACE_MOVE_TIMEOUT_MS,
-                              RACE_ARRIVAL_HOLD_MS, 0U, 0U};
+                              RACE_ARRIVAL_HOLD_MS, 0U};
     actions[1] = (RaceAction){RACE_ACTION_MOVE,
-                              cosine * entry_x - sine * RACE_INITIAL_OFFSET_M,
-                              sine * entry_x + cosine * RACE_INITIAL_OFFSET_M,
+                              cosine * (scan_start_x - start_x) -
+                                  sine * RACE_INITIAL_OFFSET_M,
+                              sine * (scan_start_x - start_x) +
+                                  cosine * RACE_INITIAL_OFFSET_M,
                               0.0f, RACE_MOVE_TIMEOUT_MS,
-                              RACE_ARRIVAL_HOLD_MS, 0U, 0U};
+                              RACE_ARRIVAL_HOLD_MS, 0U};
     actions[2] = (RaceAction){RACE_ACTION_MOVE,
-                              cosine * exit_x - sine * RACE_INITIAL_OFFSET_M,
-                              sine * exit_x + cosine * RACE_INITIAL_OFFSET_M,
+                              cosine * (scan_end_x - start_x) -
+                                  sine * RACE_INITIAL_OFFSET_M,
+                              sine * (scan_end_x - start_x) +
+                                  cosine * RACE_INITIAL_OFFSET_M,
                               0.0f, RACE_MOVE_TIMEOUT_MS,
-                              RACE_ARRIVAL_HOLD_MS, 1U, 1U};
-    actions[3] = (RaceAction){RACE_ACTION_TURN,
-                              cosine * exit_x - sine * RACE_INITIAL_OFFSET_M,
-                              sine * exit_x + cosine * RACE_INITIAL_OFFSET_M,
-                              RACE_QR_TURN_YAW_RAD, RACE_MOVE_TIMEOUT_MS,
-                              RACE_ARRIVAL_HOLD_MS, 0U, 0U};
-    actions[4] = (RaceAction){RACE_ACTION_MOVE,
-                              cosine * entry_x - sine * RACE_INITIAL_OFFSET_M,
-                              sine * entry_x + cosine * RACE_INITIAL_OFFSET_M,
-                              RACE_QR_TURN_YAW_RAD, RACE_MOVE_TIMEOUT_MS,
-                              RACE_ARRIVAL_HOLD_MS, 0U, 2U};
-    actions[5] = (RaceAction){RACE_ACTION_SETTLE, 0.0f, 0.0f, 0.0f,
-                              3000U, RACE_SETTLE_MS, 0U, 0U};
-    return Race_RunActions(race, actions, 6U, feedback, now);
+                              RACE_ARRIVAL_HOLD_MS, 1U};
+    action_count = 4U;
+    if (race->zone == 1U) {
+        actions[3] = (RaceAction){RACE_ACTION_MOVE,
+                                  cosine * (scan_start_x - start_x) -
+                                      sine * RACE_INITIAL_OFFSET_M,
+                                  sine * (scan_start_x - start_x) +
+                                      cosine * RACE_INITIAL_OFFSET_M,
+                                  0.0f, RACE_MOVE_TIMEOUT_MS,
+                                  RACE_ARRIVAL_HOLD_MS, 0U};
+        action_count = 5U;
+    }
+    actions[action_count - 1U] = (RaceAction){RACE_ACTION_SETTLE, 0.0f, 0.0f, 0.0f,
+                                              3000U, RACE_SETTLE_MS, 0U};
+    return Race_RunActions(race, actions, action_count, feedback, now);
 }
 
 void Race_Tick(RaceFsm *race, const RaceFeedback *feedback, uint32_t now)
@@ -185,29 +191,9 @@ void Race_Tick(RaceFsm *race, const RaceFeedback *feedback, uint32_t now)
         race->holding = 0U;
         return;
     }
-    if (action->scan_leg != 0U && !race->qr_valid) {
-        if (action->scan_leg == 1U) {
-#if (RACE_QR_ROTATION_SAFE != 0U)
-            race->action_index++;
-            enter_action(race, now);
-#else
-            Race_Fail(race, RACE_ERROR_CONFIG);
-#endif
-            return;
-        }
+    if (action->scan_start != 0U && !race->qr_valid) {
         Race_Fail(race, RACE_ERROR_SCAN_TIMEOUT);
         return;
-    }
-    if (action->scan_leg == 1U && race->qr_valid) {
-        /* A forward hit ends the QR job; skip the fallback turn and reverse
-         * leg while still completing the physical move to X=1400 mm. */
-        race->candidate_zone = 2U;
-        race->action_index = (uint8_t)(race->action_index + 3U);
-        enter_action(race, now);
-        return;
-    }
-    if (action->scan_leg == 2U && race->qr_valid) {
-        race->candidate_zone = 1U;
     }
     if (action->kind == RACE_ACTION_SCAN) {
         if (!race->qr_valid) return;
@@ -257,16 +243,5 @@ uint8_t Race_SubmitQr(RaceFsm *race, uint32_t session, const char *code)
     memcpy(race->task_code, code, RACE_TASK_CODE_SIZE);
     race->qr_valid = 1U;
     race->scan_active = 0U;
-    race->candidate_zone = race->scan_attempt == 2U ? 1U : 2U;
     return 1U;
-}
-
-uint8_t Race_QrCandidateZone(const RaceFsm *race)
-{
-    return race == NULL ? 0U : race->candidate_zone;
-}
-
-uint8_t Race_QrZoneConfirmed(const RaceFsm *race)
-{
-    return race == NULL ? 0U : race->zone_confirmed;
 }

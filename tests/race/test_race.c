@@ -52,8 +52,19 @@ static void test_routes(void)
         assert(Race_SelectZone(&race, zone));
         assert(Race_StartQrRoute(&race, &current, now));
         assert(fabsf(race.target_y - 0.140f) < 0.0001f);
-        assert(race.actions[2].scan_start != 0U && race.actions[2].scan_leg == 1U);
-        assert(race.actions[4].scan_leg == 2U);
+        assert(race.actions[2].scan_start != 0U);
+        assert(race.actions[0].yaw == 0.0f && race.actions[1].yaw == 0.0f &&
+               race.actions[2].yaw == 0.0f);
+        if (zone == 1U) {
+            assert(race.action_count == 5U);
+            assert(fabsf(race.actions[1].x + 0.850f) < 0.0001f);
+            assert(fabsf(race.actions[2].x + 1.250f) < 0.0001f);
+            assert(fabsf(race.actions[3].x + 0.850f) < 0.0001f);
+        } else {
+            assert(race.action_count == 4U);
+            assert(fabsf(race.actions[1].x - 0.850f) < 0.0001f);
+            assert(fabsf(race.actions[2].x - 1.250f) < 0.0001f);
+        }
         assert(!Race_SelectZone(&race, 3U - zone));
         assert(!Race_SubmitQr(&race, race.scan_session, "452+321+254+312"));
         while (race.state == RACE_RUNNING) {
@@ -67,10 +78,7 @@ static void test_routes(void)
             at_target(&race, &current);
             Race_Tick(&race, &current, now);
             if (race.state != RACE_RUNNING) break;
-            if (race.actions[previous].scan_leg != 1U || race.qr_valid)
-                assert(race.action_index >= previous);
-            else
-                assert(race.action_index == previous);
+            assert(race.action_index >= previous);
             if (race.action_index != previous) {
                 now++;
                 continue;
@@ -86,7 +94,7 @@ static void test_routes(void)
         assert(!Race_SubmitQr(&race, race.scan_session + 1U, "452+321+254+312"));
         assert(!Race_SubmitQr(&race, race.scan_session, "452+321+254+312"));
         assert(race.colors[1][0] == 2U && race.positions[0][0] == 3U);
-        assert(Race_QrCandidateZone(&race) == 2U);
+        assert(race.zone == zone);
         assert(!Race_StartQrRoute(&race, &current, now + 2U));
         current.imu_valid = 0U;
         Race_Tick(&race, &current, now + 100000U);
@@ -99,7 +107,7 @@ static void test_motion_guards(void)
     RaceFsm race;
     RaceFeedback current = stationary();
     RaceAction action = {RACE_ACTION_MOVE, 1.0f, 0.0f, 0.0f,
-                         1000U, 200U, 0U, 0U};
+                         1000U, 200U, 0U};
     Race_Init(&race);
     assert(Race_RunActions(&race, &action, 1U, &current, 0U));
     at_target(&race, &current);
@@ -131,12 +139,43 @@ static void test_motion_guards(void)
     assert(!Race_StartQrRoute(&race, &current, 2000U));
 }
 
+static void test_scan_failure_does_not_reverse(void)
+{
+    uint8_t zone;
+    for (zone = 1U; zone <= 2U; zone++) {
+        RaceFsm race;
+        RaceFeedback current = stationary();
+        uint32_t now = 0U;
+        Race_Init(&race);
+        assert(Race_SelectZone(&race, zone));
+        assert(Race_StartQrRoute(&race, &current, now));
+        while (race.state == RACE_RUNNING) {
+            uint8_t index = race.action_index;
+            at_target(&race, &current);
+            Race_Tick(&race, &current, now);
+            if (race.actions[index].scan_start != 0U) {
+                assert(race.state == RACE_FAULT);
+                assert(race.error == RACE_ERROR_SCAN_TIMEOUT);
+                assert(race.action_index == index);
+                break;
+            }
+            if (race.state == RACE_RUNNING) {
+                now += race.actions[index].hold_ms + 1U;
+                at_target(&race, &current);
+                Race_Tick(&race, &current, now);
+                now++;
+            }
+        }
+        assert(race.state == RACE_FAULT);
+    }
+}
+
 static void test_faults(void)
 {
     RaceFsm race;
     RaceFeedback current = stationary();
     RaceAction action = {RACE_ACTION_SCAN, 0.0f, 0.0f, 0.0f,
-                         1000U, 0U, 0U, 0U};
+                         1000U, 0U, 0U};
     uint32_t start = 0xFFFFFF00U;
     Race_Init(&race);
     assert(Race_RunActions(&race, &action, 1U, &current, start));
@@ -243,6 +282,7 @@ int main(void)
 {
     test_routes();
     test_motion_guards();
+    test_scan_failure_does_not_reverse();
     test_faults();
     test_protocol();
     test_task_plan();

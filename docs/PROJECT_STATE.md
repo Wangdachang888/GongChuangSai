@@ -71,7 +71,7 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 
 - `APP_RUN_MODE` 默认是 `APP_MODE_RACE`。
 - `RACE_PICK_ENABLE` 为启用状态。
-- `RACE_PICK_DIRECT_KEY_TEST` 当前为 `1`，比赛固件默认仍走夹取直接按键测试入口；这不等于完整比赛任务链已经实机接通。
+- `RACE_PICK_DIRECT_KEY_TEST` 当前为 `0`，正式比赛短按进入二维码路线；机械夹取测试仅通过测试构建配置显式开启。这不等于完整比赛任务链已经实机接通。
 - `RACE_PICK_TURNTABLE_ENABLE` 为启用状态，PC7 作为转盘舵机使用。
 - 圆环 `J00/J01/J10/J11` 当前全为 `0.0f`，因此未完成标定前不会发出圆环底盘移动目标。
 
@@ -113,7 +113,7 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 - 网页代理地址、`/health` 连接检查和按钮门控：`PASS`；浏览器自动启动本地 Python 进程：不支持，仍需手动启动代理。
 - 本地一键启动脚本语法检查：`PASS`；实际双击启动和浏览器关联：`NOT_RUN`。
 - 启动脚本读取用户级密钥、Python 命令选择和健康重试：`PASS`；实际 DeepSeek 网络调用：`NOT_RUN`。
-- 启动脚本现改为运行时隐藏输入临时密钥，不写用户环境变量或配置文件；成功/失败会显示明确提示，并检查 Python、端口和 `/health`。双击脚本的失败路径会等待用户确认；实际双击和真实 API 调用仍为 `NOT_RUN`。
+- 启动脚本现改为运行时隐藏输入临时密钥，不写用户环境变量或配置文件；成功/失败会显示明确提示，并检查 Python、端口和 `/health`。重复启动时会复用已通过健康检查的 8787 代理。双击脚本的失败路径会等待用户确认；实际双击和真实 API 调用仍为 `NOT_RUN`。
 
 ## 11. 给下一位 AI 的交接
 
@@ -200,10 +200,10 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 - 旧的 BT10/WHEELTEC APP 控制帧、USART3 视觉协议和 ULog43 日志格式是三套不同协议。当前实现兼容的是 ULog43 数据内容和 USART2 115200 8N1 传输路径，不承诺把旧 APP 控制命令自动解释为日志行；`@GET/@SET` 仅是当前电脑接收器的调试命令，运行中禁止 `@SET`。
 - 当前真实 BT10 长时间传输、BLE 断链重连、整车结束时序和比赛环境可靠性仍为 `NOT_RUN`，需要实车人工验收。
 
-## 20. 双启停区二维码扫描流程（2026-11-19）
+## 20. 双启停区二维码扫描流程（2026-11-20）
 
-- `Race_StartQrRoute()` 编排 140 mm 初始平移、场地绝对 X=1000/1400 mm 到局部里程计位移的换算、100 mm/s 扫描速度、首次成功跳过反扫，以及首次漏扫后的 180°反向扫描动作。
-- `RaceAction.scan_leg` 区分正向和反向扫描；二维码接收继续在主循环异步完成。二维码校验并保存后由 `RaceVision_AckQr()` 发送 `ACK,QR,<session>`，重复二维码不会重复生成任务计划。
+- `Race_StartQrRoute()` 使用赛前锁定的人工启停区选择，保持两区车头 `Yaw=0°`，先沿 Y 正方向平移 140 mm，再将绝对场地 X 坐标转换为相对里程计位移。区 1 按 1400→1000→1400 mm 扫描并回到公共点，区 2 按 1000→1400 mm 扫描；两条路线最终汇合到 `(1400,290,0°)`。
+- 扫描动作是普通 MOVE 的 `scan_start` 标记，速度限制为 100 mm/s；二维码接收继续在主循环异步完成。二维码校验并保存后由 `RaceVision_AckQr()` 发送 `ACK,QR,<session>`，当前扫描段仍完整执行，不会因提前成功跳过返程。
 - OpenMV QR 任务取消固定识别超时，保留同一任务会话并限频重发待确认二维码；只有收到匹配确认后才发送 `DONE,QR` 并进入 `IDLE`。
-- `RACE_QR_FIELD_FRAME_CONFIRMED` 和 `RACE_QR_ROTATION_SAFE` 默认关闭。未完成场地原点、航向和旋转外廓实测前，App 拒绝启动绝对坐标路线，FSM 仍可用于主机测试但首次漏扫不会自动旋转。
+- 不再按扫码次数推断启停区，不再执行扫码失败后的 180°旋转或反向补扫；二维码无效或扫描段结束仍未确认时进入故障并安全停止。`RACE_QR_FIELD_FRAME_CONFIRMED` 默认关闭，未完成场地原点、航向和路点实测前，App 拒绝启动绝对坐标路线。
 - `tests/race/run.ps1`、`tests/ulog/run.ps1`：`PASS`；UV4/ArmCC 完整构建：`PASS`，0 Error、0 Warning；OpenMV Python 语法检查：`PASS`；OpenMV、场地路点、旋转空间、摄像头和整车动作：`NOT_RUN`/`NEED_CONFIRMATION`。

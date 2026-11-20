@@ -223,7 +223,7 @@ int main(void)
         assert(AppRace_Status()->action_index > index ||
                AppRace_Status()->state == RACE_DONE);
     }
-    assert(s_scans == 1U && s_position_calls == 3U && s_chassis.mode == 0U);
+    assert(s_scans == 1U && s_position_calls == 4U && s_chassis.mode == 0U);
     assert(AppRace_Status()->state == RACE_DONE && !AppRace_ControlTick());
     assert(strcmp(AppRace_Status()->task_code, "452+321+254+312") == 0);
     puts("PASS: boot-held/warmup keys, zone select, one-shot start/abort, PID transition ownership, stall/IMU/link stops, scan completion");

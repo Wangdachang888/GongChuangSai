@@ -166,15 +166,16 @@
 - `#BTLOG,END` 只表示 BT10 接收端和网页会话结束，不等同于 TF 卡文件系统 close。旧 BT10 APP 控制协议、USART3 视觉协议、ULog43 日志格式彼此独立；当前不会把旧控制帧自动转换成日志行。
 - 以上为代码和主机测试结论，真实 BT10 长时间传输、断链恢复及整车结束时序仍为 `NOT_RUN`。
 
-## 双启停区二维码扫描运动流程（2026-11-19）
+## 双启停区二维码扫描运动流程（2026-11-20）
 
 提交：本轮待提交，提交后不在长期文档中自引用当前 SHA
 范围：`App/app_race.c`、`App/race_fsm.c/.h`、`Config/race_config.h`、`Hardware/vision.c/.h`、OpenMV `main.py`、race 测试
-原因：在现有位置环和 V4 协议上加入 140 mm 初始平移、1000→1400/1400→1000 双向扫码编排、二维码交付确认和持续 QR 任务。
+原因：废弃旧版按扫码次数判区和 180°反扫，改为赛前人工选区、两条固定路线和公共汇合点；保留现有位置环、异步 QR 接收和 V4 交付确认。
 验证：`tests/race/run.ps1` PASS；`tests/ulog/run.ps1` PASS；UV4/ArmCC PASS（0 Error、0 Warning）；OpenMV `py_compile` PASS；`git diff --check` PASS。
-安全边界：场地绝对坐标转换、旋转空间、摄像头安装、OpenMV 通信和整车动作尚未实机验证；`RACE_QR_FIELD_FRAME_CONFIRMED`、`RACE_QR_ROTATION_SAFE` 默认关闭，相关项目为 `NEED_CONFIRMATION`/`NOT_RUN`。
+安全边界：场地绝对坐标转换、路点、摄像头安装、OpenMV 通信和整车动作尚未实机验证；`RACE_QR_FIELD_FRAME_CONFIRMED` 默认关闭，相关项目为 `NEED_CONFIRMATION`/`NOT_RUN`。
 ## 2026-11-20
 
 - 修复 `tools/start_deepseek_pid.ps1` 在未配置环境变量时静默退出的问题。
 - 启动时使用隐藏输入临时 DeepSeek key，key 只通过当前进程环境变量传给代理，不写用户环境变量、网页或仓库。
 - 增加 Python、端口占用、代理立即退出和 `/health` 检查提示；失败时等待用户按 Enter，避免双击后窗口瞬间关闭。
+- 重复启动时若 8787 已是健康的本地代理，则直接复用并打开网页。
