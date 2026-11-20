@@ -763,6 +763,7 @@ function init() {
   $('pid-burst-file').onchange=async e=>{const file=e.target.files[0];if(file){try{loadPidBurst(await file.text(),file.name);}catch(err){notify('PID Burst 导入失败：'+err.message,true);}e.target.value='';}};
   $('pid-burst-analyze').onclick=()=>{if(!S.pidBurst){notify('请先导入 PID Burst CSV。',true);return;}try{const data=S.pidBurst.data;S.pidBurst.analysis=analyzePidBurst(data,{rate:Number($('pid-burst-rate').value),satLimit:Number($('pid-burst-sat').value),tolerance:Number($('pid-burst-tol').value)});renderPidBurst();}catch(err){notify('PID Burst 分析失败：'+err.message,true);}};
   $('pid-burst-clear').onclick=()=>{S.pidBurst=null;renderPidBurst();};
+  $('pid-deepseek-connect').onclick=()=>connectDeepSeek();
   $('pid-deepseek').onclick=()=>requestDeepSeekAdvice();
   for(const id of ['pid-burst-rate','pid-burst-sat','pid-burst-tol','pid-burst-kp','pid-burst-ki','pid-burst-kd'])$(id).onchange=()=>{if(S.pidBurst&&id!=='pid-burst-kp'&&id!=='pid-burst-ki'&&id!=='pid-burst-kd'){$('pid-burst-analyze').click();}else if(S.pidBurst)renderPidBurst();};
   bindGestures('path','map');bindGestures('strip','wave');

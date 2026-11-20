@@ -38,7 +38,7 @@
   .transport-wave-mini #wave-card button,.transport-wave-mini #wave-card select{padding:4px 6px;font-size:11px}
   .transport-wave-icon #wave-card{right:10px;bottom:10px}
 }
-.ai-tuner{margin-top:16px;padding:14px;border:1px solid var(--line,#d8dee9);border-radius:10px;background:var(--surface-alt,#f8fafc)}.ai-summary{display:flex;justify-content:space-between;gap:12px}.ai-advice ol{margin:.5rem 0;padding-left:1.4rem}.ai-advice .warning{color:#a33;font-weight:600}.ai-advice small{color:var(--muted,#667085)}
+.ai-tuner{margin-top:16px;padding:14px;border:1px solid #355d78;border-radius:10px;background:#101f30;color:var(--text)}.ai-summary{display:flex;justify-content:space-between;gap:12px}.ai-advice ol{margin:.5rem 0;padding-left:1.4rem}.ai-advice .warning{color:var(--amber);font-weight:600}.ai-advice small{color:var(--muted)}
 </style></head>
 <body>
 <header><div><small class="eyebrow">MECANUM / TELEMETRY LAB</small><h1>智能搬运 <span>· 麦克纳姆调试台</span></h1></div><label id="drop" class="button primary">导入 CSV / 拖入日志<input id="file" type="file" accept=".csv,.txt" hidden></label><div class="realtime-connect"><label>电脑日志源 <input id="ws-url" value="ws://127.0.0.1:8765" spellcheck="false"></label><button id="ws-connect">连接电脑日志源</button><button id="bt-connect">直接连接 BT10</button><button id="serial-echo">串口自动回显</button><button id="bt-selftest" disabled>发送 BT10 自测</button><button id="full-selftest">一键自测</button><button id="local-sim">本地模拟</button><span id="ws-status" class="note">电脑日志源未连接；BT10 直连可单独使用</span></div><div id="meta">本项目 ULog43 · 等待日志</div></header>
@@ -835,6 +835,7 @@ function init() {
   $('pid-burst-file').onchange=async e=>{const file=e.target.files[0];if(file){try{loadPidBurst(await file.text(),file.name);}catch(err){notify('PID Burst 导入失败：'+err.message,true);}e.target.value='';}};
   $('pid-burst-analyze').onclick=()=>{if(!S.pidBurst){notify('请先导入 PID Burst CSV。',true);return;}try{const data=S.pidBurst.data;S.pidBurst.analysis=analyzePidBurst(data,{rate:Number($('pid-burst-rate').value),satLimit:Number($('pid-burst-sat').value),tolerance:Number($('pid-burst-tol').value)});renderPidBurst();}catch(err){notify('PID Burst 分析失败：'+err.message,true);}};
   $('pid-burst-clear').onclick=()=>{S.pidBurst=null;renderPidBurst();};
+  $('pid-deepseek-connect').onclick=()=>connectDeepSeek();
   $('pid-deepseek').onclick=()=>requestDeepSeekAdvice();
   for(const id of ['pid-burst-rate','pid-burst-sat','pid-burst-tol','pid-burst-kp','pid-burst-ki','pid-burst-kd'])$(id).onchange=()=>{if(S.pidBurst&&id!=='pid-burst-kp'&&id!=='pid-burst-ki'&&id!=='pid-burst-kd'){$('pid-burst-analyze').click();}else if(S.pidBurst)renderPidBurst();};
   bindGestures('path','map');bindGestures('strip','wave');
