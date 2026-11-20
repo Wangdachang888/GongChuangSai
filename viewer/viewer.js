@@ -116,7 +116,11 @@ function analyzePidBurst(data,options={}) {
     const toleranceAbs=Math.max(maxTarget*tol,1e-9),hold=Math.max(.1,(times.length>1?times[1]-times[0]:defaultDt)*3);let settlingTime=NaN;
     if(n&&maxTarget>0){for(let i=lastTransition;i<samples.length;i++){if(!finite(samples[i].error))continue;let end=i;while(end+1<samples.length&&times[end+1]-times[i]<hold)end++;if(times[end]-times[i]<hold)continue;let stable=true;for(let j=i;j<=end;j++)if(!finite(samples[j].error)||Math.abs(samples[j].error)>toleranceAbs){stable=false;break;}if(stable){settlingTime=times[i]-times[lastTransition];break;}}}
     const tailStart=Math.max(lastTransition,Math.floor(samples.length*.9));let tailN=0;for(let i=tailStart;i<samples.length;i++)if(finite(samples[i].error)){steadyErr+=Math.abs(samples[i].error);tailN++;}
-    wheels[w]={samples,n,iae,ise,maxAbsError:maxAbs,overshoot:maxExcess,overshootPct:maxTarget?maxExcess/maxTarget*100:NaN,settlingTime,steadyError:tailN?steadyErr/tailN:NaN,saturationRatio:outputCount?saturated/outputCount:NaN,maxTarget,hasTarget:ti!==null,hasActual:ai!==null,hasOutput:oi!==null};
+    // Diagnostic low-speed feed-forward estimate. The logged output also
+    // contains feedback, kick and limiting, so this is never auto-applied.
+    const ff=[];for(const s of samples){if(!finite(s.target)||!finite(s.output)||Math.abs(s.target)<1e-9)continue;const er=finite(s.error)?Math.abs(s.error):Infinity;if(er<=Math.max(maxTarget*tol*1.5,1e-9)&&Math.abs(s.target)<=Math.max(maxTarget*.35,1e-9))ff.push([s.target,s.output]);}
+    let ffSlope=NaN,ffBias=NaN,ffR2=NaN;if(ff.length>=4){const mx=ff.reduce((a,v)=>a+v[0],0)/ff.length,my=ff.reduce((a,v)=>a+v[1],0)/ff.length;let xx=0,xy=0,yy=0;for(const [x,y] of ff){xx+=(x-mx)**2;xy+=(x-mx)*(y-my);yy+=(y-my)**2;}if(xx>1e-12){ffSlope=xy/xx;ffBias=my-ffSlope*mx;ffR2=yy>1e-12?(xy*xy)/(xx*yy):1;}}
+    wheels[w]={samples,n,iae,ise,maxAbsError:maxAbs,overshoot:maxExcess,overshootPct:maxTarget?maxExcess/maxTarget*100:NaN,settlingTime,steadyError:tailN?steadyErr/tailN:NaN,saturationRatio:outputCount?saturated/outputCount:NaN,maxTarget,hasTarget:ti!==null,hasActual:ai!==null,hasOutput:oi!==null,ffSlope,ffBias,ffR2,ffSamples:ff.length};
   }
   return {times,wheels,rate,tolerance:tol,satLimit,rows:data.rows.length};
 }
@@ -124,11 +128,44 @@ function boundedPid(value,min,max){return clamp(Number.isFinite(value)?value:min
 function buildPidCandidates(analysis,base={}) {
   const kp=Math.max(0,Number(base.kp)||0),ki=Math.max(0,Number(base.ki)||0),kd=Math.max(0,Number(base.kd)||0),metrics=WHEELS.map(w=>analysis.wheels[w]).filter(m=>m.n),mean=(key)=>{const a=metrics.map(m=>m[key]).filter(finite);return a.length?a.reduce((x,y)=>x+y,0)/a.length:NaN;};
   const overshoot=mean('overshootPct'),settling=mean('settlingTime'),sat=mean('saturationRatio'),steady=mean('steadyError'),scale=Math.max(mean('maxTarget')||0,1e-9),steadyRatio=finite(steady)?steady/scale:NaN;
+  const slopes=metrics.map(m=>m.ffSlope).filter(finite),biases=metrics.map(m=>m.ffBias).filter(finite),ffSlope=slopes.length?slopes.reduce((a,b)=>a+b,0)/slopes.length:NaN,ffBias=biases.length?biases.reduce((a,b)=>a+b,0)/biases.length:NaN;
   const limit=(p)=>({kp:boundedPid(p.kp,.05,10),ki:boundedPid(p.ki,0,8),kd:boundedPid(p.kd,0,3)});
-  const candidates=[{name:'保守阻尼',...limit({kp:kp*.8,ki:ki*.75,kd:Math.max(kd*.9,kd+.05)}),reason:finite(overshoot)&&overshoot>8?'检测到明显超调，降低比例/积分并增加微分阻尼。':'先降低增益作为安全基线，适合首次试车。'},
-    {name:'提高响应',...limit({kp:kp*1.15,ki:ki*1.05,kd:kd}),reason:finite(settling)&&settling>.5&&(!finite(sat)||sat<.1)?'稳定时间偏长且饱和较少，可小幅提高响应。':'仅在输出未频繁饱和时尝试。'},
-    {name:'减小稳态误差',...limit({kp:kp,ki:ki*1.2,kd:kd}),reason:finite(steadyRatio)&&steadyRatio>.02?'尾段稳态误差偏大，可小幅增加积分。':'仅在确认没有积分饱和时尝试。'}];
-  return {candidates,summary:{overshoot,settling,sat,steady,steadyRatio}};
+  const damping=finite(overshoot)&&overshoot>8,slow=finite(settling)&&settling>.5,hardSat=finite(sat)&&sat>.2,integralNeed=finite(steadyRatio)&&steadyRatio>.02;
+  const candidates=[{name:'保守阻尼',...limit({kp:kp*(damping?.8:.9),ki:ki*(damping?.7:.85),kd:Math.max(kd*(damping?1.15:1),damping?.05:kd)}),reason:damping?'超调超过 8%，降低反馈并增加阻尼；保持前馈不变。':'安全基线：小幅降低反馈，适合低速首次试车。'},
+    {name:'提高响应',...limit({kp:kp*(slow&&!hardSat?1.12:1.03),ki:ki*(slow&&!hardSat?1.04:1),kd}),reason:slow&&!hardSat?'稳定时间偏长且未明显饱和，可小幅提高 Kp。':'响应已足够或输出饱和，限制增益变化。'},
+    {name:'减小稳态误差',...limit({kp,ki:ki*(integralNeed&&!hardSat?1.15:1.03),kd}),reason:integralNeed&&!hardSat?'尾段误差偏大且未饱和，可小幅增加 Ki。':'仅在确认积分未饱和时尝试。'}];
+  const feedforward=slopes.length>=Math.max(1,Math.ceil(metrics.length/2))&&finite(ffSlope)?{slope:ffSlope,bias:ffBias,confidence:slopes.length/metrics.length,samples:slopes.length,reason:'低速低误差样本回归；总输出含 PID/kick，必须人工验证。'}:null;
+  return {candidates,summary:{overshoot,settling,sat,steady,steadyRatio,feedforward},perWheel:Object.fromEntries(WHEELS.map(w=>{const m=analysis.wheels[w];return [w,{feedforward:finite(m.ffSlope)?{slope:m.ffSlope,bias:m.ffBias,r2:m.ffR2,samples:m.ffSamples}:null}];}))};
+}
+// Local, deterministic AI-assisted tuner.  It is intentionally explainable and
+// bounded: it ranks the safe candidates from the measured burst instead of
+// pretending to identify a complete motor model or writing parameters back to
+// the vehicle.  This keeps offline use reproducible and safe for competition.
+function buildAiPidAdvice(analysis,base={},options={}) {
+  const baseResult=buildPidCandidates(analysis,base), metrics=WHEELS.map(w=>analysis.wheels[w]).filter(m=>m.n);
+  const mean=(key)=>{const a=metrics.map(m=>m[key]).filter(finite);return a.length?a.reduce((x,y)=>x+y,0)/a.length:NaN;};
+  const maxTarget=Math.max(mean('maxTarget')||0,1e-9), steadyRatio=finite(mean('steadyError'))?Math.abs(mean('steadyError'))/maxTarget:NaN;
+  const overshoot=mean('overshootPct'), settling=mean('settlingTime'), saturation=mean('saturationRatio');
+  const lowSpeed=options.lowSpeed!==false;
+  const ffAware=options.feedforward!==false;
+  const score=(c)=>{
+    let s=70, reasons=[];
+    if(finite(overshoot)&&overshoot>8){s-=Math.min(25,(overshoot-8)*1.2);reasons.push('超调偏大，降低 Kp/Ki 或增加阻尼');}
+    else if(finite(overshoot)&&overshoot<2){s+=5;reasons.push('超调较小');}
+    if(finite(settling)&&settling>.5){s-=Math.min(18,(settling-.5)*12);reasons.push('稳定时间偏长');}
+    if(finite(saturation)&&saturation>.15){s-=Math.min(20,(saturation-.15)*80);reasons.push('输出饱和较多，避免继续增益');}
+    if(finite(steadyRatio)&&steadyRatio>.02){s-=8;reasons.push('稳态误差偏大，积分补偿有限增加');}
+    if(lowSpeed){s-=c.ki>Number(base.ki||0)*1.15?8:0;reasons.push('低速模式限制积分增幅，降低静摩擦/饱和风险');}
+    if(ffAware){reasons.push('保留前馈结构；若输出跟随但误差偏置，优先校准前馈');}
+    return {score:clamp(Math.round(s),0,100),reason:reasons.join('；')||'指标接近基准，建议小步验证'};
+  };
+  const ranked=baseResult.candidates.map(c=>({...c,...score(c)})).sort((a,b)=>b.score-a.score);
+  const confidence=clamp(Math.round(45+Math.min(30,metrics.length*7)+(finite(overshoot)?10:0)+(finite(settling)?10:0)-(finite(saturation)&&saturation>.3?15:0)),10,95);
+  const warnings=[];
+  if(ffAware)warnings.push('当前 Burst 若只有 total_output，无法把前馈与 PID 输出完全分离。');
+  if(!finite(overshoot)||!finite(settling))warnings.push('样本缺少完整目标/实际曲线，置信度降低。');
+  if(finite(saturation)&&saturation>.3)warnings.push('饱和占比超过 30%，本次候选不应直接用于实车。');
+  return {ranked,confidence,warnings,summary:{overshoot,settling,saturation,steadyRatio,lowSpeed,ffAware}};
 }
 function renderPidBurst() {
   const box=$('pid-burst-metrics'),cand=$('pid-burst-candidates'),status=$('pid-burst-status');if(!box||!cand||!status)return;const state=S.pidBurst;
@@ -136,6 +173,8 @@ function renderPidBurst() {
   const a=state.analysis;status.textContent=`已加载 ${state.name}：${a.rows} 帧，${fmt(a.times.at(-1),2)} s，默认 ${a.rate} Hz。${state.data.skipped?'跳过 '+state.data.skipped+' 行。':''}`;
   box.innerHTML=WHEELS.map(w=>{const m=a.wheels[w];return `<div class="pid-burst-wheel"><h3 style="color:${COLORS[w]}">${NAMES[w]}</h3><table>${tableRows([['有效样本',m.n],['IAE',fmt(m.iae,4)],['ISE',fmt(m.ise,4)],['最大误差',fmt(m.maxAbsError,3)],['峰值超调',finite(m.overshootPct)?fmt(m.overshootPct,1)+' %':'未记录'],['稳定时间',finite(m.settlingTime)?fmt(m.settlingTime,3)+' s':'未达到'],['尾段稳态误差',fmt(m.steadyError,3)],['输出饱和占比',finite(m.saturationRatio)?fmt(m.saturationRatio*100,1)+' %':'未记录']])}</table></div>`;}).join('');
   const base={kp:Number($('pid-burst-kp').value),ki:Number($('pid-burst-ki').value),kd:Number($('pid-burst-kd').value)},result=buildPidCandidates(a,base);cand.innerHTML='<h3>候选参数（人工验证）</h3>'+result.candidates.map(c=>`<div class="pid-candidate"><h3>${c.name}</h3><strong>Kp ${fmt(c.kp,3)} · Ki ${fmt(c.ki,3)} · Kd ${fmt(c.kd,3)}</strong><small>${c.reason}</small></div>`).join('');
+  const advice=buildAiPidAdvice(a,base,{lowSpeed:$('pid-ai-low-speed')?.checked!==false,feedforward:$('pid-ai-feedforward')?.checked!==false});
+  const ai=$('pid-ai-advice'); if(ai) ai.innerHTML=`<div class="ai-summary"><strong>本地 AI 辅助建议</strong><span>置信度 ${advice.confidence}% · 仅供人工评估</span></div><p>${advice.ranked[0]?`推荐先验证：<b>${advice.ranked[0].name}</b>（评分 ${advice.ranked[0].score}/100）<br>Kp ${fmt(advice.ranked[0].kp,3)} · Ki ${fmt(advice.ranked[0].ki,3)} · Kd ${fmt(advice.ranked[0].kd,3)}<br><small>${advice.ranked[0].reason}</small>`:'暂无可评分候选'}</p><ol>${advice.ranked.map(c=>`<li><b>${c.name}</b>：${c.score}/100 — Kp ${fmt(c.kp,3)} / Ki ${fmt(c.ki,3)} / Kd ${fmt(c.kd,3)}</li>`).join('')}</ol>${advice.warnings.map(w=>`<p class="warning">${w}</p>`).join('')}<p class="note">建议按低速直行、横移、旋转分别采集 Burst，每次只改一组参数并保留回滚值。网页不会自动写入车辆。</p>`;
 }
 function loadPidBurst(text,name='pid_burst.csv') {const data=parsePidBurstCsv(text),rate=Number($('pid-burst-rate')?.value)||100,sat=Number($('pid-burst-sat')?.value)||0,tol=Number($('pid-burst-tol')?.value)||.02;S.pidBurst={data,name,analysis:analyzePidBurst(data,{rate,satLimit:sat,tolerance:tol})};renderPidBurst();notify(`已加载独立 PID Burst：${name}。它不会改变 ULog43 任务日志。`);}
 function namedChannels(header) {

@@ -97,6 +97,15 @@
 验证：`node --check viewer/viewer.js`、`node viewer/build.cjs`、`node viewer/test.cjs`、`python -m py_compile tools/bt10_ble_receiver.py`、接收器 `--help`、`git diff --check`：`PASS`。
 固件/实机：STM32 高频环形缓存和停车后 BT10 分批上传尚未接入正式固件；230400 吞吐、BLE 连接稳定性、缓存容量和实车验证：`NOT_RUN`。
 
+## 本地 AI 辅助调参（2026-11-20）
+
+提交：本轮待提交，提交后不在长期文档中自引用当前 SHA
+范围：`viewer/index.html`、`viewer/viewer.js`、`viewer/viewer.css`、`viewer/test.cjs`
+方法依据：参考 WPILib SysId 的分段试验思想、Arduino PID AutoTune 的继电反馈风险边界、IMC-PI/FOPDT 初值思想，以及 SciPy/Optuna 类离线无梯度搜索的安全约束；本项目未复制第三方代码。
+内容：增加低速模式和“保留前馈”选项；对 Burst 低速低误差样本做前馈斜率/偏置诊断；根据超调、稳定时间、饱和和稳态误差给候选排序、评分、置信度和解释。候选变化受边界限制，AI 只做本地可解释推荐，不联网、不写 Flash、不在比赛态下发参数。
+验证：网页语法、构建、Burst 解析/指标、候选边界和 AI 排序断言：`PASS`。
+限制：当前 Burst 只有总输出时仍无法完全分离前馈、PID、kick 和限幅；真正自动辨识需要记录各项控制分量，并在停车/台架模式完成低速正反向、横移、旋转和负载复测。
+
 ## App 阶段：比赛业务模块物理迁移（2026-11-18）
 
 提交：本轮待提交，提交后不在长期文档中自引用当前 SHA
