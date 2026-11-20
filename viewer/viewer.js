@@ -167,6 +167,21 @@ function buildAiPidAdvice(analysis,base={},options={}) {
   if(finite(saturation)&&saturation>.3)warnings.push('饱和占比超过 30%，本次候选不应直接用于实车。');
   return {ranked,confidence,warnings,summary:{overshoot,settling,saturation,steadyRatio,lowSpeed,ffAware}};
 }
+async function requestDeepSeekAdvice() {
+  const state=S.pidBurst, status=$('pid-deepseek-status'), out=$('pid-deepseek-advice');
+  if(!state){if(status)status.textContent='请先导入 PID Burst。';return;}
+  const base={kp:Number($('pid-burst-kp').value),ki:Number($('pid-burst-ki').value),kd:Number($('pid-burst-kd').value)};
+  const local=buildAiPidAdvice(state.analysis,base,{lowSpeed:$('pid-ai-low-speed')?.checked!==false,feedforward:$('pid-ai-feedforward')?.checked!==false});
+  const payload={summary:local.summary,candidates:local.ranked.map(({name,kp,ki,kd,score,reason})=>({name,kp,ki,kd,score,reason})),lowSpeed:$('pid-ai-low-speed')?.checked!==false,feedforward:$('pid-ai-feedforward')?.checked!==false};
+  if(status)status.textContent='正在请求本机 DeepSeek 代理…';
+  try{
+    const response=await fetch('http://127.0.0.1:8787/v1/pid-advice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const result=await response.json();if(!response.ok)throw new Error(result.error||`HTTP ${response.status}`);
+    const ranked=Array.isArray(result.ranked)?result.ranked:[];
+    if(out)out.innerHTML='<h4>DeepSeek 复核结果（仅供人工确认）</h4>'+(ranked.length?'<ol>'+ranked.map(x=>`<li><b>${String(x.name||'候选')}</b>：${Math.max(0,Math.min(100,Number(x.score)||0))}/100 — ${String(x.reason||'无解释')}</li>`).join('')+'</ol>':'<p>模型未返回有效排序。</p>')+(Array.isArray(result.warnings)?result.warnings.map(x=>`<p class="warning">${String(x)}</p>`).join(''):'')+'<p class="note">requires_manual_test=true；代理不会写入车辆。</p>';
+    if(status)status.textContent='DeepSeek 复核完成。';
+  }catch(err){if(status)status.textContent='DeepSeek 不可用：'+err.message+'；已保留本地离线建议。';}
+}
 function renderPidBurst() {
   const box=$('pid-burst-metrics'),cand=$('pid-burst-candidates'),status=$('pid-burst-status');if(!box||!cand||!status)return;const state=S.pidBurst;
   if(!state){status.textContent='尚未导入高频 PID CSV。';box.innerHTML='<div class="pid-burst-empty">请在停车后导入带字段名的 PID Burst CSV。</div>';cand.innerHTML='';return;}
@@ -741,6 +756,7 @@ function init() {
   $('pid-burst-file').onchange=async e=>{const file=e.target.files[0];if(file){try{loadPidBurst(await file.text(),file.name);}catch(err){notify('PID Burst 导入失败：'+err.message,true);}e.target.value='';}};
   $('pid-burst-analyze').onclick=()=>{if(!S.pidBurst){notify('请先导入 PID Burst CSV。',true);return;}try{const data=S.pidBurst.data;S.pidBurst.analysis=analyzePidBurst(data,{rate:Number($('pid-burst-rate').value),satLimit:Number($('pid-burst-sat').value),tolerance:Number($('pid-burst-tol').value)});renderPidBurst();}catch(err){notify('PID Burst 分析失败：'+err.message,true);}};
   $('pid-burst-clear').onclick=()=>{S.pidBurst=null;renderPidBurst();};
+  $('pid-deepseek').onclick=()=>requestDeepSeekAdvice();
   for(const id of ['pid-burst-rate','pid-burst-sat','pid-burst-tol','pid-burst-kp','pid-burst-ki','pid-burst-kd'])$(id).onchange=()=>{if(S.pidBurst&&id!=='pid-burst-kp'&&id!=='pid-burst-ki'&&id!=='pid-burst-kd'){$('pid-burst-analyze').click();}else if(S.pidBurst)renderPidBurst();};
   bindGestures('path','map');bindGestures('strip','wave');
   window.addEventListener('resize',()=>{drawPath();drawStrip();drawDirection(S.samples[S.cur]);});
