@@ -233,11 +233,18 @@ static int valid_position(long dx, long dy, long cx, long cy)
            cx >= 0L && cx < 320L && cy >= 0L && cy < 240L;
 }
 
+static int valid_area(long cx, long cy, long radius)
+{
+    return cx >= 0L && cx < 320L && cy >= 0L && cy < 240L &&
+           radius > 0L && radius <= 320L;
+}
+
 static void handle_body(VisionContext *vision, char *body, uint32_t now_ms)
 {
     char *fields[12];
     int count;
     long target, dx, dy, cx, cy, session, step;
+    long radius;
     if (vision == NULL || body == NULL) return;
     count = split_tokens(body, fields, 12);
     if (count <= 0) return;
@@ -272,6 +279,18 @@ static void handle_body(VisionContext *vision, char *body, uint32_t now_ms)
         accept_position(vision, fields[1], target, dx, dy, cx, cy, now_ms);
         return;
     }
+    if (!strcmp(fields[0], "AREA_OK") && count == 4) {
+        if (vision->phase != VISION_RUNNING || !parse_long(fields[1], &cx) ||
+            !parse_long(fields[2], &cy) || !parse_long(fields[3], &radius) ||
+            !valid_area(cx, cy, radius)) return;
+        vision->area.cx = (uint16_t)cx;
+        vision->area.cy = (uint16_t)cy;
+        vision->area.radius = (uint16_t)radius;
+        vision->area.time_ms = now_ms;
+        vision->area.valid = 1U;
+        vision->result = VISION_RESULT_AREA_OK;
+        return;
+    }
     if (!strcmp(fields[0], "POS") && count == 9 && !strcmp(fields[1], "RING")) {
         if (!parse_long(fields[2], &target) || !parse_long(fields[3], &dx) ||
             !parse_long(fields[4], &dy) || !parse_long(fields[5], &cx) ||
@@ -298,6 +317,16 @@ static void handle_body(VisionContext *vision, char *body, uint32_t now_ms)
     }
     if (!strcmp(fields[0], "DONE") && count == 2 && !strcmp(fields[1], "QR")) {
         vision->result = VISION_RESULT_QR_DONE;
+        return;
+    }
+    if (!strcmp(fields[0], "ARRIVED") && count == 5 &&
+        !strcmp(fields[1], "MATERIAL")) {
+        if (vision->phase != VISION_RUNNING || !parse_long(fields[2], &target) ||
+            !parse_long(fields[3], &dx) || !parse_long(fields[4], &dy) ||
+            target != 0L || !valid_position(dx, dy, 0L, 0L)) return;
+        accept_position(vision, fields[1], target, dx, dy, 0L, 0L, now_ms);
+        vision->result = VISION_RESULT_ARRIVED;
+        vision->phase = VISION_WAIT_IDLE;
         return;
     }
     if (!strcmp(fields[0], "LOST") && count >= 2) {
@@ -540,6 +569,7 @@ int Vision_StartJobTol(VisionContext *vision, unsigned code,
     vision->last_request_ms = now_ms;
     vision->result = VISION_RESULT_NONE;
     vision->pos.valid = 0U;
+    vision->area.valid = 0U;
     vision->qr_ready = 0U;
     if (!Vision_SendBody(vision, body)) {
         vision->phase = VISION_IDLE;
@@ -564,6 +594,7 @@ int Vision_StartQrJob(VisionContext *vision, uint32_t session, uint32_t now_ms)
     vision->last_request_ms = now_ms;
     vision->result = VISION_RESULT_NONE;
     vision->pos.valid = 0U;
+    vision->area.valid = 0U;
     vision->qr_ready = 0U;
     if (!Vision_SendBody(vision, body)) {
         vision->phase = VISION_IDLE;
@@ -587,6 +618,7 @@ int Vision_StartJob(VisionContext *vision, unsigned code, uint32_t now_ms)
     vision->last_request_ms = now_ms;
     vision->result = VISION_RESULT_NONE;
     vision->pos.valid = 0U;
+    vision->area.valid = 0U;
     vision->qr_ready = 0U;
     if (!Vision_SendBody(vision, body)) {
         vision->phase = VISION_IDLE;
@@ -630,6 +662,30 @@ const VisionPosition *Vision_GetPosition(const VisionContext *vision,
     if (vision == NULL || !vision->pos.valid ||
         (uint32_t)(now_ms - vision->pos.time_ms) > VISION_POS_TIMEOUT_MS) return NULL;
     return &vision->pos;
+}
+
+const VisionArea *Vision_GetArea(const VisionContext *vision, uint32_t now_ms)
+{
+    if (vision == NULL || !vision->area.valid ||
+        (uint32_t)(now_ms - vision->area.time_ms) > VISION_POS_TIMEOUT_MS)
+        return NULL;
+    return &vision->area;
+}
+
+VisionResult Vision_GetResult(const VisionContext *vision)
+{
+    return vision == NULL ? VISION_RESULT_NONE : vision->result;
+}
+
+void Vision_ClearResult(VisionContext *vision)
+{
+    if (vision == NULL) return;
+    vision->result = VISION_RESULT_NONE;
+}
+
+void Vision_ClearPosition(VisionContext *vision)
+{
+    if (vision != NULL) vision->pos.valid = 0U;
 }
 
 uint8_t Vision_TakeQr(VisionContext *vision, char code[VISION_TASK_CODE_SIZE])

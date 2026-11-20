@@ -12,6 +12,28 @@ static uint8_t s_command;
 static uint8_t s_tx_data[192];
 static uint16_t s_tx_length;
 static uint32_t s_now;
+static void local_tx(const uint8_t *data, size_t length, void *user)
+{ (void)data; (void)length; (void)user; }
+
+static void local_frame(VisionContext *vision, uint16_t sequence,
+                        const char *body)
+{
+    char header[192];
+    char frame[224];
+    unsigned char checksum = 0U;
+    size_t index;
+    int length = snprintf(header, sizeof(header), "%u,%u,%s",
+                          (unsigned)sequence, (unsigned)strlen(body), body);
+    assert(length > 0 && (size_t)length < sizeof(header));
+    for (index = 0U; index < (size_t)length; index++)
+        checksum ^= (unsigned char)header[index];
+    length = snprintf(frame, sizeof(frame), "@%s*%02X\n", header,
+                      (unsigned)checksum);
+    assert(length > 0 && (size_t)length < sizeof(frame));
+    for (index = 0U; index < (size_t)length; index++)
+        Vision_RxByte(vision, (uint8_t)frame[index], s_now);
+    Vision_Poll(vision, s_now);
+}
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *uart);
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *uart);
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *uart);
@@ -71,6 +93,25 @@ int main(void)
     assert(RaceVision_Poll(code));
     assert(strcmp(code, "452+321+254+312") == 0);
     RaceVision_EndScan();
+
+    {
+        VisionContext material;
+        const VisionArea *area;
+        Vision_Init(&material, local_tx, NULL, NULL);
+        material.ready = 1U;
+        assert(Vision_StartJob(&material, 40U, 0U));
+        local_frame(&material, 1U, "ACK,JOB,40");
+        local_frame(&material, 2U, "AREA_OK,160,120,72");
+        area = Vision_GetArea(&material, 2U);
+        assert(area != NULL && area->cx == 160U && area->cy == 120U &&
+               Vision_GetResult(&material) == VISION_RESULT_AREA_OK);
+        local_frame(&material, 3U, "IDLE");
+        assert(Vision_StartJob(&material, 41U, 4U));
+        local_frame(&material, 4U, "ACK,JOB,41");
+        local_frame(&material, 5U, "ARRIVED,MATERIAL,0,1,-2");
+        assert(Vision_GetResult(&material) == VISION_RESULT_ARRIVED);
+        assert(Vision_GetPosition(&material, 5U) != NULL);
+    }
     HAL_UART_TxCpltCallback(&huart3);
     receive(valid);
     assert(!RaceVision_Poll(code));

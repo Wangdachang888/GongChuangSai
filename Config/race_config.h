@@ -35,6 +35,94 @@
 #define RACE_SETTLE_MS              400U
 #define RACE_MOVE_TIMEOUT_MS        12000U
 #define RACE_MATERIAL_TIMEOUT_MS    12000U
+#ifndef RACE_MATERIAL_ALIGN_ENABLE
+#define RACE_MATERIAL_ALIGN_ENABLE  0U
+#endif
+/* The camera lift/pitch mapping is open-loop and must be measured on the
+ * assembled robot before this flow may command the mechanism. */
+#ifndef RACE_CAMERA_CALIBRATED
+#define RACE_CAMERA_CALIBRATED      0U
+#endif
+#ifndef RACE_CAMERA_HEIGHT_STEPS
+#define RACE_CAMERA_HEIGHT_STEPS    0
+#endif
+#ifndef RACE_CAMERA_HEIGHT_FREQUENCY_HZ
+#define RACE_CAMERA_HEIGHT_FREQUENCY_HZ 1000U
+#endif
+#ifndef RACE_CAMERA_HEIGHT_ACCEL_RPMS
+#define RACE_CAMERA_HEIGHT_ACCEL_RPMS 100.0f
+#endif
+#ifndef RACE_CAMERA_PITCH_SERVO
+#define RACE_CAMERA_PITCH_SERVO      0U
+#endif
+#ifndef RACE_CAMERA_PITCH_DEG
+#define RACE_CAMERA_PITCH_DEG        0.0f
+#endif
+#ifndef RACE_CAMERA_STABILIZE_MS
+#define RACE_CAMERA_STABILIZE_MS     700U
+#endif
+#ifndef RACE_GRIP_TARGET_CALIBRATED
+#define RACE_GRIP_TARGET_CALIBRATED  0U
+#endif
+#ifndef RACE_AREA_TARGET_X_PX
+#define RACE_AREA_TARGET_X_PX        160U
+#endif
+#ifndef RACE_AREA_TARGET_Y_PX
+#define RACE_AREA_TARGET_Y_PX        120U
+#endif
+#ifndef RACE_MATERIAL_POSITION_TOL_M
+#define RACE_MATERIAL_POSITION_TOL_M 0.015f
+#endif
+#ifndef RACE_MATERIAL_YAW_TOL_RAD
+#define RACE_MATERIAL_YAW_TOL_RAD    0.045f
+#endif
+#ifndef RACE_MATERIAL_MAX_CORRECTIONS
+#define RACE_MATERIAL_MAX_CORRECTIONS 12U
+#endif
+#ifndef RACE_MATERIAL_MAX_TOTAL_STEP_M
+#define RACE_MATERIAL_MAX_TOTAL_STEP_M 0.180f
+#endif
+#ifndef RACE_MATERIAL_MAX_STEP_M
+#define RACE_MATERIAL_MAX_STEP_M     0.035f
+#endif
+#ifndef RACE_MATERIAL_MAX_SPEED_MPS
+#define RACE_MATERIAL_MAX_SPEED_MPS  0.080f
+#endif
+#ifndef RACE_MATERIAL_MAX_OMEGA_RADPS
+#define RACE_MATERIAL_MAX_OMEGA_RADPS 0.180f
+#endif
+#ifndef RACE_MATERIAL_STABLE_MS
+#define RACE_MATERIAL_STABLE_MS      250U
+#endif
+#ifndef RACE_MATERIAL_AREA_TOL_PX
+#define RACE_MATERIAL_AREA_TOL_PX    12U
+#endif
+/* Dedicated matrices; zero keeps the automatic correction safely disabled
+ * until the camera is mounted and calibrated. */
+#ifndef RACE_AREA_J00_PX_PER_M
+#define RACE_AREA_J00_PX_PER_M       0.0f
+#endif
+#ifndef RACE_AREA_J01_PX_PER_M
+#define RACE_AREA_J01_PX_PER_M       0.0f
+#endif
+#ifndef RACE_AREA_J10_PX_PER_M
+#define RACE_AREA_J10_PX_PER_M       0.0f
+#endif
+#ifndef RACE_AREA_J11_PX_PER_M
+#define RACE_AREA_J11_PX_PER_M       0.0f
+#endif
+#ifndef RACE_GRIP_J00_PX_PER_M
+#define RACE_GRIP_J00_PX_PER_M       0.0f
+#endif
+#ifndef RACE_GRIP_J01_PX_PER_M
+#define RACE_GRIP_J01_PX_PER_M       0.0f
+#endif
+#ifndef RACE_GRIP_J10_PX_PER_M
+#define RACE_GRIP_J10_PX_PER_M       0.0f
+#endif
+#ifndef RACE_GRIP_J11_PX_PER_M
+#define RACE_GRIP_J11_PX_PER_M       0.0f
+#endif
 #define RACE_PICK_ENABLE            1U
 #define RACE_PICK_DIRECT_KEY_TEST   0U
 #define RACE_PICK_TURNTABLE_ENABLE  1U

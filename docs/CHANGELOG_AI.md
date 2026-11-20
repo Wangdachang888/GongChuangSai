@@ -173,6 +173,14 @@
 原因：废弃旧版按扫码次数判区和 180°反扫，改为赛前人工选区、两条固定路线和公共汇合点；保留现有位置环、异步 QR 接收和 V4 交付确认。
 验证：`tests/race/run.ps1` PASS；`tests/ulog/run.ps1` PASS；UV4/ArmCC PASS（0 Error、0 Warning）；OpenMV `py_compile` PASS；`git diff --check` PASS。
 安全边界：场地绝对坐标转换、路点、摄像头安装、OpenMV 通信和整车动作尚未实机验证；`RACE_QR_FIELD_FRAME_CONFIRMED` 默认关闭，相关项目为 `NEED_CONFIRMATION`/`NOT_RUN`。
+
+## 二维码后的原料区导航与视觉对准（2026-11-20）
+
+提交：本轮待提交，提交后不在长期文档中自引用当前 SHA
+范围：`App/app_race.c/.h`、`Config/race_config.h`、`Hardware/vision.c/.h`、`tests/race/test_uart.c`、长期状态文档
+原因：在既有二维码路线完成后增加公共汇合点到原料区的非阻塞导航、相机准备安全门、JOB40 圆盘事件/微调和 JOB41 固定抓取位事件/微调，阶段终点不启动抓取。
+验证：`tests/race/run.ps1` PASS；`tests/ulog/run.ps1` PASS；OpenMV `py_compile` PASS；UV4/ArmCC 完整构建 PASS（0 Error、0 Warning）；`git diff --check` PASS。
+安全边界：自动流程默认关闭；相机开环步数、俯仰舵机映射、圆盘/抓取位矩阵和 `GRIP_TARGET_CALIBRATED` 仍需实机确认，未完成时自动流程拒绝执行；实机验证 NOT_RUN。
 ## 2026-11-20
 
 - 修复 `tools/start_deepseek_pid.ps1` 在未配置环境变量时静默退出的问题。

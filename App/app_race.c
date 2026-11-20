@@ -9,6 +9,7 @@
 #include "bsp_servo.h"
 #include "race_task_plan.h"
 #include "race_ui.h"
+#include <math.h>
 
 #if APP_RUN_MODE == APP_MODE_RACE
 static RaceFsm s_race;
@@ -24,6 +25,21 @@ static AppRingAlign s_ring;
     static uint8_t s_direct_cycle_done;
 #endif
 static uint8_t s_ring_control;
+#if (RACE_MATERIAL_ALIGN_ENABLE != 0U)
+#define APP_MATERIAL_PI_2 1.5707963267948966f
+static AppMaterialState s_material_state;
+static uint8_t s_material_job_started;
+static uint8_t s_material_camera_started;
+static uint8_t s_material_area_confirmed;
+static uint8_t s_material_corrections;
+static float s_material_total_step;
+static uint32_t s_material_entered_ms;
+static uint32_t s_material_stable_since_ms;
+static uint32_t s_material_last_vision_ms;
+static float s_material_saved_speed;
+static float s_material_saved_omega;
+static uint8_t s_material_speed_limited;
+#endif
 #if (RACE_PICK_DIRECT_KEY_TEST != 0U)
 static void start_direct_pick(uint32_t now, uint8_t reverse)
 {
@@ -98,6 +114,280 @@ static const RingAlignConfig s_ring_config = {
     8.0f
 };
 
+#if (RACE_MATERIAL_ALIGN_ENABLE != 0U)
+static uint8_t material_still(const RaceFeedback *value)
+{
+    return value != 0 && value->imu_valid &&
+           hypotf(value->vx, value->vy) <= RACE_STILL_SPEED_MPS &&
+           fabsf(value->omega) <= RACE_STILL_OMEGA_RADPS;
+}
+
+static uint8_t material_pose(const RaceFeedback *value, float x, float y,
+                             float yaw)
+{
+    return material_still(value) &&
+           hypotf(value->x - x, value->y - y) <= RACE_MATERIAL_POSITION_TOL_M &&
+           fabsf(atan2f(sinf(value->yaw - yaw), cosf(value->yaw - yaw))) <=
+               RACE_MATERIAL_YAW_TOL_RAD;
+}
+
+static uint8_t material_matrix_step(float m00, float m01, float m10, float m11,
+                                    float error_x, float error_y,
+                                    float *step_x, float *step_y)
+{
+    float determinant = m00 * m11 - m01 * m10;
+    float x, y, length, scale;
+    if (step_x == 0 || step_y == 0 || fabsf(determinant) <= 0.000001f)
+        return 0U;
+    x = -(m11 * error_x - m01 * error_y) / determinant;
+    y = -(-m10 * error_x + m00 * error_y) / determinant;
+    length = sqrtf(x * x + y * y);
+    if (!isfinite(length) || length <= 0.0f) return 0U;
+    if (length > RACE_MATERIAL_MAX_STEP_M) {
+        scale = RACE_MATERIAL_MAX_STEP_M / length;
+        x *= scale;
+        y *= scale;
+    }
+    *step_x = x;
+    *step_y = y;
+    return 1U;
+}
+
+static void material_restore_speed(void)
+{
+    if (s_material_speed_limited && s_chassis != 0) {
+        Mecanum_SetSpeedLimit(s_chassis, s_material_saved_speed,
+                              s_material_saved_omega);
+        s_material_speed_limited = 0U;
+    }
+}
+
+static void material_stop(void)
+{
+    if (s_chassis != 0) Mecanum_Stop(s_chassis);
+    material_restore_speed();
+}
+
+static void material_fault(RaceError error)
+{
+    material_stop();
+    s_material_state = APP_MATERIAL_FAULT;
+    s_material_job_started = 0U;
+    s_race.error = error;
+    s_race.state = RACE_FAULT;
+}
+
+static void material_limit_speed(void)
+{
+    if (!s_material_speed_limited) {
+        s_material_saved_speed = s_chassis->max_speed;
+        s_material_saved_omega = s_chassis->max_omega;
+        s_material_speed_limited = 1U;
+    }
+    Mecanum_SetSpeedLimit(s_chassis,
+                          fminf(s_material_saved_speed, RACE_MATERIAL_MAX_SPEED_MPS),
+                          fminf(s_material_saved_omega, RACE_MATERIAL_MAX_OMEGA_RADPS));
+}
+
+static void material_command_pose(float x, float y, float yaw)
+{
+    uint32_t saved_irq = __get_PRIMASK();
+    __disable_irq();
+    s_chassis->body_frame = 0U;
+    Mecanum_SetPositionMode(s_chassis, x, y, yaw);
+    __set_PRIMASK(saved_irq);
+}
+
+static void material_start_job(unsigned code, uint32_t now)
+{
+    if (s_material_job_started) return;
+    if (!Vision_StartJob(Vision_GetDefault(), code, now)) {
+        material_fault(RACE_ERROR_LINK);
+        return;
+    }
+    s_material_job_started = 1U;
+    s_material_entered_ms = now;
+    s_material_last_vision_ms = 0U;
+}
+
+static void material_start_after_qr(uint32_t now, const RaceFeedback *current)
+{
+    (void)current;
+    if (s_material_state != APP_MATERIAL_IDLE || !s_plan.valid ||
+        !s_race.qr_valid) return;
+    s_material_state = APP_MATERIAL_COMMON_READY;
+    s_material_entered_ms = now;
+    s_material_corrections = 0U;
+    s_material_total_step = 0.0f;
+}
+
+static uint8_t material_motion_done(const RaceFeedback *current, float x,
+                                    float y, float yaw)
+{
+    return material_pose(current, x, y, yaw) && Mecanum_IsTargetReached(s_chassis);
+}
+
+static void material_poll(uint32_t now, const RaceFeedback *current)
+{
+    VisionContext *vision = Vision_GetDefault();
+    const VisionArea *area;
+    const VisionPosition *position;
+    float step_x, step_y, world_x, world_y, length;
+    float c, s;
+
+    if (s_material_state == APP_MATERIAL_IDLE ||
+        s_material_state == APP_MATERIAL_ALIGN_COMPLETE ||
+        s_material_state == APP_MATERIAL_FAULT) return;
+    if ((uint32_t)(now - s_material_entered_ms) > RACE_MATERIAL_TIMEOUT_MS &&
+        s_material_state != APP_MATERIAL_CAMERA_PREPARE) {
+        material_fault(RACE_ERROR_MOVE_TIMEOUT);
+        return;
+    }
+    switch (s_material_state) {
+    case APP_MATERIAL_COMMON_READY:
+        if (!material_pose(current, 1.400f, 0.290f, 0.0f)) return;
+        s_material_state = APP_MATERIAL_MOVE_X2100;
+        s_material_entered_ms = now;
+        material_command_pose(2.100f, 0.290f, 0.0f);
+        return;
+    case APP_MATERIAL_MOVE_X2100:
+        if (!material_motion_done(current, 2.100f, 0.290f, 0.0f)) return;
+        s_material_state = APP_MATERIAL_TURN_90;
+        s_material_entered_ms = now;
+        material_command_pose(2.100f, 0.290f, APP_MATERIAL_PI_2);
+        return;
+    case APP_MATERIAL_TURN_90:
+        if (!material_motion_done(current, 2.100f, 0.290f, APP_MATERIAL_PI_2)) return;
+        s_material_state = APP_MATERIAL_MOVE_Y1100;
+        s_material_entered_ms = now;
+        material_command_pose(2.100f, 1.100f, APP_MATERIAL_PI_2);
+        return;
+    case APP_MATERIAL_MOVE_Y1100:
+        if (!material_motion_done(current, 2.100f, 1.100f, APP_MATERIAL_PI_2)) return;
+        material_stop();
+        s_material_state = APP_MATERIAL_CAMERA_PREPARE;
+        s_material_entered_ms = now;
+        s_material_camera_started = 0U;
+        return;
+    case APP_MATERIAL_CAMERA_PREPARE:
+        if (!RACE_CAMERA_CALIBRATED || RACE_CAMERA_HEIGHT_STEPS == 0) {
+            material_fault(RACE_ERROR_CONFIG);
+            return;
+        }
+        if (!s_material_camera_started) {
+            if (AppStepper_MoveStepsProfile(STEPPER_AXIS_1,
+                                             RACE_CAMERA_HEIGHT_STEPS,
+                                             RACE_CAMERA_HEIGHT_FREQUENCY_HZ,
+                                             RACE_CAMERA_HEIGHT_ACCEL_RPMS) != HAL_OK) {
+                material_fault(RACE_ERROR_CONFIG);
+                return;
+            }
+            Servo_SetAngle(RACE_CAMERA_PITCH_SERVO, RACE_CAMERA_PITCH_DEG);
+            s_material_camera_started = 1U;
+            s_material_entered_ms = now;
+            return;
+        }
+        if (AppStepper_IsBusy(STEPPER_AXIS_1) ||
+            Servo_IsBusy(RACE_CAMERA_PITCH_SERVO) ||
+            (uint32_t)(now - s_material_entered_ms) < RACE_CAMERA_STABILIZE_MS) return;
+        s_material_state = APP_MATERIAL_AREA_DETECT;
+        s_material_job_started = 0U;
+        material_start_job(40U, now);
+        return;
+    case APP_MATERIAL_AREA_DETECT:
+        area = Vision_GetArea(vision, now);
+        if (area == 0) return;
+        if (fabsf((float)area->cx - (float)RACE_AREA_TARGET_X_PX) <=
+                     (float)RACE_MATERIAL_AREA_TOL_PX &&
+            fabsf((float)area->cy - (float)RACE_AREA_TARGET_Y_PX) <=
+                     (float)RACE_MATERIAL_AREA_TOL_PX) {
+            s_material_area_confirmed = 1U;
+            Vision_ClearResult(vision);
+            if (RACE_GRIP_TARGET_CALIBRATED == 0U) {
+                material_fault(RACE_ERROR_CONFIG);
+                return;
+            }
+            s_material_state = APP_MATERIAL_MATERIAL_ALIGN;
+            s_material_job_started = 0U;
+            material_start_job(41U, now);
+            return;
+        }
+        if (++s_material_corrections > RACE_MATERIAL_MAX_CORRECTIONS ||
+            !material_matrix_step(RACE_AREA_J00_PX_PER_M, RACE_AREA_J01_PX_PER_M,
+                                  RACE_AREA_J10_PX_PER_M, RACE_AREA_J11_PX_PER_M,
+                                  (float)area->cx - (float)RACE_AREA_TARGET_X_PX,
+                                  (float)area->cy - (float)RACE_AREA_TARGET_Y_PX,
+                                  &step_x, &step_y)) {
+            material_fault(RACE_ERROR_CONFIG);
+            return;
+        }
+        length = sqrtf(step_x * step_x + step_y * step_y);
+        if (s_material_total_step + length > RACE_MATERIAL_MAX_TOTAL_STEP_M) {
+            material_fault(RACE_ERROR_CONFIG);
+            return;
+        }
+        s_material_total_step += length;
+        Mecanum_GetPosition(s_chassis, &world_x, &world_y, &c);
+        s = sinf(c); c = cosf(c);
+        material_limit_speed();
+        material_command_pose(world_x + step_x * c - step_y * s,
+                              world_y + step_x * s + step_y * c, APP_MATERIAL_PI_2);
+        Vision_ClearPosition(vision);
+        Vision_ClearResult(vision);
+        s_material_state = APP_MATERIAL_AREA_ALIGN;
+        s_material_job_started = 0U;
+        return;
+    case APP_MATERIAL_AREA_ALIGN:
+        if (!material_still(current) || !Mecanum_IsTargetReached(s_chassis)) return;
+        material_restore_speed();
+        s_material_state = APP_MATERIAL_AREA_DETECT;
+        material_start_job(40U, now);
+        return;
+    case APP_MATERIAL_MATERIAL_ALIGN:
+        position = Vision_GetPosition(vision, now);
+        if (position == 0) return;
+        if (Vision_GetResult(vision) == VISION_RESULT_ARRIVED) {
+            if (!material_still(current)) {
+                s_material_stable_since_ms = 0U;
+                return;
+            }
+            if (s_material_stable_since_ms == 0U) s_material_stable_since_ms = now;
+            if ((uint32_t)(now - s_material_stable_since_ms) >= RACE_MATERIAL_STABLE_MS) {
+                material_stop();
+                s_material_state = APP_MATERIAL_ALIGN_COMPLETE;
+                Vision_ClearResult(vision);
+            }
+            return;
+        }
+        if (position->time_ms == s_material_last_vision_ms) return;
+        s_material_last_vision_ms = position->time_ms;
+        if (++s_material_corrections > RACE_MATERIAL_MAX_CORRECTIONS ||
+            !material_matrix_step(RACE_GRIP_J00_PX_PER_M, RACE_GRIP_J01_PX_PER_M,
+                                  RACE_GRIP_J10_PX_PER_M, RACE_GRIP_J11_PX_PER_M,
+                                  (float)position->dx, (float)position->dy,
+                                  &step_x, &step_y)) {
+            material_fault(RACE_ERROR_CONFIG);
+            return;
+        }
+        length = sqrtf(step_x * step_x + step_y * step_y);
+        if (s_material_total_step + length > RACE_MATERIAL_MAX_TOTAL_STEP_M) {
+            material_fault(RACE_ERROR_CONFIG);
+            return;
+        }
+        s_material_total_step += length;
+        Mecanum_GetPosition(s_chassis, &world_x, &world_y, &c);
+        s = sinf(c); c = cosf(c);
+        material_limit_speed();
+        material_command_pose(world_x + step_x * c - step_y * s,
+                              world_y + step_x * s + step_y * c, APP_MATERIAL_PI_2);
+        Vision_ClearPosition(vision);
+        return;
+    default:
+        return;
+    }
+}
+#endif
+
 static RaceFeedback feedback(uint32_t now)
 {
     RaceFeedback result;
@@ -127,8 +417,23 @@ void AppRace_Init(MecanumChassis_t *chassis)
     s_direct_cycle_done = 0U;
 #endif
     s_ring_control = 0U;
+#if (RACE_MATERIAL_ALIGN_ENABLE != 0U)
+    s_material_state = APP_MATERIAL_IDLE;
+    s_material_job_started = 0U;
+    s_material_camera_started = 0U;
+    s_material_area_confirmed = 0U;
+    s_material_corrections = 0U;
+    s_material_total_step = 0.0f;
+    s_material_entered_ms = 0U;
+    s_material_stable_since_ms = 0U;
+    s_material_last_vision_ms = 0U;
+    s_material_speed_limited = 0U;
+#endif
     Race_Init(&s_race);
     s_boot = HAL_GetTick();
+#if (RACE_MATERIAL_ALIGN_ENABLE != 0U)
+    s_material_entered_ms = s_boot;
+#endif
     s_last_poll = s_boot;
     s_last_imu = s_boot;
     s_frames = app_imu_frames();
@@ -192,6 +497,12 @@ void AppRace_Poll(void)
         s_last_imu = now;
     }
     current = feedback(now);
+#if (RACE_MATERIAL_ALIGN_ENABLE != 0U)
+    if (previous_state == RACE_RUNNING && s_race.state == RACE_DONE &&
+        s_material_state == APP_MATERIAL_IDLE) {
+        material_start_after_qr(now, &current);
+    }
+#endif
     if (s_stalled) Race_Fail(&s_race, RACE_ERROR_LOOP_STALL);
     if (!RaceVision_Healthy() && (s_race.state == RACE_READY || s_race.state == RACE_RUNNING)) {
         Race_Fail(&s_race, RACE_ERROR_LINK);
@@ -208,6 +519,9 @@ void AppRace_Poll(void)
             Race_Fail(&s_race, RACE_ERROR_CONFIG);
         }
     }
+#if (RACE_MATERIAL_ALIGN_ENABLE != 0U)
+    material_poll(now, &current);
+#endif
     if (s_race.state == RACE_RUNNING && s_race.scan_active &&
         RaceVision_ScanFailed()) {
         Race_Fail(&s_race, RaceVision_Healthy() ?
@@ -306,11 +620,24 @@ void AppRace_Poll(void)
     saved_irq = __get_PRIMASK();
     __disable_irq();
     if (s_stalled) Race_Fail(&s_race, RACE_ERROR_LOOP_STALL);
+#if (RACE_MATERIAL_ALIGN_ENABLE != 0U)
+    s_active = (s_race.state == RACE_RUNNING) || PickFsm_IsActive(&s_pick) ||
+               s_ring_control || (s_material_state != APP_MATERIAL_IDLE &&
+                                  s_material_state != APP_MATERIAL_ALIGN_COMPLETE &&
+                                  s_material_state != APP_MATERIAL_FAULT);
+#else
     s_active = (s_race.state == RACE_RUNNING) || PickFsm_IsActive(&s_pick) ||
                s_ring_control;
+#endif
     s_last_poll = now;
     if (s_race.state != RACE_READY && s_race.state != RACE_RUNNING &&
-        !PickFsm_IsActive(&s_pick)) {
+        !PickFsm_IsActive(&s_pick)
+#if (RACE_MATERIAL_ALIGN_ENABLE != 0U)
+        && (s_material_state == APP_MATERIAL_IDLE ||
+            s_material_state == APP_MATERIAL_ALIGN_COMPLETE ||
+            s_material_state == APP_MATERIAL_FAULT)
+#endif
+        ) {
         if (s_control) stop_outputs();
         s_control = 0U;
     }
@@ -354,6 +681,15 @@ uint8_t AppRace_LogFinished(void)
      * When remaining actions are connected, use RaceTaskPlan_Done(&s_plan)
      * here instead of the material-route end state. */
     return s_race.state == RACE_DONE;
+#endif
+}
+
+AppMaterialState AppRace_MaterialState(void)
+{
+#if (RACE_MATERIAL_ALIGN_ENABLE != 0U)
+    return s_material_state;
+#else
+    return APP_MATERIAL_IDLE;
 #endif
 }
 #endif

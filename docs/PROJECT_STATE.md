@@ -207,3 +207,11 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 - OpenMV QR 任务取消固定识别超时，保留同一任务会话并限频重发待确认二维码；只有收到匹配确认后才发送 `DONE,QR` 并进入 `IDLE`。
 - 不再按扫码次数推断启停区，不再执行扫码失败后的 180°旋转或反向补扫；二维码无效或扫描段结束仍未确认时进入故障并安全停止。`RACE_QR_FIELD_FRAME_CONFIRMED` 默认关闭，未完成场地原点、航向和路点实测前，App 拒绝启动绝对坐标路线。
 - `tests/race/run.ps1`、`tests/ulog/run.ps1`：`PASS`；UV4/ArmCC 完整构建：`PASS`，0 Error、0 Warning；OpenMV Python 语法检查：`PASS`；OpenMV、场地路点、旋转空间、摄像头和整车动作：`NOT_RUN`/`NEED_CONFIRMATION`。
+
+## 21. 二维码后的原料区导航与视觉对准（2026-11-20）
+
+- `App/app_race.c/.h` 增加了受配置门控的非阻塞流程：二维码路线完成并在公共汇合点停稳后，依次前往 `(2.100,0.290,0°)`、原地逆时针转 `90°`、前往 `(2.100,1.100,90°)`，再进入相机准备、JOB40 圆盘确认/微调和 JOB41 固定抓取位对齐；本阶段结束只报告 `APP_MATERIAL_ALIGN_COMPLETE`，不会启动 `PickFsm`。
+- `Hardware/vision.c/.h` 增加 `AREA_OK,cx,cy,r` 和 `ARRIVED,MATERIAL,0,dx,dy` 的现有协议解析、结果/新鲜度访问接口；UART 中断仍只接收和排队，业务动作由主循环执行。
+- `Config/race_config.h` 增加相机步数、俯仰、圆盘/抓取位标定矩阵和修正上限配置。`RACE_MATERIAL_ALIGN_ENABLE`、`RACE_CAMERA_CALIBRATED`、`RACE_GRIP_TARGET_CALIBRATED` 默认关闭/未标定；缺少真实标定时流程会安全故障，不会猜测步数或像素换算。
+- `tests/race/run.ps1`：`PASS`（新增 AREA/ARRIVED 协议事件覆盖）；`tests/ulog/run.ps1`：`PASS`；OpenMV `py_compile`：`PASS`；Keil UV4/ArmCC 完整构建：`PASS`，0 Error、0 Warning；`git diff --check`：`PASS`。
+- 相机安装高度/俯仰映射、圆盘和固定抓取位矩阵、夹爪标定、旋转包络、实际路线和整车动作：`NEED_CONFIRMATION`/`NOT_RUN`。

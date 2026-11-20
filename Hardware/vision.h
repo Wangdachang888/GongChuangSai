@@ -37,6 +37,7 @@ typedef enum {
     VISION_RESULT_NONE = 0,
     VISION_RESULT_ARRIVED,
     VISION_RESULT_QR_DONE,
+    VISION_RESULT_AREA_OK,
     VISION_RESULT_TIMEOUT,
     VISION_RESULT_CANCELLED,
     VISION_RESULT_ERROR
@@ -63,6 +64,14 @@ typedef struct {
     uint32_t time_ms;
     uint8_t valid;
 } VisionPosition;
+
+typedef struct {
+    uint16_t cx;
+    uint16_t cy;
+    uint16_t radius;
+    uint32_t time_ms;
+    uint8_t valid;
+} VisionArea;
 
 typedef struct {
     VisionRingState state;
@@ -108,6 +117,7 @@ typedef struct {
     VisionPhase phase;
     VisionResult result;
     VisionPosition pos;
+    VisionArea area;
     uint8_t qr_ready;
     char qr_code[VISION_TASK_CODE_SIZE];
     char wait_reason[32];
@@ -143,6 +153,11 @@ int Vision_Reset(VisionContext *vision);
 int Vision_QueryStatus(VisionContext *vision);
 const VisionPosition *Vision_GetPosition(const VisionContext *vision,
                                          uint32_t now_ms);
+const VisionArea *Vision_GetArea(const VisionContext *vision,
+                                 uint32_t now_ms);
+VisionResult Vision_GetResult(const VisionContext *vision);
+void Vision_ClearResult(VisionContext *vision);
+void Vision_ClearPosition(VisionContext *vision);
 uint8_t Vision_TakeQr(VisionContext *vision, char code[VISION_TASK_CODE_SIZE]);
 
 void Vision_SetStop(VisionContext *vision, VisionStop stop, void *user);
