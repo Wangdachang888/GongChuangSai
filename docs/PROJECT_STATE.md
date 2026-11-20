@@ -223,3 +223,10 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 - `Config/race_config.h` 增加相机步数、俯仰、圆盘/抓取位标定矩阵和修正上限配置。`RACE_MATERIAL_ALIGN_ENABLE`、`RACE_CAMERA_CALIBRATED`、`RACE_GRIP_TARGET_CALIBRATED` 默认关闭/未标定；缺少真实标定时流程会安全故障，不会猜测步数或像素换算。
 - `tests/race/run.ps1`：`PASS`（新增 AREA/ARRIVED 协议事件覆盖）；`tests/ulog/run.ps1`：`PASS`；OpenMV `py_compile`：`PASS`；Keil UV4/ArmCC 完整构建：`PASS`，0 Error、0 Warning；`git diff --check`：`PASS`。
 - 相机安装高度/俯仰映射、圆盘和固定抓取位矩阵、夹爪标定、旋转包络、实际路线和整车动作：`NEED_CONFIRMATION`/`NOT_RUN`。
+
+## 22. 比赛任务函数式架构规范同步（2026-11-20）
+
+- 新增 `docs/RACE_ARCHITECTURE_RULES.md`，作为未来比赛业务函数式组织的唯一详细规范源，参考 GongXun2025 的任务函数顺序，但不复制其阻塞式执行方式。
+- 更新 `AGENTS.md`、`docs/ARCHITECTURE.md` 和 `docs/DECISIONS.md`：后续比赛开发必须阅读该规范；`AppRace`、`RaceFsm`、`RaceTaskPlan`、`PickFsm`、Vision 和 Control 的职责边界以及单一底盘控制权保持明确。
+- 本次仅同步文档和协作规则，未修改任何 `.c`、`.h`、CubeMX、Keil、驱动、标定、配置数值或运行行为；不代表当前比赛源码已经完成目标函数式整理。
+- 文档链接和 `git diff --check`：待本轮执行；主机测试、Keil 编译和实机验证：`NOT_RUN`（本轮为文档-only）。

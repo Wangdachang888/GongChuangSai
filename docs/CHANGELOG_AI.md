@@ -181,6 +181,14 @@
 原因：在既有二维码路线完成后增加公共汇合点到原料区的非阻塞导航、相机准备安全门、JOB40 圆盘事件/微调和 JOB41 固定抓取位事件/微调，阶段终点不启动抓取。
 验证：`tests/race/run.ps1` PASS；`tests/ulog/run.ps1` PASS；OpenMV `py_compile` PASS；UV4/ArmCC 完整构建 PASS（0 Error、0 Warning）；`git diff --check` PASS。
 安全边界：自动流程默认关闭；相机开环步数、俯仰舵机映射、圆盘/抓取位矩阵和 `GRIP_TARGET_CALIBRATED` 仍需实机确认，未完成时自动流程拒绝执行；实机验证 NOT_RUN。
+
+## 比赛任务函数式架构规范同步（2026-11-20）
+
+提交：本轮待提交，提交后不在长期文档中自引用当前 SHA
+范围：`docs/RACE_ARCHITECTURE_RULES.md`、`AGENTS.md`、`docs/ARCHITECTURE.md`、`docs/DECISIONS.md`、`docs/PROJECT_STATE.md`
+原因：将用户指定的 GongXun2025 任务函数式业务组织风格纳入长期规则，保留当前 STM32 非阻塞 Poll、TIM6 实时控制和既有底层接口。
+验证：本轮为文档-only；链接检查和 `git diff --check` 执行后记录结果；主机测试、Keil 编译和实机验证 `NOT_RUN`。
+边界：规范是未来开发约束，不代表当前 AppRace、RaceFsm、PickFsm 或视觉流程已经完成目标重构；未修改任何固件源码、工程配置或硬件参数。
 ## 2026-11-20
 
 - 修复 `tools/start_deepseek_pid.ps1` 在未配置环境变量时静默退出的问题。
