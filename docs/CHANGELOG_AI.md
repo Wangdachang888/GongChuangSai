@@ -173,3 +173,8 @@
 原因：在现有位置环和 V4 协议上加入 140 mm 初始平移、1000→1400/1400→1000 双向扫码编排、二维码交付确认和持续 QR 任务。
 验证：`tests/race/run.ps1` PASS；`tests/ulog/run.ps1` PASS；UV4/ArmCC PASS（0 Error、0 Warning）；OpenMV `py_compile` PASS；`git diff --check` PASS。
 安全边界：场地绝对坐标转换、旋转空间、摄像头安装、OpenMV 通信和整车动作尚未实机验证；`RACE_QR_FIELD_FRAME_CONFIRMED`、`RACE_QR_ROTATION_SAFE` 默认关闭，相关项目为 `NEED_CONFIRMATION`/`NOT_RUN`。
+## 2026-11-20
+
+- 修复 `tools/start_deepseek_pid.ps1` 在未配置环境变量时静默退出的问题。
+- 启动时使用隐藏输入临时 DeepSeek key，key 只通过当前进程环境变量传给代理，不写用户环境变量、网页或仓库。
+- 增加 Python、端口占用、代理立即退出和 `/health` 检查提示；失败时等待用户按 Enter，避免双击后窗口瞬间关闭。
