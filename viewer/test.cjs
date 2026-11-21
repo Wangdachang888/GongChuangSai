@@ -73,7 +73,8 @@ env.go(2215);el('wave-mode').value='body';el('wave-mode').onchange();env.setWind
 if(canvasModule){fs.mkdirSync('viewer/verification',{recursive:true});for(const id of ['path','strip','direction'])fs.writeFileSync('viewer/verification/'+id+'.png',nativeCanvases.get(id).toBuffer('image/png'));}
 assert.equal(fs.readFileSync('kart_log_view_mecanum_v3.html','utf8'),html);
 const named='time_ms,phase,x_pos,y_pos,yaw,fl_actual,fr_actual,rl_actual,rr_actual\n0,0,0,0,0,0,0,0,0\n50,1,0.1,0,0,100,100,100,100';env.load(named,'named.csv');assert.equal(env.S.quality.format,'带字段名日志');assert.equal(env.S.rows.length,2);assert.equal(env.config.channels.fla,5);assert.equal(env.config.channels.xt,null);
-const burst='timestamp_ms,fl_target,fl_actual,fl_output,fr_target,fr_actual,fr_output,rl_target,rl_actual,rl_output,rr_target,rr_actual,rr_output\n0,100,0,0,100,0,0,100,0,0,100,0,0\n100,100,90,900,100,92,920,100,88,880,100,91,910\n200,100,100,1000,100,100,1000,100,100,1000,100,100,1000\n300,100,100,500,100,100,500,100,100,500,100,100,500';const burstData=env.parsePidBurstCsv(burst),burstAnalysis=env.analyzePidBurst(burstData,{rate:100,satLimit:1000,tolerance:.02});assert.equal(burstData.rows.length,4);assert.equal(burstData.fields.fr_target,4);assert(burstAnalysis.wheels.fl.iae>0);assert.equal(burstAnalysis.wheels.fl.saturationRatio,.25);assert.equal(burstAnalysis.wheels.fl.overshoot,0);const burstCandidates=env.buildPidCandidates(burstAnalysis,{kp:2.5,ki:1.6,kd:0}).candidates;assert.equal(burstCandidates.length,3);assert(burstCandidates.every(c=>c.kp>=.05&&c.kp<=10&&c.ki>=0&&c.ki<=8&&c.kd>=0&&c.kd<=3));const aiAdvice=env.buildAiPidAdvice(burstAnalysis,{kp:2.5,ki:1.6,kd:0},{lowSpeed:true,feedforward:true});assert.equal(aiAdvice.ranked.length,3);assert(aiAdvice.confidence>=10&&aiAdvice.confidence<=95);assert(aiAdvice.ranked.every(c=>c.score>=0&&c.score<=100));
+const burst='timestamp_ms,fl_target,fl_actual,fl_output,fr_target,fr_actual,fr_output,rl_target,rl_actual,rl_output,rr_target,rr_actual,rr_output\n0,100,0,0,100,0,0,100,0,0,100,0,0\n100,100,90,900,100,92,920,100,88,880,100,91,910\n200,100,100,1000,100,100,1000,100,100,1000,100,100,1000\n300,100,100,500,100,100,500,100,100,500,100,100,500';const burstData=env.parsePidBurstCsv(burst),burstAnalysis=env.analyzePidBurst(burstData,{rate:100,satLimit:1000,tolerance:.02});assert.equal(burstData.rows.length,4);assert.equal(burstData.fields.fr_target,4);assert(burstAnalysis.wheels.fl.iae>0);assert.equal(burstAnalysis.wheels.fl.saturationRatio,.25);assert.equal(burstAnalysis.wheels.fl.overshoot,0);const burstCandidates=env.buildPidCandidates(burstAnalysis,{kp:2.5,ki:1.6,kd:0}).candidates;assert.equal(burstCandidates.length,0);const aiAdvice=env.buildAiPidAdvice(burstAnalysis,{kp:2.5,ki:1.6,kd:0});assert.equal(aiAdvice.ranked.length,0);assert.equal(aiAdvice.confidence,0);assert(aiAdvice.warnings.length>0);
+
 env.loadPidBurst(burst,'burst.csv');assert(env.S.pidBurst);assert(el('pid-burst-status').textContent.includes('burst.csv'));assert(el('pid-burst-metrics').innerHTML.includes('FL 左前轮'));
 const rawBurst='#BTLOG,PID_BEGIN,timestamp_ms,fl_target,fl_actual\n#BTLOG,PID,0,20,0\n#BTLOG,PID,10,20,20\n#BTLOG,PID_END';const rawBurstData=env.parsePidBurstCsv(rawBurst);assert.equal(rawBurstData.rows.length,2);assert.equal(rawBurstData.fields.fl_actual,2);
 console.log('PASS: firmware mapping; 7 signed kinematic cases; real 2216-frame log; zero angular placeholder; timestamp gaps/wrap/reset; missing values; wheel geometry/solo; map zoom; wave scaling/window statistics; all tabs; playback rates/pause/seek/end; remapping; v3/v4 parity.');
@@ -115,6 +116,40 @@ if(fs.existsSync('tmp/pid_continuous_wire.bin')){
   console.log('PASS: 360-second firmware stream, 16-bit sequence wrap, all 72006 live samples exported, rolling last 20-second cache.');
 }
 
+// Independent, known plant. Generate closed-loop data without calling viewer's
+// simulator; the expected plant parameters are specified separately below.
+function knownPlantFixture({noise=0,delay=2,corruptTest=false}={}){
+  const control={axis:'FL',revision:0,kp:.25,ki:.1,kd:0,periodMs:5,outputMax:1000,integralMax:800,ffGain:0,deadzone:0,ffMinSpeed:0,ramp:4000,slew:1000,lpf:1,kickStep:0,kickMax:0,stuckRatio:.1};
+  let y=0,u=0,integral=0;const rows=[],history=Array(delay+1).fill(0),alpha=Math.exp(-.005/.12),targets=[0,80,30,-60,110,-30,55,-80];
+  for(let k=0;k<1600;k++){const t=targets[Math.floor(k/200)],actual=y+noise*Math.sin(k*1.37);rows.push([k*5,t,actual,u]);
+    const error=t-actual;integral=Math.max(-800,Math.min(800,integral+error*.005));let next=.25*error+.1*integral;if(t&&next*t<0)next=0;u=Math.max(-1000,Math.min(1000,next));
+    history.push(u);const applied=history.shift();y=alpha*y+2*(1-alpha)*applied;if(corruptTest&&k>1280)y+=1.5*Math.sin(k*.11);
+  }
+  const text='timestamp_ms,fl_target,fl_actual,fl_output\n'+rows.map(r=>r.join(',')).join('\n'),a=env.analyzePidBurst(env.parsePidBurstCsv(text),{rate:200,satLimit:1000});return {control,a,text};
+}
+const golden=knownPlantFixture(),goldenPlant=env.identifyPidPlant(golden.a,'fl');
+assert(goldenPlant.valid,JSON.stringify(goldenPlant.reasons));near(goldenPlant.model.gain,2,.12);near(goldenPlant.model.tau,.12,.04);assert(goldenPlant.test.freeRunNrmse<.05);
+const goldenAdvice=env.buildAiPidAdvice(golden.a,golden.control,{control:golden.control});
+assert(goldenAdvice.candidates.length>0,goldenAdvice.warnings.join(';'));assert(goldenAdvice.candidates.some(c=>c.eligible));assert(goldenAdvice.candidates.every(c=>env.pidProposalInBounds(c,golden.control,golden.control)));
+assert(new Set(goldenAdvice.candidates.map(c=>c.prediction?.cost.toFixed(7))).size>1,'candidate rankings must depend on their own predicted response');
+assert(goldenAdvice.candidates.filter(c=>c.eligible).every(c=>c.prediction.improvement>=2&&c.prediction.worstImprovement>=0));
+const noisy=knownPlantFixture({noise:.5}),noisyPlant=env.identifyPidPlant(noisy.a,'fl');assert(noisyPlant.valid);near(noisyPlant.model.gain,2,.3);
+const mismatch=knownPlantFixture({corruptTest:true});assert.equal(env.identifyPidPlant(mismatch.a,'fl').valid,false,'held-out dynamics change must not be claimed as a valid model');
+const gap=knownPlantFixture();gap.a.quality.gaps=1;assert.equal(env.identifyPidPlant(gap.a,'fl').valid,false);
+const missingOutput=env.analyzePidBurst(env.parsePidBurstCsv(golden.text.split('\n').map(l=>l.split(',').slice(0,3).join(',')).join('\n')),{rate:200});assert.equal(env.identifyPidPlant(missingOutput,'fl').valid,false);
+const constant=env.analyzePidBurst(env.parsePidBurstCsv('timestamp_ms,fl_target,fl_actual,fl_output\n'+Array.from({length:400},(_,i)=>[i*5,100,100,30].join(',')).join('\n')),{rate:200});assert.equal(env.identifyPidPlant(constant,'fl').valid,false);
+const decel=Array.from({length:200},(_,i)=>({t:i*.005,target:i<100?100:0,actual:i<100?100:100*Math.exp(-(i-100)/15),output:0}));assert(env.pidResponseMetrics(decel).overshootPct===0,'deceleration lag is not positive-step overshoot');
+const transient=Array.from({length:200},(_,i)=>({t:i*.005,target:100,actual:i<10?0:i>140&&i<160?120:100,output:20}));assert(env.pidResponseMetrics(transient).settlingTime>=.8,'settling must remain within band until segment end');
+const ramp=Array.from({length:100},(_,i)=>({t:i*.005,target:i*5,actual:i*5,output:i}));assert(Number.isNaN(env.pidResponseMetrics(ramp).settlingTime));
+const slowRamp=ramp.map((s,i)=>({...s,target:i*.2,actual:i*.2}));assert(Number.isNaN(env.pidResponseMetrics(slowRamp).settlingTime),'cumulative target drift cannot masquerade as a flat plateau');
+const actualSnapshot=env.encodePidUsed({...golden.control,editable:false});el('pid-param-axis').value='FL';env.loadPidBurst(actualSnapshot+golden.text,'known-plant.csv');
+const writeBefore=el('pid-param-kp').value;vm.runInContext('pidOnline.candidates[0].eligible=false',env);env.usePidCandidate(0);assert.equal(el('pid-param-kp').value,writeBefore,'rejected candidate cannot fill');
+const evidence=env.pidEvidencePayload(env.pidAnalysisContext(),env.buildAiPidAdvice(golden.a,golden.control,{control:golden.control}));assert(evidence.series.length<=160);assert(evidence.series.every(s=>Number.isFinite(s.minActual)&&Number.isFinite(s.maxActual)));assert(evidence.controllerAudit);assert(evidence.model.test);assert.equal(evidence.axis,'FL');
+fs.writeFileSync('tmp/pid_advisor_request.json',JSON.stringify(evidence));
+// A real field file is optional on other computers; never store it in Git.
+if(process.env.PID_FIELD_CSV){const text=fs.readFileSync(process.env.PID_FIELD_CSV,'utf8');env.loadPidBurst(text,'real-field.csv');const a=env.S.pidBurst.analysis;assert.equal(a.rows,4133);assert.equal(a.quality.gaps,0);assert.equal(a.quality.jitter,0);near(a.wheels.fr.saturationRatio,555/4133,1e-9);near(a.wheels.rl.saturationRatio,625/4133,1e-9);assert(el('pid-ai-advice').innerHTML.includes('控制输出'));}
+console.log('PASS: independent delayed/noisy plant recovery; held-out mismatch rejection; per-candidate predictions/robustness; missing/gapped/constant data; deceleration/settling/ramp metrics; real parameter evidence and candidate gates.');
+
 // PID metadata is generated by the same C parser/runtime access tested above.
 const paramWire=fs.readFileSync('tmp/pid_params_wire.bin'),paramLines=[],paramDecoder=env.createPidWireDecoder(t=>paramLines.push(t.trim()));
 for(let i=0;i<paramWire.length;i+=7)paramDecoder.feed(paramWire.subarray(i,i+7));
@@ -127,7 +162,7 @@ const cached=env.parsePidBurstCsv(paramLines.join('\n'));assert.equal(cached.row
 el('pid-param-axis').value='FL';env.loadPidBurst(paramLines.join('\n'),'actual-runtime.csv');
 assert.equal(env.pidAnalysisContext().base.kp,3);assert.equal(env.pidAnalysisContext().known,true);assert.equal(env.pidAnalysisContext().analysis.wheels.fr.n,0);
 assert(el('pid-burst-candidates').innerHTML.includes('版本 2'));
-env.usePidCandidate(0);assert.equal(el('pid-param-axis').value,'FL');assert(Number(el('pid-param-kp').value)>0);
+const formBefore=el('pid-param-kp').value;env.usePidCandidate(0);assert.equal(el('pid-param-axis').value,'FL');assert.equal(el('pid-param-kp').value,formBefore,'insufficient short trace must not fill an invented candidate');
 assert(env.pidLiveParts([usedLines.join('\n')+'\n']).join('').includes('PID_USED'));
 const second=env.encodePidUsed({...metadata.axes.FL,kp:4,revision:3});assert(env.pidRecordedParams([...usedLines,second.trim()]).mixed.includes('FL'));
 console.log('PASS: actual C -> JS seven-axis readback, feedforward context, recorded baseline, selected-wheel candidates, mixed-parameter detection.');
@@ -136,6 +171,17 @@ console.log('PASS: actual C -> JS seven-axis readback, feedforward context, reco
 // rollback, legacy records and compound chunk keys exercise the real archiver.
 const asyncGuard=setTimeout(()=>{console.error('FAIL: asynchronous test stalled',vm.runInContext('pidOnline.pending&&[pidOnline.pending.id,pidOnline.pending.axis,pidOnline.pending.operation]',env));process.exitCode=1;},15000);
 (async()=>{
+  env.fetch=async()=>({ok:true,json:async()=>({ok:true,key_configured:true})});assert.equal(await env.connectDeepSeek(),false);assert(el('pid-deepseek').disabled);
+  env.fetch=async()=>({ok:true,json:async()=>({ok:true,key_configured:true,advisor_version:2})});assert.equal(await env.connectDeepSeek(),true);assert.equal(el('pid-deepseek').disabled,false);
+  env.loadPidBurst(actualSnapshot+golden.text,'ai-evidence.csv');
+  const approved=env.buildAiPidAdvice(env.pidAnalysisContext().analysis,golden.control,{control:golden.control}).candidates.find(c=>c.eligible);
+  assert(approved);
+  env.fetch=async (_url,options)=>{const sent=JSON.parse(options.body);assert(sent.model.test);assert(sent.controllerAudit);assert(sent.series.length<=160);assert.equal(sent.recordedParameters.kp,.25);return {ok:true,json:async()=>({diagnosis:'<script>not markup</script>',ranked:[],warnings:[],proposed:[approved],next_experiment:'manual low speed'})};};
+  await env.requestDeepSeekAdvice();assert(el('pid-deepseek-advice').innerHTML.includes('&lt;script&gt;'));assert(vm.runInContext('pidOnline.candidates.some(c=>c.name.startsWith("AI · ")&&c.eligible)',env));
+  env.fetch=async()=>({ok:true,json:async()=>({diagnosis:'bounded test',proposed:[{...approved,kp:100}],warnings:[]})});
+  env.renderPidBurst();const candidateCount=vm.runInContext('pidOnline.candidates.length',env);await env.requestDeepSeekAdvice();assert.equal(vm.runInContext('pidOnline.candidates.length',env),candidateCount);
+  let finishAdvice;env.fetch=()=>new Promise(resolve=>{finishAdvice=resolve;});const late=env.requestDeepSeekAdvice();el('pid-param-axis').value='FR';finishAdvice({ok:true,json:async()=>({proposed:[approved],warnings:[]})});await late;assert(el('pid-deepseek-status').textContent.includes('忽略旧'));el('pid-param-axis').value='FL';
+  console.log('PASS: AI sends measured evidence; proposals checked locally; out-of-bound/stale results rejected; provider text escaped; no automatic writes.');
   const clone=x=>x===undefined?undefined:structuredClone(x),stores={logs:new Map([[1,{id:1,name:'legacy',text:'old\n',frames:1}]] )};let nextId=2,failNext=false,openedVersion=0;
   const key=(name,v)=>JSON.stringify(name==='logs'?v.id:[v.logId,v.part]);
   // Seed keys in the same representation used by the store.

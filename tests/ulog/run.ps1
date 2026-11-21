@@ -42,6 +42,7 @@ Path("tmp/runtime_pid_access.c").write_text(head+constants+block+'\nvoid ULog_Te
 @'
 from pathlib import Path
 import csv
+import json
 from tools.bt10_ble_receiver import LogReceiver
 for name in ("pid_wire_test", "pid_async_wire"):
     wire = Path("tmp/" + name + ".bin").read_bytes()
@@ -93,6 +94,37 @@ payload={"axis":"FL","recordedParameters":actual,"candidates":[{"kp":2.7,"ki":1.
 safe=safe_payload(payload)
 assert safe["recordedParameters"]["kp"]==3 and safe["parameterSource"]=="recorded_runtime"
 assert safe_payload({"candidates":payload["candidates"]})["parameterSource"]=="unverified_offline"
+from tools.deepseek_pid_proxy import validate_advice, ask_deepseek
+import tools.deepseek_pid_proxy as advisor
+payload.update({"quality":{"gaps":0},"summary":{"steady":float("nan")},
+    "model":{"valid":True,"test":{"freeRunNrmse":.04}},
+    "controllerAudit":{"normalizedError":.001},"baselinePrediction":{"cost":.1},
+    "series":[{"t":i*.005,"target":100,"actual":90,"output":200,"minActual":80,"maxActual":100} for i in range(200)]})
+safe=safe_payload(payload)
+assert len(safe["series"])==160 and safe["summary"]["steady"] is None
+assert safe["model"]["test"]["freeRunNrmse"]==.04 and safe["quality"]["gaps"]==0
+proposal={"name":"small-step","kp":2.7,"ki":actual["ki"],"kd":actual["kd"],"reason":"model evidence"}
+response={"diagnosis":"cite measured evidence", "ranked":[{"name":"candidate","score":99,"reason":"local forecast"},{"name":"invented","score":100}],
+    "proposed":[proposal,{**proposal,"kp":100},{**proposal,"kd":float("nan")}],"warnings":["test on vehicle"],"requires_manual_test":False}
+checked=validate_advice(response,safe)
+assert len(checked["proposed"])==1 and len(checked["ranked"])==1 and "score" not in checked["ranked"][0]
+assert checked["requires_manual_test"] is True
+invalid=safe_payload({**payload,"model":{"valid":False},"candidates":[]})
+assert not validate_advice(response,invalid)["proposed"]
+class MockResponse:
+    def __enter__(self): return self
+    def __exit__(self,*_args): return False
+    def read(self): return json.dumps({"choices":[{"message":{"content":json.dumps(response)}}]}).encode()
+def fake_urlopen(request,timeout):
+    sent=json.loads(request.data)
+    assert sent["response_format"]["type"]=="json_object"
+    evidence=json.loads(sent["messages"][1]["content"])
+    assert evidence["series"][0]["maxActual"]==100 and evidence["recordedParameters"]["ffGain"]==actual["ffGain"]
+    assert "proposed" in sent["messages"][0]["content"] and "series" in sent["messages"][0]["content"]
+    return MockResponse()
+advisor.urlopen=fake_urlopen
+assert ask_deepseek(safe,"test-placeholder")["proposed"][0]["kp"]==2.7
+print("PASS Python: AI evidence bounds; real controller context; mocked provider JSON; no AI rescoring; unknown candidate/NaN/out-of-range/model-invalid proposals rejected")
 print("PASS Python: split/CRC; continuous 72006 live samples; sequence wrap; last-20s cache; actual seven-axis PID metadata retained")
 '@ | python -
         if ($LASTEXITCODE) { throw 'PID binary receiver verification failed' }
