@@ -176,6 +176,43 @@ function knownPlantFixture({noise=0,delay=2,corruptTest=false}={}){
   const text='timestamp_ms,fl_target,fl_actual,fl_output\n'+rows.map(r=>r.join(',')).join('\n'),a=env.analyzePidBurst(env.parsePidBurstCsv(text),{rate:200,satLimit:1000});return {control,a,text};
 }
 const golden=knownPlantFixture(),goldenPlant=env.identifyPidPlant(golden.a,'fl');
+// Independent discrete plant driven in closed loop by an exogenous multisine.
+// Tests verify phase/delay and amplitude, not just whether rejection gates fire.
+function frequencyFixture({gainAfter=2,noise=0,constant=false}={}){
+ const control={...golden.control,kp:.7,ki:4,ffGain:.5},rows=[];let y=200,integral=0,seed=12345;
+ const history=[100,100],alpha=Math.exp(-.005/.08),n=1024;
+ for(let k=0;k<12288;k++){
+  let r=200;if(!constant)for(let bin=2;bin<=100;bin+=3)r+=.4*Math.sin(2*Math.PI*bin*k/n+bin*bin*.71);
+  seed=(Math.imul(seed,1664525)+1013904223)>>>0;const actual=y+noise*(seed/4294967296-.5),error=r-actual;integral+=error*.005;
+  const u=.5*r+.7*error+4*integral;
+  if(k>=4096)rows.push([(k-4096)*5,r,actual,u]);
+  history.push(u);const applied=history.shift();y=alpha*y+(k>=8192?gainAfter:2)*(1-alpha)*applied;
+ }
+ const text='timestamp_ms,fl_target,fl_actual,fl_output\n'+rows.map(r=>r.join(',')).join('\n'),a=env.analyzePidBurst(env.parsePidBurstCsv(text),{rate:200,satLimit:1000});return {control,a,text};
+}
+const frequency=frequencyFixture(),frf=env.pidFrequencyResponse(frequency.a.wheels.fl,frequency.a.quality,frequency.control);
+assert(frf.valid,JSON.stringify(frf.reasons));assert(frf.reliableBins>=8);
+for(const b of frf.bins.filter(b=>b.reliable&&b.hz<12&&b.k%3===2)){
+ const angle=2*Math.PI*b.hz*.005,a=Math.exp(-.005/.08),den={re:1-a*Math.cos(angle),im:a*Math.sin(angle)},delay={re:Math.cos(3*angle),im:-Math.sin(3*angle)};
+ const expected=env.pidComplexDivide({re:2*(1-a)*delay.re,im:2*(1-a)*delay.im},den),ratio=env.pidComplexDivide(b,expected);
+ assert(Math.abs(20*Math.log10(Math.hypot(ratio.re,ratio.im)))<.5,'measured FRF gain vs analytic discrete plant '+JSON.stringify({hz:b.hz,db:20*Math.log10(Math.hypot(ratio.re,ratio.im))}));
+ assert(Math.abs(Math.atan2(ratio.im,ratio.re)*180/Math.PI)<4,'measured FRF phase includes all 3 discrete delay frames');
+}
+const frequencySeeds=env.pidFrequencySeeds(frf,frequency.control,frequency.control);
+assert(frequencySeeds.length>0,'frequency route must produce a usable preliminary choice without identifyPidPlant');
+for(const p of frequencySeeds){assert(env.pidProposalInBounds(p,frequency.control,frequency.control));assert(p.assessment.phaseReserve>=55);assert(p.improvement>=.02);assert.equal(p.kd,0);}
+const frequencyConstant=frequencyFixture({constant:true});assert.equal(env.pidFrequencyResponse(frequencyConstant.a.wheels.fl,frequencyConstant.a.quality,frequencyConstant.control).valid,false);
+const frequencyZero={...frequency.a.wheels.fl,samples:frequency.a.wheels.fl.samples.map(p=>({...p,actual:0}))};assert.equal(env.pidFrequencyResponse(frequencyZero,frequency.a.quality,frequency.control).valid,false,'zero encoder feedback must diagnose, never divide by a zero spectrum');
+const frequencyChanged=frequencyFixture({gainAfter:4});const changedFrf=env.pidFrequencyResponse(frequencyChanged.a.wheels.fl,frequencyChanged.a.quality,frequencyChanged.control);assert(changedFrf.reliableBins<frf.reliableBins,'disjoint halves must expose changed dynamics');
+const frequencyNoisy=frequencyFixture({noise:10});const noisyFrf=env.pidFrequencyResponse(frequencyNoisy.a.wheels.fl,frequencyNoisy.a.quality,frequencyNoisy.control);assert(noisyFrf.reliableBins<frf.reliableBins,'uncorrelated output noise reduces coherence');
+assert.equal(env.pidFrequencyResponse(frequency.a.wheels.fl,{...frequency.a.quality,gaps:1},frequency.control).valid,false);
+assert.equal(env.pidFrequencyResponse(frequency.a.wheels.fl,{...frequency.a.quality,dt:.01},frequency.control).valid,false);
+assert.equal(env.pidFrequencyAssessment({...frf,bins:frf.bins.filter(b=>b.hz<1)},frequency.control,.005),null,'unobserved crossover is not a stability margin');
+env.loadPidBurst(frequency.text,'frequency.csv');env.S.pidBurst.recorded={axes:{FL:frequency.control},mixed:[]};el('pid-param-axis').value='FL';env.renderPidBurst();assert(!el('pid-frequency-result').innerHTML.includes('填入初选（'));
+el('pid-frequency-reference').checked=true;el('pid-frequency-reference').onchange();assert(el('pid-frequency-result').innerHTML.includes('填入初选（'));
+el('pid-frequency-fill-0').onclick();near(Number(el('pid-param-kp').value),frequencySeeds[0].kp);assert(el('pid-param-status').textContent.includes('尚未写车'));
+env.loadPidBurst(frequency.text,'another.csv');assert.equal(el('pid-frequency-reference').checked,false,'reference provenance must not carry over to another log');
+console.log('PASS: reference-instrument FRF analytical amplitude/phase/delay, bounded frequency seeds, coherence/noise/changed dynamics, insufficient coverage and explicit reference provenance.');
 assert(goldenPlant.valid,JSON.stringify(goldenPlant.reasons));near(goldenPlant.model.gain,2,.12);near(goldenPlant.model.tau,.12,.04);assert(goldenPlant.test.freeRunNrmse<.05);
 const goldenAdvice=env.buildAiPidAdvice(golden.a,golden.control,{control:golden.control});
 assert(goldenAdvice.candidates.length>0,goldenAdvice.warnings.join(';'));assert(goldenAdvice.candidates.some(c=>c.eligible));assert(goldenAdvice.candidates.every(c=>env.pidProposalInBounds(c,golden.control,golden.control)));

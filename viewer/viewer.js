@@ -355,6 +355,111 @@ async function requestDeepSeekAdvice(){
     out.querySelectorAll('[data-ai-candidate]').forEach(b=>b.onclick=()=>usePidCandidate(Number(b.dataset.aiCandidate)));status.textContent='DeepSeek 分析完成；AI 提案 '+checked.length+' 组，本地检查通过 '+accepted.length+' 组。';
   }catch(err){status.textContent='DeepSeek 不可用：'+err.message+'；本地分析仍可用。';}
 }
+// Closed-loop instrumental-reference FRF: G = S_yr / S_ur, NOT Y/U from one FFT.
+// Reference must be externally prescribed and independent of disturbances.
+const pidFrequencyCache=new WeakMap();
+function pidComplexDivide(a,b){const d=b.re*b.re+b.im*b.im;return d>1e-24?{re:(a.re*b.re+a.im*b.im)/d,im:(a.im*b.re-a.re*b.im)/d}:null;}
+function pidComplexMultiply(a,b){return {re:a.re*b.re-a.im*b.im,im:a.re*b.im+a.im*b.re};}
+function pidFrequencyResponse(metric,quality,control){
+  const result={valid:false,bins:[],reasons:[],method:'参考信号互谱比 S_yr / S_ur',windows:0};
+  if(!metric?.samples?.length||!control){result.reasons.push('需要所选轮子的真实PID_USED参数与完整target/actual/output');return result;}
+  const old=pidFrequencyCache.get(metric);if(old?.control===control&&old.quality===quality)return old.result;
+  const finish=()=>{pidFrequencyCache.set(metric,{control,quality,result});return result;};
+  const h=control.periodMs/1000,s=metric.samples.slice(-24000),q=quality;
+  if(!q||q.inferredTime||q.nonMonotonic||q.missing||q.gaps||q.jitter||Math.abs(q.dt-h)>.0001||Math.abs(h-.005)>1e-6){result.reasons.push('频域分析需要连续200Hz实测帧；不插值补帧');return finish();}
+  if(s.some(p=>![p.target,p.actual,p.output].every(finite))){result.reasons.push('缺少完整数值字段');return finish();}
+  let size=128;while(size<1024&&size*2<=s.length/8)size*=2;
+  const count=Math.floor(s.length/size);result.windows=count;result.windowSize=size;result.resolutionHz=1/(size*h);result.omitted=metric.samples.length-count*size;
+  if(count<8){result.reasons.push('至少需要8个不重叠频谱窗；当前数据过短');return finish();}
+  const active=s.filter(p=>Math.abs(p.target)>control.ffMinSpeed),dirs=new Set(active.map(p=>Math.sign(p.target)));
+  result.operating={active:active.length,directions:[...dirs],saturation:active.length?active.filter(p=>Math.abs(p.output)>=control.outputMax*.99).length/active.length:1,zeroSpeed:active.length?active.filter(p=>Math.abs(p.actual)<Math.max(1,.05*Math.abs(p.target))).length/active.length:1};
+  let slew=0,opposite=0;for(let i=1;i<s.length;i++){if(Math.abs(s[i].output-s[i-1].output)>=control.slew*.98)slew++;if(Math.abs(s[i].target)>control.ffMinSpeed&&s[i].output*Math.sign(s[i].target)<=0)opposite++;}
+  result.operating.slew=slew/s.length;result.operating.signClamp=opposite/s.length;
+  result.operating.kickRegion=active.length?active.filter(p=>Math.abs(p.actual)<control.stuckRatio*Math.abs(p.target)).length/active.length:1;
+  if(dirs.size!==1)result.reasons.push('需单方向工作点的小扰动日志，不能混合正反向辨识');
+  if(result.operating.saturation>.01||result.operating.zeroSpeed>.05||result.operating.slew>.05||result.operating.signClamp>.05||(control.kickStep>0&&result.operating.kickRegion>.01))result.reasons.push('饱和、零速、kick区域、同向钳制或输出斜率限制明显，不满足局部线性频域整定条件');
+  const audit=auditPidController(metric,control);result.auditError=audit.normalizedError;
+  if(!audit.aligned||!finite(audit.normalizedError)||audit.normalizedError>.08)result.reasons.push('实际控制输出重放未通过');
+  const windows=[],start=s.length-count*size;
+  let largeModulation=0;
+  for(let j=0;j<count;j++){
+    const w=s.slice(start+j*size,start+(j+1)*size),mean=key=>pidMean(w.map(p=>p[key]));
+    const means=['target','actual','output'].map(mean),rms=Math.sqrt(pidMean(w.map(p=>(p.target-means[0])**2)));
+    if(rms>Math.max(1,Math.abs(means[0])*.35))largeModulation++;
+    windows.push(w.map((p,i)=>{const hann=.5-.5*Math.cos(2*Math.PI*i/(size-1));return [p.target,p.actual,p.output].map((v,k)=>(v-means[k])*hann);}));
+  }
+  if(largeModulation>count*.1)result.reasons.push('目标调制跨越过大，需稳定偏置附近的小扰动；大幅启停不是局部线性频响证据');
+  const magnitude=z=>Math.hypot(z.re,z.im),phase=z=>Math.atan2(z.im,z.re)*180/Math.PI;
+  const half=Math.floor(count/2);let previous=null;
+  for(let k=2;k<=Math.min(128,size/4);k++){
+    const cos=Array.from({length:size},(_,i)=>Math.cos(2*Math.PI*k*i/size)),sin=Array.from({length:size},(_,i)=>-Math.sin(2*Math.PI*k*i/size));
+    const groups=[0,1].map(()=>({rr:0,uu:0,yy:0,ur:{re:0,im:0},yr:{re:0,im:0}}));
+    windows.forEach((w,j)=>{const z=[0,1,2].map(c=>({re:w.reduce((a,p,i)=>a+p[c]*cos[i],0),im:w.reduce((a,p,i)=>a+p[c]*sin[i],0)})),g=groups[j<half?0:1];
+      g.rr+=magnitude(z[0])**2;g.yy+=magnitude(z[1])**2;g.uu+=magnitude(z[2])**2;
+      for(const [key,c] of [['yr',1],['ur',2]]){g[key].re+=z[c].re*z[0].re+z[c].im*z[0].im;g[key].im+=z[c].im*z[0].re-z[c].re*z[0].im;}});
+    const estimates=groups.map(g=>({g:pidComplexDivide(g.yr,g.ur),coherence:Math.min(magnitude(g.yr)**2/Math.max(1e-24,g.yy*g.rr),magnitude(g.ur)**2/Math.max(1e-24,g.uu*g.rr)),power:g.rr}));
+    const ur={re:groups[0].ur.re+groups[1].ur.re,im:groups[0].ur.im+groups[1].ur.im},yr={re:groups[0].yr.re+groups[1].yr.re,im:groups[0].yr.im+groups[1].yr.im},g=pidComplexDivide(yr,ur);
+    if(!g||magnitude(g)<1e-12||estimates.some(e=>!e.g||magnitude(e.g)<1e-12))continue;
+    let degrees=phase(g);if(previous!==null){while(degrees-previous>180)degrees-=360;while(degrees-previous< -180)degrees+=360;}previous=degrees;
+    const ratio=pidComplexDivide(estimates[0].g,estimates[1].g),dbDifference=Math.abs(20*Math.log10(magnitude(ratio))),phaseDifference=Math.abs(phase(ratio));
+    result.bins.push({k,hz:k/(size*h),re:g.re,im:g.im,db:20*Math.log10(magnitude(g)),phase:degrees,coherence:Math.min(...estimates.map(e=>e.coherence)),power:Math.min(...estimates.map(e=>e.power)),dbDifference,phaseDifference,halves:estimates.map(e=>e.g)});
+  }
+  const powerMax=Math.max(1e-20,...result.bins.map(b=>b.power));
+  for(const b of result.bins)b.reliable=b.power>powerMax*.001&&b.coherence>=.8&&b.dbDifference<=3&&b.phaseDifference<=20;
+  const good=result.bins.filter(b=>b.reliable);result.reliableBins=good.length;
+  if(good.length<8||good.at(-1)?.hz/good[0]?.hz<4)result.reasons.push('可靠频带不足：两半数据均需相干性≥0.8，幅值差≤3dB、相位差≤20°，至少8个频点且覆盖4倍频率');
+  result.valid=!result.reasons.length;return finish();
+}
+function pidDiscreteController(p,h,hz){
+  const angle=2*Math.PI*hz*h,d={re:1-Math.cos(angle),im:Math.sin(angle)},integral=pidComplexDivide({re:h,im:0},d);
+  return {re:p.kp+p.ki*integral.re+p.kd*d.re/h,im:p.ki*integral.im+p.kd*d.im/h};
+}
+function pidFrequencyAssessment(response,p,h,half=null,gain=1,delay=0){
+  const bins=response.bins.filter(b=>b.reliable);if(bins.length<8)return null;
+  const points=bins.map(b=>{const g=half===null?b:b.halves[half],extra={re:gain*Math.cos(2*Math.PI*b.hz*delay),im:-gain*Math.sin(2*Math.PI*b.hz*delay)},l=pidComplexMultiply(pidComplexMultiply(g,extra),pidDiscreteController(p,h,b.hz)),den={re:1+l.re,im:l.im};
+    return {...b,mag:Math.hypot(l.re,l.im),phase:Math.atan2(l.im,l.re)*180/Math.PI,sensitivity:1/Math.hypot(den.re,den.im)};});
+  let prev=points[0].phase>0?points[0].phase-360:points[0].phase;for(const b of points){while(b.phase-prev>180)b.phase-=360;while(b.phase-prev< -180)b.phase+=360;prev=b.phase;}
+  const crossings=[];for(let i=1;i<points.length;i++){const a=points[i-1],b=points[i];if(a.k+1!==b.k)continue;if((a.mag-1)*(b.mag-1)<=0&&a.mag!==b.mag){const t=-Math.log(a.mag)/Math.log(b.mag/a.mag);crossings.push({hz:a.hz*Math.pow(b.hz/a.hz,t),reserve:180+a.phase+t*(b.phase-a.phase)});}}
+  if(!crossings.length||points[0].mag<=1||points.at(-1).mag>=.3)return null;
+  return {crossings,phaseReserve:Math.min(...crossings.map(c=>c.reserve)),peakSensitivity:Math.max(...points.map(b=>b.sensitivity)),cost:pidMean(points.map(b=>b.sensitivity**2/b.hz))};
+}
+function pidFrequencySeeds(response,base,control){
+  if(!response.valid)return [];
+  const h=control.periodMs/1000,bounded=p=>Object.fromEntries(['kp','ki','kd'].map((k,i)=>[k,clamp(p[k],Math.max(0,base[k]*.8),Math.min([10,8,3][i],base[k]*1.2))]));
+  const proposals=[];for(const b of response.bins.filter(b=>b.reliable)){
+    // PI phase at proposed crossover: -120° - phase(G), aiming at 60° reserve.
+    const theta=(-120-b.phase)*Math.PI/180;if(theta>=0||theta< -Math.PI/2+.05)continue;
+    const kp=Math.cos(theta)/Math.hypot(b.re,b.im);proposals.push(bounded({kp,ki:kp*2*Math.PI*b.hz*Math.tan(-theta),kd:base.kd}));
+  }
+  for(const p of [.8,.9,1,1.1,1.2])for(const i of [.8,.9,1,1.1,1.2])proposals.push(bounded({kp:base.kp*p,ki:base.ki*i,kd:base.kd}));
+  const unique=[...new Map(proposals.map(p=>[JSON.stringify(p),p])).values()],scenarios=[[0,.8,h],[0,1.2,0],[1,.8,h],[1,1.2,0]],baseline=scenarios.map(([half,g,d])=>pidFrequencyAssessment(response,base,h,half,g,d));
+  if(baseline.some(b=>!b))return [];
+  return unique.filter(p=>['kp','ki','kd'].some(k=>Math.abs(p[k]-base[k])>1e-8)).map(p=>{const runs=scenarios.map(([half,g,d])=>pidFrequencyAssessment(response,p,h,half,g,d));
+    if(runs.some(r=>!r||r.phaseReserve<55||r.peakSensitivity>1.6))return null;
+    const improvement=Math.min(...runs.map((r,i)=>1-r.cost/baseline[i].cost));if(improvement<.02)return null;
+    const assessment=pidFrequencyAssessment(response,p,h);if(!assessment||assessment.phaseReserve<55||assessment.peakSensitivity>1.6)return null;
+    return {...p,improvement,assessment,kind:'frequency_preliminary'};
+  }).filter(Boolean).sort((a,b)=>b.improvement-a.improvement).slice(0,3);
+}
+function renderPidFrequency(context){
+  const box=$('pid-frequency-result');if(!box)return;
+  const metric=context?.analysis?.wheels[context.axis?.toLowerCase()],response=pidFrequencyResponse(metric,context?.analysis?.quality,context?.known?context.used:null);
+  const independent=$('pid-frequency-reference')?.checked,external=pidValidation?pidFrequencyResponse(pidValidation.analysis.wheels[context?.axis?.toLowerCase()],pidValidation.analysis.quality,context?.known?context.used:null):null;
+  let externalOk=!external;
+  if(external){const matched=response.bins.filter(b=>b.reliable).map(b=>{const e=external.bins.find(e=>e.reliable&&Math.abs(e.hz-b.hz)<b.hz*.01);if(!e)return false;const ratio=pidComplexDivide(b,e);return Math.abs(20*Math.log10(Math.hypot(ratio.re,ratio.im)))<=3&&Math.abs(Math.atan2(ratio.im,ratio.re)*180/Math.PI)<=20;});externalOk=external.valid&&matched.length>=8&&matched.every(Boolean);}
+  const seeds=response.valid&&independent&&externalOk?pidFrequencySeeds(response,context.base,context.used):[];
+  box.innerHTML='<p>'+escapeHtml(context?.axis||'请选择轮速通道')+' · '+response.windows+'个不重叠窗 · 可靠频点 '+(response.reliableBins||0)+'；'+(response.valid?'频率证据通过，独立于一阶时域拟合':'仅诊断，暂不初选')+'</p>'+response.reasons.map(r=>'<p class="warning">'+escapeHtml(r)+'</p>').join('')+seeds.map((p,i)=>'<p><b>频域初选 '+(i+1)+'</b>：Kp '+fmt(p.kp,4)+'，Ki '+fmt(p.ki,4)+'，Kd '+fmt(p.kd,5)+'；带内相位余量估计 '+fmt(p.assessment.phaseReserve,1)+'°，预设情景最小带内代价改善 '+fmt(p.improvement*100,1)+'%。<button id="pid-frequency-fill-'+i+'">填入初选（待实车复测）</button></p>').join('')+(response.valid&&!seeds.length?'<p>没有满足带内余量、覆盖和小步改善要求的初选，保留原参数。</p>':'');
+  if(!independent)box.innerHTML+='<p>请先确认目标信号来源；未确认时只显示频谱，不提供初选。</p>';
+  if(external)box.innerHTML+='<p>跨文件频率一致性：'+(externalOk?'通过':'未通过或频率网格不匹配，阻止初选')+'。</p>';
+  seeds.forEach((p,i)=>{$('pid-frequency-fill-'+i).onclick=()=>{const current=pidAnalysisContext();if(current.axis!==context.axis||current.sourceAnalysis!==context.sourceAnalysis||!$('pid-frequency-reference').checked)return;fillPidParamForm(p);$('pid-param-status').textContent='已填入频域初选 '+context.axis+'，尚未写车；仅为带内局部估计，须停车人工写入、读回并重复测试。';};});
+  for(const [id,key,label] of [['pid-bode-gain','db','输出→轮速 幅值 / dB'],['pid-bode-phase','phase','相位 / °'],['pid-bode-coherence','coherence','两半最小相干性 0…1']]){
+    const cv=canvasContext(id);if(!cv)continue;const {g,w,h}=cv;g.fillStyle='#a9bfd4';g.font='12px sans-serif';g.fillText(label+' · 蓝点可靠 / 灰点仅诊断',12,18);
+    const bins=response.bins.filter(b=>finite(b[key]));if(!bins.length)continue;
+    const lo=key==='coherence'?0:Math.min(...bins.map(b=>b[key])),hi=key==='coherence'?1:Math.max(...bins.map(b=>b[key])),f0=Math.log10(bins[0].hz),span=Math.max(.01,Math.log10(bins.at(-1).hz)-f0);
+    g.fillText(fmt(bins[0].hz,2)+' … '+fmt(bins.at(-1).hz,2)+' Hz（对数） · '+fmt(lo,1)+' … '+fmt(hi,1),12,h-6);
+    for(const b of bins){g.fillStyle=b.reliable?'#38bdf8':'#64748b';const x=40+(Math.log10(b.hz)-f0)/span*(w-55),y=30+(hi-b[key])/Math.max(.001,hi-lo)*(h-58);g.fillRect(x-2,y-2,4,4);}
+  }
+}
 function pidProposalInBounds(c,base,control){return c&&['kp','ki','kd'].every((k,i)=>finite(c[k])&&c[k]>=Math.max(0,base[k]*.8)-1e-8&&c[k]<=Math.min([10,8,3][i],Math.max(base[k]*1.2,k==='kd'?base.kp*control.periodMs/1000*.1:.0001))+1e-8);}
 
 async function connectDeepSeek() {
@@ -367,10 +472,11 @@ async function connectDeepSeek() {
 }function renderPidBurst(){
   const box=$('pid-burst-metrics'),cand=$('pid-burst-candidates'),status=$('pid-burst-status'),ai=$('pid-ai-advice');if(!box||!cand||!status)return;
   pidOnline.candidates=[];pidOnline.candidateAxis=null;if($('pid-deepseek-advice'))$('pid-deepseek-advice').innerHTML='';
-  const state=S.pidBurst;if(!state){pidPlotState=null;drawPidModelTrace();status.textContent='尚未导入高频 PID CSV。';box.innerHTML='<div class="pid-burst-empty">请导入带字段名的 PID CSV。</div>';cand.innerHTML='';if(ai)ai.innerHTML='导入数据后生成证据分析。';return;}
+  const state=S.pidBurst;if(!state){pidPlotState=null;drawPidModelTrace();renderPidFrequency(null);status.textContent='尚未导入高频 PID CSV。';box.innerHTML='<div class="pid-burst-empty">请导入带字段名的 PID CSV。</div>';cand.innerHTML='';if(ai)ai.innerHTML='导入数据后生成证据分析。';return;}
   const a=state.analysis,q=a.quality;status.textContent=`已加载 ${state.name}：${a.rows} 帧，时长 ${fmt(a.times.at(-1)-a.times[0],2)} s，实测 ${fmt(q.measuredRate,1)} Hz。跳帧 ${q.gaps}，乱序/重复 ${q.nonMonotonic}，缺失时间 ${q.missing}，抖动 ${q.jitter}。${q.nonMonotonic?'跨复位时序无效，显示时间仅用于查看字段，不能用于响应/频率分析。':''}`;
   box.innerHTML=WHEELS.map(w=>{const m=a.wheels[w];return `<div class="pid-burst-wheel"><h3 style="color:${COLORS[w]}">${NAMES[w]}</h3><table>${tableRows([['有效样本',m.n],['IAE',fmt(m.iae,4)],['ISE',fmt(m.ise,4)],['归一化跟踪误差',fmt(m.trackingRatio*100,1)+' %'],['本轮实测表现',m.performanceScore===null?'不可计算':m.performanceScore+'/100'],['阶跃超调',finite(m.overshootPct)?fmt(m.overshootPct,1)+' %':'无有效平台阶跃'],['稳定时间',finite(m.settlingTime)?fmt(m.settlingTime,3)+' s':'无平台或未稳定'],['平台尾段误差',fmt(m.steadyError,3)],['输出饱和占比',finite(m.saturationRatio)?fmt(m.saturationRatio*100,1)+' %':'未记录']])}</table></div>`;}).join('');
   const context=pidAnalysisContext(),base=context.base,result=buildAiPidAdvice(context.analysis,base,{control:context.known?context.used:null,validation:pidValidation?.analysis});
+  renderPidFrequency(context);
   const external=result.plant.external; $('pid-validation-status').textContent=pidValidation?('验证文件：'+pidValidation.name+'；'+(external?.valid?'跨文件预测通过':'未通过/模型不可用')+(external?.test?'；自由预测误差 '+fmt(external.test.freeRunNrmse*100,1)+'%':'')+'。原模型未重新拟合。'):'未加载独立验证文件；候选仅适用于本轮已覆盖工况，尚无跨试验改善证据。';
   drawPidModelTrace(context,result);
   for(const k of ['kp','ki','kd']){const input=$('pid-burst-'+k);input.disabled=!!context.known;if(context.known)input.value=String(base[k]);}
@@ -411,7 +517,7 @@ function loadPidValidation(text,name){
   if(JSON.stringify(data.rows)===JSON.stringify(S.pidBurst.data.rows))throw new Error('验证文件与主文件相同，不能作为独立试验');
   pidValidation={name,analysis:analyzePidBurst(data,{rate:200,satLimit:1000})};renderPidBurst();
 }
-function loadPidBurst(text,name='pid_burst.csv') {const data=parsePidBurstCsv(text),rate=Number($('pid-burst-rate')?.value)||100,sat=Number($('pid-burst-sat')?.value)||0,tol=Number($('pid-burst-tol')?.value)||.02;pidValidation=null;S.pidBurst={data,name,recorded:pidRecordedParams(data.comments),analysis:analyzePidBurst(data,{rate,satLimit:sat,tolerance:tol})};renderPidBurst();notify(`已加载独立 PID Burst：${name}。它不会改变 ULog43 任务日志。`);}
+function loadPidBurst(text,name='pid_burst.csv') {const data=parsePidBurstCsv(text),rate=Number($('pid-burst-rate')?.value)||100,sat=Number($('pid-burst-sat')?.value)||0,tol=Number($('pid-burst-tol')?.value)||.02;pidValidation=null;$("pid-frequency-reference").checked=false;S.pidBurst={data,name,recorded:pidRecordedParams(data.comments),analysis:analyzePidBurst(data,{rate,satLimit:sat,tolerance:tol})};renderPidBurst();notify(`已加载独立 PID Burst：${name}。它不会改变 ULog43 任务日志。`);}
 
 const PID_AXES=['FL','FR','RL','RR','X','Y','TH'];
 const PID_MOTOR_AXES=PID_AXES.slice(0,4);
@@ -1187,7 +1293,7 @@ function activateTab(id) {
   document.querySelectorAll('.pane').forEach(p=>p.classList.toggle('active',p.id===id));
   setWavePreview(false);
   if(id==='quality')renderQuality();render();
-  if(id==='pid'){renderPidStream();drawPidModelTrace();}
+  if(id==='pid'){renderPidStream();drawPidModelTrace();renderPidFrequency(S.pidBurst?pidAnalysisContext():null);}
 }
 function showConfig() {
   $('radius').value=config.radius;$('ppr').value=config.ppr;$('wheelbase').value=config.wheelbase;$('track').value=config.track;$('fallback-dt').value=config.dt;$('omega-mode').value=config.omegaMode;
@@ -1311,12 +1417,14 @@ function init() {
   $('pid-validation-clear').onclick=()=>{pidValidation=null;renderPidBurst();};
   $('pid-burst-file').onchange=async e=>{const file=e.target.files[0];if(file){try{loadPidBurst(await file.text(),file.name);}catch(err){notify('PID Burst 导入失败：'+err.message,true);}e.target.value='';}};
   $('pid-burst-analyze').onclick=()=>{if(!S.pidBurst){notify('请先导入 PID Burst CSV。',true);return;}try{const data=S.pidBurst.data;S.pidBurst.analysis=analyzePidBurst(data,{rate:Number($('pid-burst-rate').value),satLimit:Number($('pid-burst-sat').value),tolerance:Number($('pid-burst-tol').value)});renderPidBurst();}catch(err){notify('PID Burst 分析失败：'+err.message,true);}};
+  $("pid-frequency-analyze").onclick=()=>renderPidFrequency(S.pidBurst?pidAnalysisContext():null);
+  $("pid-frequency-reference").onchange=()=>renderPidFrequency(S.pidBurst?pidAnalysisContext():null);
   $('pid-burst-clear').onclick=()=>{S.pidBurst=null;pidValidation=null;renderPidBurst();};
   $('pid-deepseek-connect').onclick=()=>connectDeepSeek();
   $('pid-deepseek').onclick=()=>requestDeepSeekAdvice();
   for(const id of ['pid-burst-rate','pid-burst-sat','pid-burst-tol','pid-burst-kp','pid-burst-ki','pid-burst-kd'])$(id).onchange=()=>{if(S.pidBurst&&id!=='pid-burst-kp'&&id!=='pid-burst-ki'&&id!=='pid-burst-kd'){$('pid-burst-analyze').click();}else if(S.pidBurst)renderPidBurst();};
   bindGestures('path','map');bindGestures('strip','wave');
-  window.addEventListener('resize',()=>{drawPath();drawStrip();drawDirection(S.samples[S.cur]);if(S.tab==='pid'){renderPidStream();drawPidModelTrace();}});
+  window.addEventListener('resize',()=>{drawPath();drawStrip();drawDirection(S.samples[S.cur]);if(S.tab==='pid'){renderPidStream();drawPidModelTrace();renderPidFrequency(S.pidBurst?pidAnalysisContext():null);}});
   if(typeof ResizeObserver!=='undefined'){const observer=new ResizeObserver(()=>{drawPath();drawStrip();});observer.observe($('wave-wrap'));observer.observe($('path').parentElement);}
   fitMap();updateWindow();render();setWavePreview(false);
 }
