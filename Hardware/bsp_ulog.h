@@ -68,6 +68,9 @@ typedef struct {
     uint8_t plan_index;
     uint8_t plan_done;
     uint8_t finished;
+    /* App confirmed FAULT/ABORTED and all motor commands/outputs are zero.
+     * Allows final upload despite stale feedback; not proof of physical rest. */
+    uint8_t terminal_outputs_stopped;
     float imu_yaw_deg;
 } ULogAppSnapshot;
 
@@ -95,7 +98,8 @@ void ULog_SetAppSnapshot(const ULogAppSnapshot *snapshot);
 void ULog_Stop(void);            /* Stop UART stream only, NOT a TF file-close command */
 
 /* Explicit passive diagnostics. Motor scheduler remains 1ms; existing speed
- * PID updates every 5ms. Start is parked-only, upload is parked-only. */
+ * PID updates every 5ms. Start is parked-only. Final fault/abort upload may
+ * instead use terminal_outputs_stopped held for 500ms. */
 void ULog_PidBurstStart(void);
 void ULog_PidBurstStop(void);
 uint8_t ULog_PidBurstActive(void);

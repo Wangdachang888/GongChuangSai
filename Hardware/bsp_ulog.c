@@ -389,13 +389,19 @@ void ULog_PidBurstPoll(void)
 #if (ULOG_PID_BURST_ENABLE != 0)
     PidPacked p;
     uint16_t seq;
+    uint8_t upload_ready;
     uint32_t now=HAL_GetTick();
 #if !defined(ULOG_TEST)
     uint32_t irq_state;
 #endif
     if (!s_stream_enabled) return;
     pid_commands();
-    if (!s_pid_parked) s_pid_was_parked=0u;
+    /* Final-upload fallback cannot arm a capture or bypass the ordinary
+     * parked gate while recording is still running. */
+    upload_ready = s_pid_parked ||
+                   (s_stop_requested && s_app_snapshot.finished &&
+                    s_app_snapshot.terminal_outputs_stopped);
+    if (!upload_ready) s_pid_was_parked=0u;
     else if (!s_pid_was_parked) { s_pid_was_parked=1u; s_pid_parked_since=now; }
     if ((s_pid_active || s_pid_pending) && !s_pid_upload_started) {
         ULOG_CRITICAL_ENTER();
@@ -408,7 +414,7 @@ void ULog_PidBurstPoll(void)
             if (!pid_send(&p,1u,seq)) g_ulog_pid_realtime_dropped++;
         }
     }
-    if (!s_pid_active && s_pid_pending && s_pid_parked && s_pid_was_parked &&
+    if (!s_pid_active && s_pid_pending && upload_ready && s_pid_was_parked &&
                (uint32_t)(now-s_pid_parked_since)>=500u) {
         if (!s_pid_upload_started) {
             static const uint8_t begin[]="#BTLOG,PID_BEGIN,timestamp_ms,fl_target,fl_actual,fl_output,fr_target,fr_actual,fr_output,rl_target,rl_actual,rl_output,rr_target,rr_actual,rr_output\r\n";

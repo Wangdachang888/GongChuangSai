@@ -16,7 +16,7 @@ try {
         $binary = "tmp/test_ulog_$mode.exe"
         & $Compiler @common "-DAPP_RUN_MODE=$mode" -Dsnprintf=ulog_test_snprintf tests/ulog/test_ulog.c Hardware/bsp_ulog.c App/race_task_plan.c -lm -o $binary
         if ($LASTEXITCODE) { throw 'Logger compile failed' }
-        foreach ($case in @('normal','early','abort','timeout','tx_error','format_error','nonfinite','manual','null','init_error','burst_short','burst_live','burst_deferred')) {
+        foreach ($case in @('normal','early','abort','timeout','tx_error','format_error','nonfinite','manual','null','init_error','burst_short','burst_live','burst_deferred','burst_fault','burst_abort')) {
             & (Join-Path $root $binary) $case
             if ($LASTEXITCODE) { throw "Logger test failed: $mode $case" }
         }

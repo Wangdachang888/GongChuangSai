@@ -11,6 +11,7 @@
 #include <math.h>
 static uint32_t now, writes;
 static uint8_t finished, square = SQUARE_RUNNING;
+static uint8_t terminal_outputs_stopped;
 #if APP_RUN_MODE != APP_MODE_RACE
 static uint8_t square_seen_running;
 #endif
@@ -39,6 +40,7 @@ static void sync_snapshot(void)
 {
     ULogAppSnapshot snapshot = {0};
     snapshot.imu_yaw_deg = 0.0f;
+    snapshot.terminal_outputs_stopped = terminal_outputs_stopped;
 #if APP_RUN_MODE == APP_MODE_RACE
     snapshot.status = (uint8_t)race.state;
     snapshot.action_index = race.action_index;
@@ -112,6 +114,47 @@ int main(int argc, char **argv)
 #endif
     if (init_error) { ULog_Poll(&c); ULog_Printf("x"); assert(!writes && !ULog_IsRecording()); return 0; }
     assert(ULog_IsRecording());
+    if (!strcmp(scenario,"burst_fault") || !strcmp(scenario,"burst_abort")) {
+        ULogPidSample sample={0};
+        capture=fopen("tmp/pid_terminal_wire.bin","wb"); assert(capture);
+        now=ULOG_STARTUP_WAIT_MS;
+        ULog_PidBurstSetParked(1);
+        ULog_PidBurstStart(); assert(ULog_PidBurstActive());
+        ULog_PidBurstSetParked(0);
+        for (int i=0;i<100;i++) {
+            now++; sample.timestamp_ms=now;
+            sample.fl_actual=motors[0].actual_speed=300.0f;
+            ULog_PidBurstSampleIsr(&sample);
+        }
+        /* Even a zero-output signal must not bypass the parked gate before
+         * the log is finished and its final stop has been requested. */
+        ULog_PidBurstStop();
+        terminal_outputs_stopped=1; sync_snapshot(); ULog_PidBurstPoll();
+        now+=1000; ULog_PidBurstPoll(); assert(!stored_frames);
+        race.state=!strcmp(scenario,"burst_fault") ? RACE_FAULT : RACE_ABORTED;
+        finished=1; square=SQUARE_DONE;
+        terminal_outputs_stopped=0;
+        sync_snapshot(); ULog_Poll(&c);
+        assert(!ULog_IsRecording() && !ULog_PidBurstActive());
+        /* No bypass until the application confirms zero targets/outputs. */
+        now+=1000; ULog_PidBurstPoll(); assert(!stored_frames);
+        terminal_outputs_stopped=1; sync_snapshot(); ULog_PidBurstPoll();
+        now+=499; ULog_PidBurstPoll(); assert(!stored_frames);
+        /* A renewed output revokes permission and resets the 500ms wait. */
+        terminal_outputs_stopped=0; sync_snapshot(); ULog_PidBurstPoll();
+        now+=1000; ULog_PidBurstPoll(); assert(!stored_frames);
+        terminal_outputs_stopped=1; sync_snapshot(); ULog_PidBurstPoll();
+        now+=499; ULog_PidBurstPoll(); assert(!stored_frames);
+        now++;
+        for (int i=0;i<20;i++) ULog_PidBurstPoll();
+        assert(stored_frames==10);
+        assert(strstr(last,"#BTLOG,END"));
+        assert(motors[0].actual_speed==300.0f); /* Never fabricate zero speed. */
+        ULog_PidBurstStart(); assert(!ULog_PidBurstActive());
+        fclose(capture); capture=0;
+        printf("PASS frozen speed / terminal outputs / 500ms / final END: %s\n",scenario);
+        return 0;
+    }
 #if defined(ULOG_ASYNC_TEST)
     if (!strcmp(scenario,"async")) {
         ULogPidSample sample={0};

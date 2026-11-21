@@ -122,6 +122,26 @@ static void update_ulog_snapshot(void)
                   fabsf(motor_right_front.actual_speed) < 10.0f &&
                   fabsf(motor_left_back.actual_speed) < 10.0f &&
                   fabsf(motor_right_back.actual_speed) < 10.0f);
+#if APP_RUN_MODE == APP_MODE_RACE
+        /* Control is stopped on terminal faults, so actual_speed may never
+         * refresh. Authorize only final diagnostics, without changing feedback
+         * or restarting control. The logger still waits 500ms continuously. */
+        if (snapshot.status == RACE_FAULT || snapshot.status == RACE_ABORTED) {
+            snapshot.terminal_outputs_stopped =
+                motor_left_front.target_cmd == 0.0f &&
+                motor_right_front.target_cmd == 0.0f &&
+                motor_left_back.target_cmd == 0.0f &&
+                motor_right_back.target_cmd == 0.0f &&
+                motor_left_front.target_speed == 0.0f &&
+                motor_right_front.target_speed == 0.0f &&
+                motor_left_back.target_speed == 0.0f &&
+                motor_right_back.target_speed == 0.0f &&
+                motor_left_front.output == 0.0f &&
+                motor_right_front.output == 0.0f &&
+                motor_left_back.output == 0.0f &&
+                motor_right_back.output == 0.0f;
+        }
+#endif
         __set_PRIMASK(irq_state);
 #if APP_RUN_MODE == APP_MODE_RACE
         if (AppRace_Status()->state == RACE_RUNNING) parked = 0u;

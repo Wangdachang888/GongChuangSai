@@ -224,3 +224,13 @@
 - PASS：ULog、race、网页回归、JS/Python语法、Keil0错误0警告、git diff --check。
   网页读取共享二进制夹具的并行竞争曾FAIL，顺序重跑PASS；测试不得并行读写同一夹具。
 - NOT_RUN：烧录、真实GATT/TF、TIM6耗时、故障停车补传及全比赛验收；硬件待办同步到验收记录。
+
+
+## 最小修复：故障/取消后PID补传（2026-11-21）
+
+- App/app_runtime.c 只在终止故障/取消状态确认四轮目标、滤波目标和输出全部为0；
+  Hardware/bsp_ulog.h/.c 传递内部确认，并仅在最终停录请求后允许替代冻结轮速完成补传。
+- 复用500ms连续等待；确认撤销后计时复位；正常采集与比赛控制流程不变，无控制恢复或伪造零速。
+- tests/ulog/test_ulog.c、run.ps1 增加冻结300 pulse/s、FAULT/ABORTED、门控撤销、提前上传拒绝和END回归。
+  先复现FAIL，再修复PASS；ULog、race、网页回归、Keil0错误0警告、git diff --check均PASS。
+- docs/PROJECT_STATE.md、HARDWARE_VERIFICATION.md 同步修复与实机NOT_RUN边界；未烧录。
