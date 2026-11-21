@@ -266,3 +266,50 @@ USART3 的 HAL 回调唯一入口是 `Hardware/bsp_uart_router.c`。比赛模式
 - 记录为 RAM 暂存，掉电丢失；当前没有 BLE 应用层确认/自动补传机制。
   不承诺断链无丢帧或硬件完全无时序影响，必须检查实收帧数与 PID_STATS。
 - 使用步骤与二进制布局详见 tools/BT10_BLE_RECEIVER.md。
+
+
+## 24. 比赛流程与日志审计（2026-11-21）
+
+本次核对正式 APP_MODE_RACE 构建、AppRace/任务计划、AppRuntime、TIM6、USART2 路由和
+ULog43/PID Burst/网页解析调用链。结论是日志传输与解析主机测试通过，但当前比赛业务
+没有接成两批物料到返回启停区的完整执行链，不能宣称日志已通过整场比赛验收。
+
+已修复：ULog43 ch10～13 原来使用 %.0f，导致低速纵/横向实际值和目标值丢失小数，
+例如 0.1234 m/s 被写成 0。现在使用 %.4f；ch37 右后轮目标由整数改为 %.1f，
+与 FL/FR/RL 保持相同精度。字段位置、43列格式、频率、波特率、控制参数和资源均不变。
+现有主机测试增加正负低速及四轮目标/实际值的 CSV 反解析校验；先复现 FAIL，再修复为 PASS。
+
+现有功能边界与未修复问题：
+
+- 正式配置 RACE_QR_FIELD_FRAME_CONFIRMED=0，按键启动会报配置故障；这是未完成场地标定的
+  安全门，未擅自打开。RACE_MATERIAL_ALIGN_ENABLE=0，相机及抓取位标定也未就绪。
+- 开启场地确认后的当前执行路径是二维码路线到公共点，随后在当前任务为 PICK 时直接
+  启动一次 PickFsm，再推进一次计划索引；没有原料确认成功后再夹取的完整业务门控，
+  更没有两批粗加工、取回、暂存、码垛和返回执行。RaceTaskPlan 只是生成动作清单。
+- AppRace_LogFinished 当前用 RACE_DONE 加机构不忙作为局部结束条件，未检查任务清单全部
+  完成或车体进入300×300 mm启停区；会关闭普通日志，不代表整场比赛完成。
+- 可选原料导航代码的 material_start_after_qr 判断放在 Race_Tick 之前，previous_state
+  刚从 s_race.state 复制，两者此时不可能分别为 RUNNING/DONE，因此入口未正常接通。
+  即使移动判断，还需同时解决公共点直接夹取、局部 DONE 停录、动作阶段可观测性和控制权。
+  本次未擅自打开开关或重写比赛主线。
+- PID 停车门控使用实际轮速<10 pulse/s；取消/故障导致 AppRace_ControlTick 返回0后，
+  TIM6 不再调用 Motor_Update，Motor_Stop 不清除 actual_speed。若最后轮速>=阈值，
+  即使实车随后停稳，软件轮速也可能冻结，导致 PID 待上传和最终 END 一直等待。
+  本次未伪造零速或绕过停车保护；须另行设计故障后的被动测速/可靠停稳证据。
+- ULog43 记录全局路线状态/动作索引和计划索引，不含 PickFsm/原料视觉对准的完整子状态、
+  批次/颜色/工位/物料确认事件；网页不能凭当前字段完整识别用户描述的所有比赛阶段。
+- 普通日志开机2秒后20Hz发送，结束/取消/故障后锁止到复位；前2秒故障可能没有任何日志。
+  PID 为显式开启的20秒100Hz RAM缓存和目标200Hz实时流；有待补传时 END 延后。
+  BLE 断链无应用层自动补传，RAM掉电不保留；TF外设文件关闭仍须其独立协议。
+
+验证结果：
+
+- PASS：tests/ulog/run.ps1（含低速精度、四轮CSV、20秒缓存、异步队列、停车门控、END顺序、
+  C→Python分片/CRC及流程测试）；tests/race/run.ps1；node viewer/test.cjs；
+  node --check viewer/viewer.js；python -m py_compile tools/bt10_ble_receiver.py。
+- 网页测试初次与 ULog 测试并行运行时读取了正在重写的 tmp/pid_wire_test.bin，出现缺表头
+  FAIL；ULog 测试结束后顺序重跑 PASS。后续共享该夹具的测试须顺序执行。
+- PASS：Keil UV4/ArmCC 构建，0 Error、0 Warning；Code=56984、RO-data=8976、RW-data=400、
+  ZI-data=70120；git diff --check。
+- NOT_RUN：真实BT10持续吞吐、浏览器GATT、TIM6最坏耗时、取消/故障后真实停车补传、
+  OpenMV/机构并发、整场比赛与TF落盘。未执行烧录，不声称对比赛完全无时序影响。

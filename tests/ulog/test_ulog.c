@@ -187,9 +187,37 @@ int main(int argc, char **argv)
         ULog_Poll(&c); assert(!writes && !ULog_IsRecording()); return 0;
     }
     now=ULOG_STARTUP_WAIT_MS;
+    /* Real low-speed manoeuvres must survive the CSV boundary, with signs
+     * and the same fractional wheel precision on all four channels. */
+    c.vx_actual=0.1234f; c.vy_actual=-0.0678f;
+    c.vx_target=-0.0456f; c.vy_target=0.0891f;
+    motors[0].target_speed=101.2f; motors[1].target_speed=-102.3f;
+    motors[2].target_speed=103.4f; motors[3].target_speed=-104.5f;
+    motors[0].actual_speed=91.2f; motors[1].actual_speed=-92.3f;
+    motors[2].actual_speed=93.4f; motors[3].actual_speed=-94.5f;
     ULog_Poll(&c); assert(writes == 1);
     for (p=last; *p; p++) if (*p==',') commas++;
     assert(commas == 42 && strstr(last,"\r\n"));
+    {
+        float fields[43];
+        char *end;
+        p=last;
+        for (int i=0;i<43;i++) {
+            fields[i]=strtof(p,&end);
+            assert(end!=p);
+            if (i<42) assert(*end==',');
+            p=end+1;
+        }
+        assert(fabsf(fields[10]-c.vx_actual)<0.00006f);
+        assert(fabsf(fields[11]-c.vy_actual)<0.00006f);
+        assert(fabsf(fields[12]-c.vx_target)<0.00006f);
+        assert(fabsf(fields[13]-c.vy_target)<0.00006f);
+        assert(fabsf(fields[27]-motors[0].target_speed)<0.051f);
+        for (int i=0;i<4;i++)
+            assert(fabsf(fields[28+i]-motors[i].actual_speed)<0.051f);
+        for (int i=1;i<4;i++)
+            assert(fabsf(fields[34+i]-motors[i].target_speed)<0.051f);
+    }
     now++;
     ULog_Poll(&c); assert(writes == 1);
     finished=1; square=SQUARE_DONE;
