@@ -36,7 +36,7 @@ extern "C" {
 #endif
 
 #ifndef ULOG_PID_BURST_CAPACITY
-#define ULOG_PID_BURST_CAPACITY 2000u /* 100Hz * 20s */
+#define ULOG_PID_BURST_CAPACITY 2000u /* Rolling last 20s at 100Hz; live has no 20s limit. */
 #endif
 
 /* BT10 must be configured to this same UART rate. */
@@ -99,7 +99,8 @@ void ULog_Stop(void);            /* Stop UART stream only, NOT a TF file-close c
 
 /* Explicit passive diagnostics. Motor scheduler remains 1ms; existing speed
  * PID updates every 5ms. Start is parked-only. Final fault/abort upload may
- * instead use terminal_outputs_stopped held for 500ms. */
+ * instead use terminal_outputs_stopped held for 500ms. START runs live and
+ * rolling cache until STOP or overall END; STOP freezes the last 20s. */
 void ULog_PidBurstStart(void);
 void ULog_PidBurstStop(void);
 uint8_t ULog_PidBurstActive(void);

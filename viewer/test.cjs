@@ -78,13 +78,15 @@ env.loadPidBurst(burst,'burst.csv');assert(env.S.pidBurst);assert(el('pid-burst-
 const rawBurst='#BTLOG,PID_BEGIN,timestamp_ms,fl_target,fl_actual\n#BTLOG,PID,0,20,0\n#BTLOG,PID,10,20,20\n#BTLOG,PID_END';const rawBurstData=env.parsePidBurstCsv(rawBurst);assert.equal(rawBurstData.rows.length,2);assert.equal(rawBurstData.fields.fl_actual,2);
 console.log('PASS: firmware mapping; 7 signed kinematic cases; real 2216-frame log; zero angular placeholder; timestamp gaps/wrap/reset; missing values; wheel geometry/solo; map zoom; wave scaling/window statistics; all tabs; playback rates/pause/seek/end; remapping; v3/v4 parity.');
 
-// The same 20-second data must survive arbitrary BLE notification boundaries.
+// Continuous live reception and the rolling cache have independent limits.
 env.pidWireSelfTest();
 assert.equal(vm.runInContext('pidStream.live.length',env),4000);
 assert.equal(vm.runInContext('pidStream.stored.length',env),2000);
 assert.equal(vm.runInContext('pidStream.complete',env),true);
 assert.equal(env.S.pidBurst.data.rows.length,2000);
-near(env.S.pidBurst.data.rows[1999][0],20000);
+near(env.S.pidBurst.data.rows[0][0],10010);
+near(env.S.pidBurst.data.rows[1999][0],30000);
+assert.equal(vm.runInContext('pidStream.liveCount',env),6000);
 const wireLines=[],wireDecoder=env.createPidWireDecoder(text=>wireLines.push(text));
 if(fs.existsSync('tmp/pid_wire_test.bin')){
   const wire=fs.readFileSync('tmp/pid_wire_test.bin');
@@ -101,4 +103,56 @@ if(fs.existsSync('tmp/pid_wire_test.bin')){
   assert(out.some(t=>t.includes('STATE,READY')));
   assert.equal(out.filter(t=>t.startsWith('#BTLOG,PID,')).length,1);
 }
-console.log('PASS: 20-second PID protocol self-test, four-wheel plots, fragmented firmware binary/CSV parity, CRC recovery.');
+console.log('PASS: 30-second live / last-20-second cache protocol self-test, four-wheel plots, fragmented firmware binary/CSV parity, CRC recovery.');
+
+if(fs.existsSync('tmp/pid_continuous_wire.bin')){
+  env.resetPidStream();const lines=[],d=env.createPidWireDecoder(t=>{lines.push(t);t.trim().split(/\r?\n/).forEach(env.receivePidLine);});
+  const wire=fs.readFileSync('tmp/pid_continuous_wire.bin');for(let i=0;i<wire.length;i+=181)d.feed(wire.subarray(i,i+181));
+  assert.equal(vm.runInContext('pidStream.liveCount',env),72006);assert.equal(vm.runInContext('pidStream.gaps',env),0);
+  assert.equal(vm.runInContext('pidStream.live.length',env),4000);
+  const data=env.parsePidBurstCsv(lines.join(''));assert.equal(data.rows.length,2000);near(data.rows[0][0],342040);near(data.rows.at(-1)[0],362030);
+  const live=env.parsePidBurstCsv(env.pidLiveParts(lines).join(''));assert.equal(live.rows.length,72006);near(live.rows[0][0],2005);near(live.rows.at(-1)[0],362030);
+  console.log('PASS: 360-second firmware stream, 16-bit sequence wrap, all 72006 live samples exported, rolling last 20-second cache.');
+}
+
+// Small transactional IndexedDB fixture: asynchronous request/commit, atomic
+// rollback, legacy records and compound chunk keys exercise the real archiver.
+(async()=>{
+  const clone=x=>x===undefined?undefined:structuredClone(x),stores={logs:new Map([[1,{id:1,name:'legacy',text:'old\n',frames:1}]] )};let nextId=2,failNext=false,openedVersion=0;
+  const key=(name,v)=>JSON.stringify(name==='logs'?v.id:[v.logId,v.part]);
+  // Seed keys in the same representation used by the store.
+  stores.logs=new Map([[JSON.stringify(1),{id:1,name:'legacy',text:'old\n',frames:1}]]);
+  const db={objectStoreNames:{contains:n=>!!stores[n]},createObjectStore(n){stores[n]=new Map();return {createIndex(){}};},close(){},transaction(names,mode){
+    names=Array.isArray(names)?names:[names];const local=Object.fromEntries(names.map(n=>[n,new Map([...stores[n]].map(([k,v])=>[k,clone(v)]))]));let aborted=false,scheduled=false;
+    const tx={error:null,abort(){aborted=true;queueMicrotask(()=>tx.onabort?.());},objectStore(n){const m=local[n];assert(m,'Store in transaction');
+      const request=fn=>{const r={};queueMicrotask(()=>{if(aborted)return;try{r.result=fn();r.onsuccess?.();}catch(e){tx.error=e;tx.abort();}});return r;};
+      const select=id=>[...m.values()].filter(v=>v.logId===id);
+      return {add(v){const rec=clone(v);rec.id=nextId++;return request(()=>{m.set(key(n,rec),rec);return rec.id;});},put(v){const rec=clone(v);return request(()=>m.set(key(n,rec),rec));},get(id){return request(()=>clone(m.get(JSON.stringify(id))));},getAll(){return request(()=>clone([...m.values()]));},delete(id){return request(()=>m.delete(JSON.stringify(id)));},clear(){return request(()=>m.clear());},index(){return {getAll(id){return request(()=>clone(select(id)));},openCursor(id){const values=select(id);let i=0;const r={};const step=()=>queueMicrotask(()=>{const v=values[i++];r.result=v?{delete(){m.delete(key(n,v));},continue:step}:null;r.onsuccess?.();});step();return r;}};}};
+    }};
+    if(!scheduled){scheduled=true;setImmediate(()=>{if(aborted)return;if(mode==='readwrite'&&failNext){failNext=false;tx.error=new Error('quota fixture');tx.abort();return;}if(mode==='readwrite')for(const n of names)stores[n]=local[n];tx.oncomplete?.();});}
+    return tx;
+  }};
+  env.indexedDB={open(name,version){openedVersion=version;const r={result:db};queueMicrotask(()=>{r.onupgradeneeded?.();r.onsuccess?.();});return r;}};
+  env.setInterval=()=>1;env.clearInterval=()=>{};env.setTimeout=()=>{};
+  const downloads=[];env.downloadParts=(parts,name)=>downloads.push({text:parts.join(''),name});
+  await env.archiveOpen();assert.equal(openedVersion,2);assert(stores.chunks);assert.equal((await env.archiveGet(1)).text,'old\n');
+  const lines=Array.from({length:6000},(_,i)=>'#BTLOG,PID_LIVE,'+(i+1)+','+[(i+1)*5,...new Array(12).fill(i/10)].join(',')+'\n');
+  await Promise.all(lines.map(env.archiveLine));await env.archiveFlush();
+  const id=vm.runInContext('archive.session.id',env),rec=stores.logs.get(JSON.stringify(id));
+  assert.equal(rec.liveFrames,6000);assert(!('text' in rec));assert(rec.parts>1);assert.equal((await env.archiveGet(id)).text,lines.join(''));
+  await env.downloadPidLive();const exported=env.parsePidBurstCsv(downloads.at(-1).text);assert.equal(exported.rows.length,6000);near(exported.rows.at(-1)[0],30000);
+  const extra='#BTLOG,PID_LIVE,6001,30005,'+new Array(12).fill(1).join(',')+'\n';await env.archiveLine(extra);
+  failNext=true;await env.archiveFlush();assert.equal(vm.runInContext('archive.pending',env),extra);assert(vm.runInContext('archive.error',env).includes('quota'));
+  await env.archiveFlush();assert.equal(vm.runInContext('archive.pending',env),'');assert.equal((await env.archiveGet(id)).text,lines.join('')+extra);
+  await env.archiveFinish(false);
+  // END download must select the new session after its queued opening, not the previous id.
+  const opening=env.archiveLine('#BTLOG,BEGIN\n'),ending=env.archiveFinish(true),download=env.downloadBt10Log();await Promise.all([opening,ending,download]);
+  assert.equal(downloads.at(-1).text,'#BTLOG,BEGIN\n');assert.notEqual(vm.runInContext('archive.lastId',env),id);
+  const fragmented=env.pidLiveParts([extra.slice(0,18),extra.slice(18).trimEnd()]);assert.equal(env.parsePidBurstCsv(fragmented.join('')).rows.length,1);
+  await env.archiveDelete(id);assert(!stores.logs.has(JSON.stringify(id)));assert(![...stores.chunks.values()].some(v=>v.logId===id));assert.equal((await env.archiveGet(1)).text,'old\n');
+  const originalOpen=env.indexedDB.open;vm.runInContext('archive.db=null',env);env.indexedDB.open=()=>{throw new Error('open fixture');};
+  await env.archiveLine(extra);assert.equal(vm.runInContext('archive.pending',env),extra);
+  env.indexedDB.open=originalOpen;await env.archiveFlush();assert.equal(vm.runInContext('archive.session.rec.liveFrames',env),1);
+  assert.equal((await env.archiveGet(vm.runInContext('archive.session.id',env))).text,extra);await env.archiveFinish(false);
+  console.log('PASS: IndexedDB v1 migration; chunked 6000-frame live archive/export; atomic failure retry without duplication; queued END session selection; delete chunks; legacy import.');
+})().catch(e=>{console.error(e);process.exitCode=1;});

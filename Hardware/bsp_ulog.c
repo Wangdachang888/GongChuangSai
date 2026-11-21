@@ -86,7 +86,8 @@ typedef struct { uint32_t ms; int16_t value[12]; } PidPacked;
 typedef char PidPackedSizeCheck[(sizeof(PidPacked)==28u)?1:-1];
 static volatile PidPacked s_pid_records[ULOG_PID_BURST_CAPACITY];
 static volatile PidPacked s_pid_latest;
-static volatile uint16_t s_pid_count, s_pid_sequence;
+static volatile uint16_t s_pid_count, s_pid_sequence, s_pid_write_index;
+static volatile uint32_t s_pid_overwritten;
 static uint16_t s_pid_upload_index, s_pid_rt_sequence;
 static volatile uint8_t s_pid_active, s_pid_div;
 static uint8_t s_pid_pending, s_pid_upload_started, s_pid_parked;
@@ -225,10 +226,11 @@ void ULog_PidBurstStart(void)
     if (!ULog_IsRecording() || !s_pid_parked || s_pid_active || s_pid_pending ||
         (uint32_t)(HAL_GetTick()-s_init_ms) < ULOG_STARTUP_WAIT_MS) return;
     {
-        static const uint8_t armed[]="#BTLOG,PID_ARMED,storage_hz=100,realtime_hz=200,capacity=2000\r\n";
+        static const uint8_t armed[]="#BTLOG,PID_ARMED,storage_hz=100,realtime_hz=200,capacity=2000,cache=rolling\r\n";
         if (!ulog_try_write(armed,sizeof(armed)-1u,1024u)) return;
     }
-    s_pid_count = 0u; s_pid_upload_index = 0u;
+    s_pid_count = 0u; s_pid_upload_index = 0u; s_pid_write_index = 0u;
+    s_pid_overwritten = 0u;
     s_pid_sequence = 0u; s_pid_rt_sequence = 0u; s_pid_div = 0u;
     g_ulog_pid_burst_overrun = 0u; g_ulog_pid_realtime_dropped = 0u;
     g_ulog_pid_quantized_clipped = 0u;
@@ -297,11 +299,12 @@ void ULog_PidBurstSampleIsr(const ULogPidSample *sample)
     s_pid_sequence++;
     if (s_pid_div == 10u) {
         s_pid_div = 0u;
-        if (s_pid_count < ULOG_PID_BURST_CAPACITY) {
-            s_pid_records[s_pid_count] = p;
-            s_pid_count++;
-            if (s_pid_count == ULOG_PID_BURST_CAPACITY) s_pid_active = 0u;
-        } else { g_ulog_pid_burst_overrun++; s_pid_active = 0u; }
+        /* Cache capacity limits history, never the live stream. Freeze only
+         * on explicit STOP or overall log termination. */
+        s_pid_records[s_pid_write_index] = p;
+        if (++s_pid_write_index >= ULOG_PID_BURST_CAPACITY) s_pid_write_index = 0u;
+        if (s_pid_count < ULOG_PID_BURST_CAPACITY) s_pid_count++;
+        else s_pid_overwritten++;
     }
 #else
     (void)sample;
@@ -420,15 +423,21 @@ void ULog_PidBurstPoll(void)
             static const uint8_t begin[]="#BTLOG,PID_BEGIN,timestamp_ms,fl_target,fl_actual,fl_output,fr_target,fr_actual,fr_output,rl_target,rl_actual,rl_output,rr_target,rr_actual,rr_output\r\n";
             if (ulog_try_write(begin,sizeof(begin)-1u,1024u)) s_pid_upload_started=1u;
         } else if (s_pid_upload_index < s_pid_count) {
-            p=s_pid_records[s_pid_upload_index];
+            uint16_t index=s_pid_upload_index;
+            /* Once full, write_index points to the oldest retained sample. */
+            if (s_pid_count == ULOG_PID_BURST_CAPACITY) {
+                index=(uint16_t)(index+s_pid_write_index);
+                if (index >= ULOG_PID_BURST_CAPACITY) index-=ULOG_PID_BURST_CAPACITY;
+            }
+            p=s_pid_records[index];
             if (pid_send(&p,2u,s_pid_upload_index)) s_pid_upload_index++;
         } else if (!s_pid_fault_reported) {
             static char status[160];
             int n=snprintf(status,sizeof(status),
-                "#BTLOG,PID_STATS,count=%u,live_drop=%lu,clipped=%lu,overrun=%lu\r\n",
+                "#BTLOG,PID_STATS,count=%u,live_drop=%lu,clipped=%lu,overrun=%lu,overwritten=%lu\r\n",
                 (unsigned)s_pid_count,(unsigned long)g_ulog_pid_realtime_dropped,
                 (unsigned long)g_ulog_pid_quantized_clipped,
-                (unsigned long)g_ulog_pid_burst_overrun);
+                (unsigned long)g_ulog_pid_burst_overrun,(unsigned long)s_pid_overwritten);
             if (n>0 && (size_t)n<sizeof(status) &&
                 ulog_try_write((const uint8_t *)status,(uint16_t)n,1024u))
                 s_pid_fault_reported=1u;

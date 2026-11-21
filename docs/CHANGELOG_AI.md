@@ -234,3 +234,16 @@
 - tests/ulog/test_ulog.c、run.ps1 增加冻结300 pulse/s、FAULT/ABORTED、门控撤销、提前上传拒绝和END回归。
   先复现FAIL，再修复PASS；ULog、race、网页回归、Keil0错误0警告、git diff --check均PASS。
 - docs/PROJECT_STATE.md、HARDWARE_VERIFICATION.md 同步修复与实机NOT_RUN边界；未烧录。
+
+
+## 持续PID实时流与滚动缓存解耦（2026-11-21）
+
+- Hardware/bsp_ulog.c/.h：移除缓存满自动停止，复用2000帧环形缓存，显式停止后按时间
+  顺序上传最近20秒，新增正常覆盖统计；普通ULog43/停车门控/终止补传与比赛控制保持不变。
+- viewer/viewer.js、index.html及根目录v3/v4：持续采集按钮、累计实时帧数、30秒协议自测、
+  完整实时与停车缓存分别导出；仓库v2兼容旧记录、事务分段保存及失败重试，移除全量raw副本。
+- tests/ulog、viewer/test.cjs：360秒72006帧与序号回绕、最后20秒、旧仓库升级/分段/重试/
+  新会话END导出与删除回归；同步更新BT10使用说明和项目状态/硬件验收边界。
+- PASS：ULog/race、C→Python/JS、网页回归、JS/Python语法、Keil0错误0警告、git diff --check。
+  网页初次使用旧20秒断言FAIL，更新30秒预期后PASS。静态RAM增加8字节；未烧录。
+- NOT_RUN：BT10真实持续吞吐、浏览器实测、TIM6最坏耗时、整车视觉机构并发与长期保存配额。

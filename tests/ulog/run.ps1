@@ -16,7 +16,7 @@ try {
         $binary = "tmp/test_ulog_$mode.exe"
         & $Compiler @common "-DAPP_RUN_MODE=$mode" -Dsnprintf=ulog_test_snprintf tests/ulog/test_ulog.c Hardware/bsp_ulog.c App/race_task_plan.c -lm -o $binary
         if ($LASTEXITCODE) { throw 'Logger compile failed' }
-        foreach ($case in @('normal','early','abort','timeout','tx_error','format_error','nonfinite','manual','null','init_error','burst_short','burst_live','burst_deferred','burst_fault','burst_abort')) {
+        foreach ($case in @('normal','early','abort','timeout','tx_error','format_error','nonfinite','manual','null','init_error','burst_short','burst_live','burst_deferred','burst_fault','burst_abort','burst_continuous')) {
             & (Join-Path $root $binary) $case
             if ($LASTEXITCODE) { throw "Logger test failed: $mode $case" }
         }
@@ -51,7 +51,18 @@ for name in ("pid_wire_test", "pid_async_wire"):
     r.feed(bad + b"#BTLOG,STATE,READY\n" + good)
     assert r.dropped and r.state == "READY"
     r.close()
-print("PASS Python: sync/async firmware -> 2000 samples, 1/7/181-byte splits, CRC recovery, durable close")
+wire = Path("tmp/pid_continuous_wire.bin").read_bytes()
+r = LogReceiver(Path("tmp/pid_continuous_decoded.csv"), pid_output=Path("tmp/pid_continuous_decoded.pid.csv"))
+for i in range(0, len(wire), 181):
+    r.feed(wire[i:i + 181])
+assert r.closed_by_end and r.pid_lines == 2000
+rows = list(csv.reader(line for line in Path("tmp/pid_continuous_decoded.pid.csv").open(encoding="utf-8") if not line.startswith("#")))
+assert int(rows[1][0]) == 342040 and int(rows[-1][0]) == 362030
+live = [line for line in Path("tmp/pid_continuous_decoded.csv").read_text(encoding="utf-8").splitlines() if line.startswith("#BTLOG,PID_LIVE,")]
+assert len(live) == 72006
+seqs = [int(line.split(",")[2]) for line in live]
+assert all((b - a) % 65536 == 1 for a, b in zip(seqs, seqs[1:]))
+print("PASS Python: sync/async split/CRC; continuous 72006 live samples, sequence wrap, last 20-second cache, durable close")
 '@ | python -
         if ($LASTEXITCODE) { throw 'PID binary receiver verification failed' }
     } else {

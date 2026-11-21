@@ -27,6 +27,7 @@ static RaceTaskPlan plan;
 static char last[800];
 static FILE *capture;
 static uint32_t live_frames, stored_frames;
+static uint32_t first_stored_ms, last_stored_ms;
 uint32_t HAL_GetTick(void) { return now; }
 float app_imu_yaw_deg(void) { return 0; }
 uint8_t AppRace_LogFinished(void) { return finished; }
@@ -72,7 +73,13 @@ HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *uart, uint8_t *data, uin
         assert(fwrite(data,1,len,capture)==len);
         if (len==36 && data[0]==0xa5 && data[1]==0x5a) {
             if (data[3]==1) live_frames++;
-            if (data[3]==2) stored_frames++;
+            if (data[3]==2) {
+                uint32_t ms=(uint32_t)data[6]|(uint32_t)data[7]<<8|
+                            (uint32_t)data[8]<<16|(uint32_t)data[9]<<24;
+                if (!stored_frames) first_stored_ms=ms;
+                else assert(ms==last_stored_ms+10u);
+                last_stored_ms=ms; stored_frames++;
+            }
         }
     }
     return tx_error;
@@ -171,7 +178,7 @@ int main(int argc, char **argv)
             ULog_PidBurstSampleIsr(&sample);
             ULog_PidBurstPoll(); /* deliberately no TX completion for 20s */
         }
-        assert(!ULog_PidBurstActive());
+        assert(ULog_PidBurstActive()); /* a full cache must not stop live */
         assert(g_ulog_pid_realtime_dropped>0);
         assert(g_ulog_tx_error_count==before); /* no queue-full error flood */
         ULog_Stop();
@@ -189,11 +196,13 @@ int main(int argc, char **argv)
     if (!strncmp(scenario,"burst",5)) {
         ULogPidSample sample={0};
         uint32_t i;
-        uint32_t ticks=!strcmp(scenario,"burst_short")?1000u:20000u;
+        uint32_t ticks=!strcmp(scenario,"burst_short")?1000u:
+                       !strcmp(scenario,"burst_continuous")?360030u:20000u;
+        uint8_t live=!strcmp(scenario,"burst_live") || !strcmp(scenario,"burst_continuous");
         now=ULOG_STARTUP_WAIT_MS;
         ULog_PidBurstStart(); assert(!ULog_PidBurstActive()); /* parked gate */
         ULog_PidBurstSetParked(1);
-        capture=fopen("tmp/pid_wire_test.bin","wb"); assert(capture);
+        capture=fopen(ticks>20000u?"tmp/pid_continuous_wire.bin":"tmp/pid_wire_test.bin","wb"); assert(capture);
         ULog_PidBurstStart(); assert(ULog_PidBurstActive());
         ULog_PidBurstStart(); /* rearm must not reset capture */
         ULog_PidBurstSetParked(0);
@@ -202,9 +211,10 @@ int main(int argc, char **argv)
         for (i=1;i<=ticks;i++) {
             now=ULOG_STARTUP_WAIT_MS+i; sample.timestamp_ms=now;
             ULog_PidBurstSampleIsr(&sample);
-            if (!strcmp(scenario,"burst_live")) ULog_PidBurstPoll();
+            if (live) ULog_PidBurstPoll();
+            if (ticks>20000u && i%50u==0u) ULog_Poll(&c);
         }
-        if (ticks<20000u) { assert(ULog_PidBurstActive()); ULog_PidBurstStop(); }
+        assert(ULog_PidBurstActive()); ULog_PidBurstStop();
         assert(!ULog_PidBurstActive());
         assert(!g_ulog_pid_burst_overrun);
         for (i=0;i<20;i++) { now++; ULog_PidBurstPoll(); }
@@ -215,9 +225,11 @@ int main(int argc, char **argv)
         now+=499; ULog_PidBurstPoll(); assert(stored_frames==0);
         now++;
         for (i=0;i<2010;i++) ULog_PidBurstPoll();
-        assert(stored_frames==ticks/10u);
+        assert(stored_frames==(ticks>20000u?2000u:ticks/10u));
+        assert(last_stored_ms==ULOG_STARTUP_WAIT_MS+ticks);
+        assert(first_stored_ms==last_stored_ms-(stored_frames-1u)*10u);
         assert(strstr(last,"#BTLOG,END"));
-        if (!strcmp(scenario,"burst_live")) assert(live_frames==4000);
+        if (live) { assert(live_frames==ticks/5u); assert(!g_ulog_pid_realtime_dropped); }
         else { assert(live_frames==1); assert(g_ulog_pid_realtime_dropped==ticks/5u-1u); }
         fclose(capture); capture=0;
         printf("PASS 20s burst / parked gate / retained upload: %s\n",scenario);
