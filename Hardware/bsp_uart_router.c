@@ -17,7 +17,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 #endif
 #if APP_RUN_MODE == APP_MODE_RACE
     Vision_RxCpltCallback(huart);
-#elif (APP_D36_UART_CMD_ENABLE != 0)
+#elif (APP_D36_UART_CMD_ENABLE != 0) && !APP_PID_TEST_ENABLE
     D36Cmd_RxCpltCallback(huart);
 #else
     (void)huart;
@@ -31,7 +31,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 #endif
 #if APP_RUN_MODE == APP_MODE_RACE
     Vision_ErrorCallback(huart);
-#elif (APP_D36_UART_CMD_ENABLE != 0)
+#elif (APP_D36_UART_CMD_ENABLE != 0) && !APP_PID_TEST_ENABLE
     D36Cmd_ErrorCallback(huart);
 #else
     (void)huart;

@@ -1,3 +1,190 @@
+#if defined(APP_PID_TEST_HOST)
+#include "board.h"
+#include "app_pid_test.h"
+#include "app_runtime.h"
+#include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+
+Motor_t motor_left_front, motor_right_front, motor_left_back, motor_right_back;
+MecanumChassis_t chassis;
+volatile uint8_t g_tune_mode;
+static uint32_t now, irq, stops, commands, frames;
+static uint8_t key, imu_ok = 1u, bias_ready = 1u, capture_armed;
+static unsigned live_count, cache_count, end_count, used_count;
+static uint8_t cache_end;
+void PidFixture_Init(void);
+void PidFixture_Poll(void);
+void PidFixture_Snapshot(void);
+void PidFixture_Observe(void);
+
+uint32_t HAL_GetTick(void) { return now; }
+uint32_t __get_PRIMASK(void) { return irq; }
+void __disable_irq(void) { irq = 1u; }
+void __set_PRIMASK(uint32_t value) { irq = value; }
+uint32_t app_imu_frames(void) { return frames; }
+bool app_imu_ok(void) { return imu_ok; }
+bool app_imu_bias_ready(void) { return bias_ready; }
+float app_imu_yaw_deg(void) { return 0.0f; }
+int HAL_GPIO_ReadPin(void *port, uint16_t pin) { (void)port; (void)pin; return !key; }
+float Vbat_GetDriverVoltage(void) { return 12.0f; }
+float Vbat_GetBoardVoltage(void) { return 11.9f; }
+void HAL_GPIO_Init(void *port, GPIO_InitTypeDef *c) { (void)port; (void)c; }
+HAL_StatusTypeDef HAL_UART_Init(UART_HandleTypeDef *u) { (void)u; return HAL_OK; }
+HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *u, uint8_t *d, uint16_t n, uint32_t t)
+{
+    char line[800];
+    (void)u; (void)t;
+    if (n == 36u && d[0] == 0xa5 && d[1] == 0x5a) {
+        if (d[3] == 1u) live_count++;
+        if (d[3] == 2u) {
+            assert(AppPidTest_Status()->state != PID_TEST_RUNNING);
+            cache_count++;
+        }
+    } else {
+        assert(n < sizeof(line)); memcpy(line, d, n); line[n] = 0;
+        if (strstr(line, "PID_ARMED")) capture_armed = 1;
+        if (strstr(line, "PID_USED")) used_count++;
+        if (strstr(line, "PID_END")) cache_end = 1;
+        if (strstr(line, "#BTLOG,END")) { assert(cache_end); end_count++; }
+    }
+    return HAL_OK;
+}
+void Mecanum_SetBodySpeed(MecanumChassis_t *c, float vx, float vy, float w)
+{ assert(irq); c->vx_target=vx; c->vy_target=vy; c->omega_target=w; c->mode=0; c->body_frame=1; commands++; }
+void Mecanum_Stop(MecanumChassis_t *c)
+{ c->vx_target=c->vy_target=c->omega_target=0; c->mode=0; }
+void Motor_Stop(Motor_t *m)
+{ m->target_cmd=m->target_speed=m->output=0; stops++; }
+
+static void reset_module(void)
+{
+    chassis.motor_lf=&motor_left_front; chassis.motor_rf=&motor_right_front;
+    chassis.motor_lb=&motor_left_back; chassis.motor_rb=&motor_right_back;
+    chassis.max_speed=.20f; chassis.enable=1;
+    Mecanum_Stop(&chassis);
+    commands=stops=0;
+    AppPidTest_Init(&chassis);
+}
+static void check_stage(unsigned step)
+{
+    float v = (step > 0 && step < 13) ?
+        (step % 4 == 1 ? APP_PID_TEST_SPEED_MPS :
+         step % 4 == 3 ? -APP_PID_TEST_SPEED_MPS : 0) : 0;
+    assert(fabsf(chassis.vx_target-(APP_PID_TEST_AXIS == 0 ? v : 0)) < 1e-7f);
+    assert(fabsf(chassis.vy_target-(APP_PID_TEST_AXIS == 1 ? v : 0)) < 1e-7f);
+    assert(chassis.mode == 0 && chassis.body_frame && chassis.omega_target == 0);
+}
+static void poll_step(uint32_t ms)
+{
+    for (uint32_t i=0; i<ms; ++i) {
+        ULogPidSample p = {0};
+        now++; frames++;
+        PidFixture_Poll(); PidFixture_Snapshot(); PidFixture_Observe();
+        p.timestamp_ms=now; ULog_PidBurstSampleIsr(&p);
+        ULog_PidBurstPoll(); ULog_Poll(&chassis);
+    }
+}
+int main(int argc, char **argv)
+{
+    uint32_t start, expected = APP_PID_TEST_CREEP ? 32000u : 20000u;
+    const char *scenario = argc > 1 ? argv[1] : "unit";
+    reset_module();
+    assert(AppPidTest_Status()->state == PID_TEST_IDLE && !commands && !stops);
+    for (now=0; now<10000; now++) AppPidTest_Poll(now, PID_TEST_REASON_NONE);
+    assert(AppPidTest_Status()->state == PID_TEST_IDLE && !commands);
+    start = now = 0xfffffff0u;
+    assert(AppPidTest_Start(now) && !AppPidTest_Start(now));
+    for (unsigned step=0; step<14; ++step) {
+        uint32_t duration = (step == 0 || step == 13 || step % 2 == 0) ?
+            1000 : APP_PID_TEST_CREEP ? 4000 : 2000;
+        check_stage(step);
+        AppPidTest_Poll(now+duration-1, PID_TEST_REASON_NONE);
+        assert(AppPidTest_Status()->step == step && commands == step+1 && !stops);
+        now+=duration; AppPidTest_Poll(now, PID_TEST_REASON_NONE);
+    }
+    assert(now-start == expected && commands == 14 && stops == 4);
+    assert(AppPidTest_Status()->state == PID_TEST_DONE && !AppPidTest_Start(now));
+    AppPidTest_Stop(PID_TEST_REASON_MANUAL);
+    assert(AppPidTest_Status()->reason == PID_TEST_REASON_COMPLETE);
+    for (unsigned reason=PID_TEST_REASON_MANUAL; reason<=PID_TEST_REASON_CAPTURE; ++reason) {
+        reset_module(); assert(AppPidTest_Start(now));
+        AppPidTest_Poll(now+1000, PID_TEST_REASON_NONE); check_stage(1);
+        AppPidTest_Stop((AppPidTestReason)reason);
+        assert(stops == 4 && chassis.vx_target == 0 && chassis.vy_target == 0);
+        assert(AppPidTest_Status()->reason == (AppPidTestReason)reason && !AppPidTest_Start(now));
+    }
+    reset_module(); assert(AppPidTest_Start(now));
+    AppPidTest_Poll(now+(APP_PID_TEST_CREEP ? 40000 : 25000), PID_TEST_REASON_NONE);
+    assert(AppPidTest_Status()->state == PID_TEST_TIMEOUT && stops == 4);
+    reset_module(); assert(AppPidTest_Start(now));
+    AppPidTest_Poll(now+1, PID_TEST_REASON_IMU);
+    assert(AppPidTest_Status()->state == PID_TEST_FAULT && stops == 4);
+    chassis.max_speed=.001f; AppPidTest_Init(&chassis);
+    assert(AppPidTest_Status()->reason == PID_TEST_REASON_CONFIG && !AppPidTest_Start(now));
+    if (!strcmp(scenario,"unit")) { puts("PASS PID sequence: axes/profile/signs/durations/once/rollover/cancel/timeout/fault/config"); return 0; }
+
+    now=0; reset_module(); frames=1;
+    if (!strcmp(scenario,"bootheld")) key=1;
+    PidFixture_Init(); ULog_SetPidHandler(AppRuntime_PidAccess); ULog_Init();
+    poll_step(19000); /* warmup, no button; not auto-started */
+    assert(AppPidTest_Status()->state == PID_TEST_IDLE && !commands);
+    key=1; poll_step(30); key=0; poll_step(30); /* without capture rejected */
+    assert(AppPidTest_Status()->state == PID_TEST_IDLE);
+    ULog_TestRx("@PID START\n"); poll_step(30);
+    assert(capture_armed && ULog_PidBurstActive());
+    key=1; poll_step(30); key=0; poll_step(30);
+    assert(AppPidTest_Status()->state == PID_TEST_RUNNING);
+    {
+        ULogPidRequest req={0}; ULogPidValues val={0}; req.write=1; req.kp=2.5f;
+        assert(!strcmp(AppRuntime_PidAccess(&req,&val),"NOT_PARKED_500MS"));
+    }
+    if (!strcmp(scenario,"flow") || !strcmp(scenario,"bootheld")) {
+        poll_step(expected);
+        assert(AppPidTest_Status()->state == PID_TEST_DONE);
+        assert(!cache_count); /* less than 500ms true parked */
+    } else if (!strcmp(scenario,"cancel")) {
+        key=1; poll_step(30);
+        assert(AppPidTest_Status()->state == PID_TEST_CANCELLED);
+    } else if (!strcmp(scenario,"watchdog")) {
+        now+=250; assert(!AppRuntime_ControlTick()); assert(stops==4);
+        PidFixture_Poll();
+        assert(AppPidTest_Status()->reason == PID_TEST_REASON_LOOP);
+        assert(AppRuntime_ControlTick()); /* feedback keeps refreshing after stop */
+    } else if (!strcmp(scenario,"imu")) {
+        imu_ok=0; poll_step(1);
+        assert(AppPidTest_Status()->reason == PID_TEST_REASON_IMU);
+    } else if (!strcmp(scenario,"feedback")) {
+        motor_left_front.actual_speed=NAN; poll_step(1);
+        assert(AppPidTest_Status()->reason == PID_TEST_REASON_FEEDBACK);
+        assert(!cache_count); motor_left_front.actual_speed=0;
+    } else if (!strcmp(scenario,"capture")) {
+        ULog_TestRx("@PID STOP\n"); poll_step(10);
+        assert(AppPidTest_Status()->reason == PID_TEST_REASON_CAPTURE);
+    } else if (!strcmp(scenario,"stale")) {
+        key=1; poll_step(30); key=0; poll_step(30); /* cancel for terminal test */
+        assert(AppPidTest_Status()->state == PID_TEST_CANCELLED);
+        motor_left_front.actual_speed=100; poll_step(600);
+        assert(!cache_count && !end_count); motor_left_front.actual_speed=0;
+    } else assert(0);
+    assert(AppPidTest_Status()->state != PID_TEST_RUNNING);
+    poll_step(600);
+    for (unsigned i=0; i<2200; ++i) ULog_PidBurstPoll();
+    assert(cache_count && cache_count<=2000 && cache_end && end_count==1);
+    assert(used_count==7 && live_count && !ULog_IsRecording());
+    {
+        ULogPidRequest req={0}; ULogPidValues val={0};
+        assert(!strcmp(AppRuntime_PidAccess(&req,&val),"OK"));
+        assert(val.editable == (AppPidTest_Status()->state==PID_TEST_DONE));
+    }
+    key=0; poll_step(30); key=1; poll_step(30); key=0; poll_step(30);
+    assert(AppPidTest_Status()->state != PID_TEST_RUNNING);
+    puts("PASS PID runtime: physical key/capture interlock/real parked/500ms/upload/END/PID_USED/access/watchdog");
+    return 0;
+}
+#else
 #include "board.h"
 #include "bsp_ulog.h"
 #include "app_runtime.h"
@@ -399,3 +586,4 @@ int main(int argc, char **argv)
     printf("PASS logger: %s\n",scenario);
     return 0;
 }
+#endif

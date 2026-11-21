@@ -21,8 +21,52 @@ motor=Path("Control/Motor.c").read_bytes().decode("gb18030",errors="replace")
 constants=motor[motor.index("#ifndef MOTOR_FF_GAIN"):motor.index("static int32_t Encoder_ReadDelta")]
 head='#include "board.h"\n#include "app_runtime.h"\n#include "app_mode.h"\n#include "app_race.h"\n#include "app_square.h"\n#include <math.h>\nextern Motor_t motor_left_front,motor_right_front,motor_left_back,motor_right_back;\nextern MecanumChassis_t chassis;\n'
 Path("tmp/runtime_pid_access.c").write_text(head+constants+block+'\nvoid ULog_TestObserve(void){pid_edit_observe();}\n',encoding="utf-8")
+# Compile the actual test sequencer, input debounce, runtime safety and logger
+# adaptations, without bringing target HAL/device initialization into the host.
+def section(begin,end):
+    return runtime.split(begin,1)[1].split(end,1)[0]
+ui=Path("App/race_ui.c").read_text(encoding="utf-8")
+inputs=ui[ui.index("void RaceInput_Init"):ui.index("void RaceUi_Init")]
+stop=runtime[runtime.index("static void stop_chassis_outputs"):runtime.index("/* PID_ACCESS_BEGIN:")]
+tick=runtime[runtime.index("uint8_t AppRuntime_ControlTick"):runtime.index("void AppRuntime_MotorTick")]
+extra='#include "app_pid_test.h"\n#include "race_ui.h"\n#include "race_config.h"\n'
+body=section("/* ULOG_SNAPSHOT_BEGIN */","/* ULOG_SNAPSHOT_END */")+section("/* PID_TEST_RUNTIME_BEGIN */","/* PID_TEST_RUNTIME_END */")
+wrappers='''
+void PidFixture_Init(void) {
+ s_pid_boot=s_pid_last_poll=s_pid_last_imu=HAL_GetTick();
+ s_pid_frames=app_imu_frames();s_pid_guard_active=s_pid_cutoff=0;
+ s_pid_idle_seen=0;s_pid_revision=0;
+ RaceInput_Init(&s_pid_key,HAL_GetTick());
+}
+void PidFixture_Poll(void){pid_test_poll();}
+void PidFixture_Snapshot(void){update_ulog_snapshot();}
+void PidFixture_Observe(void){pid_edit_observe();}
+'''
+Path("tmp/runtime_pid_test.c").write_text(head+extra+constants+stop+block+inputs+body+tick+wrappers,encoding="utf-8")
 '@ | python -
     if ($LASTEXITCODE) { throw 'Runtime PID fixture extraction failed' }
+    foreach ($profile in @('forward','lateral','normal06','normal09','creep','creep012')) {
+        $testArgs = @('-DAPP_PID_TEST_ENABLE=1','-DAPP_RUN_MODE=4','-DAPP_PID_TEST_HOST')
+        if ($profile -eq 'lateral') { $testArgs += '-DAPP_PID_TEST_AXIS=1' }
+        if ($profile -eq 'normal06') { $testArgs += '-DAPP_PID_TEST_SPEED_MPS=0.06f' }
+        if ($profile -eq 'normal09') { $testArgs += '-DAPP_PID_TEST_SPEED_MPS=0.09f' }
+        if ($profile -eq 'creep') { $testArgs += @('-DAPP_PID_TEST_CREEP=1','-DAPP_PID_TEST_SPEED_MPS=0.006f') }
+        if ($profile -eq 'creep012') { $testArgs += @('-DAPP_PID_TEST_CREEP=1','-DAPP_PID_TEST_SPEED_MPS=0.012f') }
+        $binary = "tmp/test_pid_$profile.exe"
+        & $Compiler @common @testArgs tests/ulog/test_ulog.c App/app_pid_test.c Hardware/bsp_ulog.c tmp/runtime_pid_test.c -lm -o $binary
+        if ($LASTEXITCODE) { throw "PID test compile failed: $profile" }
+        $scenarios = @('unit')
+        if ($profile -eq 'forward') { $scenarios += @('flow','bootheld','cancel','watchdog','imu','feedback','capture','stale') }
+        foreach ($scenario in $scenarios) {
+            & (Join-Path $root $binary) $scenario
+            if ($LASTEXITCODE) { throw "PID test failed: $profile $scenario" }
+        }
+    }
+    foreach ($conflict in @(@('-DAPP_PID_TEST_ENABLE=1'),@('-DAPP_RUN_MODE=4'),@('-DAPP_PID_TEST_ENABLE=1','-DAPP_RUN_MODE=0'),@('-DAPP_PID_TEST_ENABLE=1','-DAPP_RUN_MODE=4','-DMOTOR_TUNE=1'))) {
+        & $Compiler -E -x c @conflict Config/app_mode.h -o tmp/pid_conflict.i 2>$null
+        if ($LASTEXITCODE -eq 0) { throw 'Conflicting chassis writers were not rejected' }
+    }
+    Write-Output 'PASS PID build-mode conflicts rejected at compile time'
     foreach ($mode in @(0, 3)) {
         $binary = "tmp/test_ulog_$mode.exe"
         & $Compiler @common "-DAPP_RUN_MODE=$mode" -Dsnprintf=ulog_test_snprintf tests/ulog/test_ulog.c Hardware/bsp_ulog.c App/race_task_plan.c tmp/runtime_pid_access.c -lm -o $binary

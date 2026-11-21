@@ -32,6 +32,7 @@ extern uint8_t OLED_GRAM[128][8];
 uint32_t HAL_GetTick(void);
 int HAL_GPIO_ReadPin(void *port, uint16_t pin);
 void Mecanum_Stop(MecanumChassis_t *chassis);
+void Mecanum_SetBodySpeed(MecanumChassis_t *chassis, float vx, float vy, float omega);
 void Motor_Stop(Motor_t *motor);
 void Mecanum_SetSpeedLimit(MecanumChassis_t *chassis, float linear, float angular);
 void Mecanum_SetTolerance(MecanumChassis_t *chassis, float position, float yaw);

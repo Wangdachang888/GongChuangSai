@@ -17,17 +17,25 @@
 #include "tim.h"
 #include "vofa_debug.h"
 #include <math.h>
+#if APP_PID_TEST_ENABLE
+#include "app_pid_test.h"
+#include "race_ui.h"
+#include "race_config.h"
+#if MOTOR_TUNE != 0
+#error PID test cannot run MOTOR_TUNE
+#endif
+#endif
 
 Motor_t motor_left_front;
 Motor_t motor_right_front;
 Motor_t motor_left_back;
 Motor_t motor_right_back;
 MecanumChassis_t chassis;
-#if APP_RUN_MODE != APP_MODE_RACE
+#if APP_RUN_MODE != APP_MODE_RACE && !APP_PID_TEST_ENABLE
 static uint8_t s_square_seen_running;
 #endif
 
-#if APP_RUN_MODE != APP_MODE_RACE
+#if APP_RUN_MODE != APP_MODE_RACE && !APP_PID_TEST_ENABLE
 static uint8_t d36_stepper_busy(uint8_t axis, void *user)
 { (void)user; return AppStepper_IsBusy((StepperAxis_t)axis); }
 static uint32_t d36_stepper_remaining(uint8_t axis, void *user)
@@ -73,7 +81,10 @@ static uint8_t pid_edit_stationary(void)
     Motor_t *motors[4] = {&motor_left_front, &motor_right_front,
                          &motor_left_back, &motor_right_back};
     unsigned i;
-#if APP_RUN_MODE == APP_MODE_RACE
+#if APP_PID_TEST_ENABLE
+    if (AppPidTest_Status()->state != PID_TEST_IDLE &&
+        AppPidTest_Status()->state != PID_TEST_DONE) return 0u;
+#elif APP_RUN_MODE == APP_MODE_RACE
     if (AppRace_Status()->state != RACE_READY && AppRace_Status()->state != RACE_DONE)
         return 0u;
     if (AppRace_Status()->state == RACE_DONE && !AppRace_LogFinished()) return 0u;
@@ -170,12 +181,18 @@ static void update_chassis_imu_snapshot(void)
     MecanumChassis_SetImuSnapshot(&chassis, &snapshot);
 }
 
+/* ULOG_SNAPSHOT_BEGIN */
 static void update_ulog_snapshot(void)
 {
     ULogAppSnapshot snapshot = {0};
 
     snapshot.imu_yaw_deg = app_imu_yaw_deg();
-#if APP_RUN_MODE == APP_MODE_RACE
+#if APP_PID_TEST_ENABLE
+    snapshot.status = (uint8_t)AppPidTest_Status()->state;
+    snapshot.action_index = AppPidTest_Status()->step;
+    snapshot.error = (uint8_t)AppPidTest_Status()->reason;
+    snapshot.phase = snapshot.status == PID_TEST_RUNNING ? 1u : 0u;
+#elif APP_RUN_MODE == APP_MODE_RACE
     {
         const RaceFsm *race = AppRace_Status();
         const RaceTaskPlan *plan = AppRace_TaskPlan();
@@ -220,6 +237,19 @@ static void update_ulog_snapshot(void)
                   fabsf(motor_right_front.actual_speed) < 10.0f &&
                   fabsf(motor_left_back.actual_speed) < 10.0f &&
                   fabsf(motor_right_back.actual_speed) < 10.0f);
+#if APP_PID_TEST_ENABLE
+        /* No terminal stale-feedback fallback. Continue sampling after stop;
+         * the same real zero-output gate protects cache upload and PID access. */
+        parked = parked &&
+            chassis.mode == 0u && chassis.vx_target == 0.0f &&
+            chassis.vy_target == 0.0f && chassis.omega_target == 0.0f &&
+            motor_left_front.target_cmd == 0.0f && motor_right_front.target_cmd == 0.0f &&
+            motor_left_back.target_cmd == 0.0f && motor_right_back.target_cmd == 0.0f &&
+            motor_left_front.target_speed == 0.0f && motor_right_front.target_speed == 0.0f &&
+            motor_left_back.target_speed == 0.0f && motor_right_back.target_speed == 0.0f &&
+            motor_left_front.output == 0.0f && motor_right_front.output == 0.0f &&
+            motor_left_back.output == 0.0f && motor_right_back.output == 0.0f;
+#endif
 #if APP_RUN_MODE == APP_MODE_RACE
         /* Control is stopped on terminal faults, so actual_speed may never
          * refresh. Authorize only final diagnostics, without changing feedback
@@ -241,7 +271,11 @@ static void update_ulog_snapshot(void)
         }
 #endif
         __set_PRIMASK(irq_state);
-#if APP_RUN_MODE == APP_MODE_RACE
+#if APP_PID_TEST_ENABLE
+        if (snapshot.status == PID_TEST_RUNNING) parked = 0u;
+        snapshot.finished = snapshot.status >= PID_TEST_DONE && parked;
+        if (snapshot.finished) snapshot.phase = 4u;
+#elif APP_RUN_MODE == APP_MODE_RACE
         if (AppRace_Status()->state == RACE_RUNNING) parked = 0u;
 #else
         if (Square_GetState() == SQUARE_RUNNING) parked = 0u;
@@ -250,6 +284,56 @@ static void update_ulog_snapshot(void)
     }
     ULog_SetAppSnapshot(&snapshot);
 }
+/* ULOG_SNAPSHOT_END */
+
+/* PID_TEST_RUNTIME_BEGIN */
+#if APP_PID_TEST_ENABLE
+static RaceInput s_pid_key;
+static uint32_t s_pid_boot, s_pid_frames, s_pid_last_imu;
+static volatile uint32_t s_pid_last_poll;
+static volatile uint8_t s_pid_guard_active, s_pid_cutoff;
+
+static void pid_test_poll(void)
+{
+    uint32_t now = HAL_GetTick(), frames = app_imu_frames();
+    uint32_t irq;
+    uint8_t event, ready;
+    AppPidTestReason fault = PID_TEST_REASON_NONE;
+    Motor_t *motors[4] = {&motor_left_front, &motor_right_front,
+                         &motor_left_back, &motor_right_back};
+    unsigned i;
+    if (frames != s_pid_frames) { s_pid_frames = frames; s_pid_last_imu = now; }
+    if (!app_imu_ok() || frames == 0u ||
+        (uint32_t)(now - s_pid_last_imu) >= RACE_IMU_STALE_MS)
+        fault = PID_TEST_REASON_IMU;
+    for (i = 0u; i < 4u; ++i) {
+        if (!isfinite(motors[i]->actual_speed) || !isfinite(motors[i]->output) ||
+            !isfinite(motors[i]->target_speed) || !isfinite(motors[i]->target_cmd))
+            fault = PID_TEST_REASON_FEEDBACK;
+    }
+    if (!chassis.enable || g_tune_mode) fault = PID_TEST_REASON_CONFIG;
+    if (!ULog_IsRecording() || !ULog_PidBurstActive()) fault = PID_TEST_REASON_CAPTURE;
+    if (s_pid_cutoff) fault = PID_TEST_REASON_LOOP;
+    ready = fault == PID_TEST_REASON_NONE && app_imu_bias_ready() &&
+        (uint32_t)(now - s_pid_boot) >= RACE_WARMUP_MS &&
+        AppPidTest_Status()->state == PID_TEST_IDLE && pid_edit_stationary() &&
+        s_pid_idle_seen && (uint32_t)(now - s_pid_idle_since) >= 500u;
+    event = RaceInput_Poll(&s_pid_key, now,
+        AppPidTest_Status()->state == PID_TEST_RUNNING, ready);
+    if ((event & RACE_INPUT_PRESS) && AppPidTest_Status()->state == PID_TEST_RUNNING)
+        AppPidTest_Stop(PID_TEST_REASON_MANUAL);
+    /* Recheck readiness at release: an earlier valid press is not a lease. */
+    if ((event & RACE_INPUT_SHORT_RELEASE) && ready) (void)AppPidTest_Start(now);
+    AppPidTest_Poll(now, fault);
+    irq = __get_PRIMASK(); __disable_irq();
+    if (s_pid_cutoff) AppPidTest_Stop(PID_TEST_REASON_LOOP);
+    s_pid_guard_active = AppPidTest_Status()->state == PID_TEST_RUNNING;
+    s_pid_last_poll = now;
+    s_pid_cutoff = 0u;
+    __set_PRIMASK(irq);
+}
+#endif
+/* PID_TEST_RUNTIME_END */
 static void init_motors_and_chassis(void)
 {
     Motor_Init(&motor_left_front,
@@ -306,7 +390,7 @@ void AppRuntime_Init(void)
     Servo_Init();
     ServoKey_Init();
 #else
-#if APP_RUN_MODE != APP_MODE_RACE
+#if APP_RUN_MODE != APP_MODE_RACE && !APP_PID_TEST_ENABLE
     AppStepper_Init();
     Servo_Init();
     Servo_SetBothAngle(30.0f, 30.0f);
@@ -319,23 +403,30 @@ void AppRuntime_Init(void)
     __HAL_TIM_MOE_ENABLE(&htim1);
     init_motors_and_chassis();
     ULog_SetPidHandler(AppRuntime_PidAccess);
-#if APP_RUN_MODE != APP_MODE_RACE
+#if APP_RUN_MODE != APP_MODE_RACE && !APP_PID_TEST_ENABLE
     DisplayNav_Init();
     VOFA_Init();
 #endif
     Vbat_Init();
     if (app_imu_init() != 0) {
-#if APP_RUN_MODE != APP_MODE_RACE
+#if APP_RUN_MODE != APP_MODE_RACE && !APP_PID_TEST_ENABLE
         Error_Handler();
 #endif
     }
     update_chassis_imu_snapshot();
-#if APP_RUN_MODE == APP_MODE_RACE
+#if APP_PID_TEST_ENABLE
+    ULog_Init();
+    Mecanum_SetSpeedLimit(&chassis, RACE_MOVE_SPEED_MPS, RACE_TURN_SPEED_RADPS);
+    AppPidTest_Init(&chassis);
+    s_pid_boot = s_pid_last_poll = s_pid_last_imu = HAL_GetTick();
+    s_pid_frames = app_imu_frames();
+    RaceInput_Init(&s_pid_key, s_pid_boot);
+#elif APP_RUN_MODE == APP_MODE_RACE
     ULog_Init();
     AppRace_Init(&chassis);
 #endif
     stop_chassis_outputs();
-#if APP_RUN_MODE != APP_MODE_RACE
+#if APP_RUN_MODE != APP_MODE_RACE && !APP_PID_TEST_ENABLE
 #if (MOTOR_TUNE != 0)
     Tune_Start(&motor_left_front);
 #else
@@ -349,6 +440,15 @@ void AppRuntime_Poll(void)
 {
 #if APP_RUN_MODE == APP_MODE_SERVO
     ServoKey_Poll();
+#elif APP_PID_TEST_ENABLE
+    app_imu_poll();
+    update_chassis_imu_snapshot();
+    pid_test_poll();
+    Vbat_Poll();
+    update_ulog_snapshot();
+    pid_edit_observe();
+    ULog_PidBurstPoll();
+    ULog_Poll(&chassis);
 #elif APP_RUN_MODE == APP_MODE_RACE
     app_imu_poll();
     update_chassis_imu_snapshot();
@@ -379,7 +479,17 @@ void AppRuntime_Poll(void)
 
 uint8_t AppRuntime_ControlTick(void)
 {
-#if APP_RUN_MODE == APP_MODE_RACE
+#if APP_PID_TEST_ENABLE
+    /* Emergency output cutoff only, as in the race watchdog. No test phase
+     * progression, formatting, transmission or allocation in the ISR. */
+    if (s_pid_guard_active &&
+        (uint32_t)(HAL_GetTick() - s_pid_last_poll) >= RACE_IMU_STALE_MS) {
+        s_pid_cutoff = 1u;
+        stop_chassis_outputs();
+        return 0u;
+    }
+    return 1u;
+#elif APP_RUN_MODE == APP_MODE_RACE
     return AppRace_ControlTick();
 #else
     return 1U;

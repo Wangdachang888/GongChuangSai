@@ -452,3 +452,35 @@ ULog43/PID Burst/网页解析调用链。结论是日志传输与解析主机测
   原有race_config.h、uvprojx与pid_burst_demo.csv哈希不变且不提交。无固件修改，Keil NOT_RUN。
 - 浏览器视觉验收SKIP：浏览器工具拒绝file://，只允许HTTP/HTTPS，未绕过限制。
   真实BT10四轮写入、部分失败后人工核对、新参数在场地的效果仍NOT_RUN；未烧录或驱动车辆。
+
+## 30. 独立底盘速度/PID采集构建（2026-11-21）
+
+- 用户授权新增 `App/app_pid_test.c/.h`、`PID_Test` Target。`APP_PID_TEST_ENABLE` 默认0；
+  `APP_RUN_MODE=4` 与测试启用必须成对，和比赛/普通模式及 MOTOR_TUNE 冲突时编译拒绝。
+  AppRuntime 独占接入，复用现有 PE0 消抖、体坐标速度入口、IMU、TIM6 和 USART2 日志；
+  不启动比赛、Square、Tune、D36、视觉或机械任务，不引入新控制器或协议。
+- 默认 0.03 m/s 纵向，初始零速1s，三组正2s/零1s/反2s/零1s，末尾零1s；名义20s、25s总超时。
+  横向与0.06/0.09配置可选；独立极低速0.006/0.012配置正反各4s，名义32s、40s总超时，
+  需普通档实机验证后再启用，所有档位均 NEED_HARDWARE_TUNING。
+- 上电IDLE，IMU有效且预热/偏置就绪、真实停车500ms、网页采集实际设防后，只能物理短按释放开始。
+  运行中按下取消；结束、超时、失效或采集中断均调用既有停止路径并锁存至复位。
+  中间零速不重置PID。ISR仅保留250ms主循环紧急切断，业务推进在Poll；TIM6 1ms/10ms、
+  速度PID内部5ms、实际PID/前馈/斜坡/方向/轮径/引脚/硬件资源未改。
+- 测试状态单独输出到现有日志快照，不伪造比赛状态；运行时含零速段禁止停车补传/写PID。
+  停止后不清零actual_speed，继续测速，零目标/输出且实际轮速<10pulse/s后沿用500ms上传；
+  无旧反馈兜底。DONE可按既有条件写RAM参数，取消/故障只读；真实停车条件不满足则等待，不冒充停稳。
+- ULog43列、PID包/CRC、PID_USED、200Hz实时/100Hz最近20秒缓存及网页均未改。
+  使用方法、状态/原因、人工试验元数据记录见 `tools/BT10_BLE_RECEIVER.md` 的 PID_Test 章节。
+- PASS：tests/ulog（实际测试源、实际Runtime参数/快照/安全桥接代码与按键消抖，覆盖六种配置、
+  逐阶段方向/幅值/时间、三组一次、回绕、取消/超时/故障、未设防拒绝、上传/END和参数门控）；
+  tests/race；既有异步队列、跨语言协议、连续72006帧/最近20秒回归；最终diff检查。
+- PASS：UV4/ArmCC双Target完整Rebuild，均0 Error/0 Warning。PID_Test尺寸Code=46592、
+  RO=1832、RW=392、ZI=67768；比赛Code=65028、RO=9404、RW=428、ZI=70572，与原体积一致。
+  uVision会合并Target文件列表，已在比赛Target显式IncludeInBuild=0；比赛编译日志、
+  链接输入及Map均无测试对象/函数/状态，原有芯片/编译选项/工程源引用不变。
+- 测试首次错误使用0.01m/s验证0.006档限速拒绝（FAIL），改为确实更低的0.001阈值后完整重跑PASS。
+  初次Map检查发现比赛编译空测试对象（FAIL），显式排除后完整Rebuild/Map检查PASS。
+- 工作区原有race_config.h场地确认修改、uvprojx原App组排版及pid_burst_demo.csv均保留，
+  不纳入本批提交；uvprojx仅提交Target/显式排除增量。编译基于当前工作区，不声称原有场地确认已同步。
+- NOT_RUN：烧录、真实车轮动作/停稳/按键/漂移、BT10持续吞吐与采集、现场低速/极低速适用性、
+  TIM6最坏耗时和整车验收。没有实测数据时不推荐自动调参；本批不自动进入下一项工作。

@@ -138,3 +138,14 @@ USART2现有RX队列由bsp_ulog主循环有界解析GET/SET，调用AppRuntime�
 控制器历史项。Motor_GetControlInfo只暴露现有前馈、5ms周期、低通等只读编译常量。
 网页读回实际值后才显示写入成功，日志PID_USED记录本次采集参数。此通道在END后保留
 显式请求应答，不重新启动比赛/日志，详情和约束见DECISIONS D015及BT10使用说明。
+
+## 11. 独立 PID 采集构建
+
+`PID_Test` 使用互斥的 `APP_MODE_PID_TEST` + `APP_PID_TEST_ENABLE=1`，默认比赛配置仍为关闭。
+仅 `AppRuntime` 接入物理按键、IMU/主循环健康检查、测试轮询和日志快照，调用
+`app_pid_test` → 既有 `Mecanum_SetBodySpeed` → 既有 10 ms 运动学 → 既有 5 ms 轮速 PID。
+不启动 AppRace、Square、Tune、视觉任务或机械动作，不使用位置环/航向修正。
+测试状态独立，不伪造比赛状态；运行中禁止停车上传/参数写入，终止后继续真实测速，
+按零目标/零输出/实际轮速条件走既有 500 ms 上传和参数访问门控。
+比赛 Target 显式排除测试源编译，测试所有函数/状态不进入比赛链接 Map；两个输出目录独立。
+操作、档位、安全限制见 [BT10 说明](../tools/BT10_BLE_RECEIVER.md) 的 PID_Test 章节。
