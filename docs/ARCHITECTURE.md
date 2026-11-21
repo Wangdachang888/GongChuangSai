@@ -129,3 +129,12 @@ USART3 RX IRQ
 这是未来的组织规则，不代表当前所有源码已经符合目标，也不授权立即进行全工程重构。后续只在实际需求范围内逐步整理，保留现有 `AppRuntime_Poll()` / `AppRace_Poll()` 非阻塞体系和 TIM6 1 ms 电机更新、10 ms 底盘环。
 
 调用方向保持为：`AppRace` 统一协调，`RaceFsm` 执行路线动作，`RaceTaskPlan` 提供任务数据，`PickFsm` 执行机械组合动作，Vision 提供通信和结构化数据，Control 保留唯一底盘位置环。不得把计划中的未来任务描述成当前已实现的扫码、原料区或完整比赛功能，也不得用该规范替代源码和实机证据。
+
+
+## 10. PID在线参数通道
+
+USART2现有RX队列由bsp_ulog主循环有界解析GET/SET，调用AppRuntime注册的参数处理器；
+应用层读取真实Motor/PosPID对象，在停车门控与短临界区内只更新选中通道的Kp/Ki/Kd及
+控制器历史项。Motor_GetControlInfo只暴露现有前馈、5ms周期、低通等只读编译常量。
+网页读回实际值后才显示写入成功，日志PID_USED记录本次采集参数。此通道在END后保留
+显式请求应答，不重新启动比赛/日志，详情和约束见DECISIONS D015及BT10使用说明。

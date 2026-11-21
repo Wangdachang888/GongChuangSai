@@ -10,13 +10,23 @@
 #define GPIO_PIN_RESET 0U
 #define OLED_CMD 0U
 #define OLED_DATA 1U
-typedef struct { float output, target_speed, actual_speed; } Motor_t;
+typedef struct { float output, target_speed, actual_speed, target_cmd;
+    float kp,ki,kd,integral_max,output_max,integral,err,err_last,output_last,kick;
+} Motor_t;
+typedef struct {float kp,ki,kd,integral_max,output_max,integral,err,err_last,output;} PosPID_t;
+typedef struct {float period_ms,ff_gain,deadzone,ff_min_speed,ramp,slew,lpf,kick_step,kick_max,stuck_ratio;} MotorControlInfo;
+const MotorControlInfo *Motor_GetControlInfo(void);
+extern volatile uint8_t g_tune_mode;
+uint32_t __get_PRIMASK(void);
+void __disable_irq(void);
+void __set_PRIMASK(uint32_t mask);
 typedef struct {
     Motor_t *motor_lf, *motor_rf, *motor_lb, *motor_rb;
     float x_pos, y_pos, theta_pos, vx_actual, vy_actual, omega_actual;
     float x_target, y_target, theta_target, max_speed, max_omega, position_tol, theta_tol;
     float vx_target, vy_target, omega_target;
-    uint8_t body_frame, mode, target_reached;
+    uint8_t body_frame, mode, target_reached, enable;
+    PosPID_t pid_x,pid_y,pid_theta;
 } MecanumChassis_t;
 extern uint8_t OLED_GRAM[128][8];
 uint32_t HAL_GetTick(void);

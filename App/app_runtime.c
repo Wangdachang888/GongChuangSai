@@ -63,6 +63,104 @@ static void stop_chassis_outputs(void)
     Motor_Stop(chassis.motor_rb);
 }
 
+/* PID_ACCESS_BEGIN: main-loop-only parameter ownership; no UART/control duplication. */
+static uint32_t s_pid_revision;
+static uint32_t s_pid_idle_since;
+static uint8_t s_pid_idle_seen;
+
+static uint8_t pid_edit_stationary(void)
+{
+    Motor_t *motors[4] = {&motor_left_front, &motor_right_front,
+                         &motor_left_back, &motor_right_back};
+    unsigned i;
+#if APP_RUN_MODE == APP_MODE_RACE
+    if (AppRace_Status()->state != RACE_READY && AppRace_Status()->state != RACE_DONE)
+        return 0u;
+    if (AppRace_Status()->state == RACE_DONE && !AppRace_LogFinished()) return 0u;
+#else
+    if (Square_GetState() != SQUARE_IDLE && Square_GetState() != SQUARE_DONE)
+        return 0u;
+#endif
+    /* Never reuse the terminal stale-speed upload fallback for parameter writes. */
+    if (g_tune_mode || chassis.vx_target != 0.0f || chassis.vy_target != 0.0f ||
+        chassis.omega_target != 0.0f || chassis.mode != 0u) return 0u;
+    for (i=0u; i<4u; ++i) {
+        Motor_t *m=motors[i];
+        if (m->target_cmd != 0.0f || m->target_speed != 0.0f ||
+            m->output != 0.0f || !isfinite(m->actual_speed) ||
+            fabsf(m->actual_speed) >= 10.0f) return 0u;
+    }
+    return 1u;
+}
+
+static void pid_edit_observe(void)
+{
+    if (!pid_edit_stationary()) s_pid_idle_seen=0u;
+    else if (!s_pid_idle_seen) {s_pid_idle_seen=1u;s_pid_idle_since=HAL_GetTick();}
+}
+
+const char *AppRuntime_PidAccess(const ULogPidRequest *request, ULogPidValues *values)
+{
+    Motor_t *motors[4] = {&motor_left_front, &motor_right_front,
+                         &motor_left_back, &motor_right_back};
+    PosPID_t *positions[3] = {&chassis.pid_x, &chassis.pid_y, &chassis.pid_theta};
+    const MotorControlInfo *info=Motor_GetControlInfo();
+    uint32_t irq_state;
+    uint8_t axis=request->axis;
+    if (axis >= 7u) return "AXIS";
+    if (request->write && (!isfinite(request->kp) || !isfinite(request->ki) ||
+        !isfinite(request->kd) || request->kp < 0.0f || request->ki < 0.0f ||
+        request->kd < 0.0f || request->kp > (axis<4u?10.0f:20.0f) ||
+        request->ki > (axis<4u?8.0f:5.0f) || request->kd > 3.0f)) return "RANGE";
+    irq_state=__get_PRIMASK(); __disable_irq();
+    if (request->write) {
+        if (request->revision != s_pid_revision) {
+            __set_PRIMASK(irq_state); return "STALE_REVISION";
+        }
+        if (!pid_edit_stationary() || !s_pid_idle_seen ||
+            (uint32_t)(HAL_GetTick()-s_pid_idle_since)<500u) {
+            __set_PRIMASK(irq_state); return "NOT_PARKED_500MS";
+        }
+        if (axis<4u) {
+            Motor_t *m=motors[axis];
+            m->kp=request->kp;m->ki=request->ki;m->kd=request->kd;
+            m->integral=0.0f;m->err=0.0f;m->err_last=0.0f;
+            /* Outputs are already zero; clear residual controller memory only. */
+            m->output_last=0.0f;m->kick=0.0f;
+        } else {
+            PosPID_t *p=positions[axis-4u];
+            p->kp=request->kp;p->ki=request->ki;p->kd=request->kd;
+            p->integral=0.0f;p->err=0.0f;p->err_last=0.0f;p->output=0.0f;
+        }
+        ++s_pid_revision;
+    }
+    if (axis<4u) {
+        Motor_t *m=motors[axis];
+        values->kp=m->kp;values->ki=m->ki;values->kd=m->kd;
+        values->integral_max=m->integral_max;values->output_max=m->output_max;
+    } else {
+        PosPID_t *p=positions[axis-4u];
+        values->kp=p->kp;values->ki=p->ki;values->kd=p->kd;
+        values->integral_max=p->integral_max;values->output_max=p->output_max;
+    }
+    values->revision=s_pid_revision;
+    values->editable=pid_edit_stationary() && s_pid_idle_seen &&
+        (uint32_t)(HAL_GetTick()-s_pid_idle_since)>=500u;
+    __set_PRIMASK(irq_state);
+    values->period_ms=axis<4u?info->period_ms:10.0f;
+    values->ff_gain=axis<4u?info->ff_gain:0.0f;
+    values->deadzone=axis<4u?info->deadzone:0.0f;
+    values->ff_min_speed=axis<4u?info->ff_min_speed:0.0f;
+    values->ramp=axis<4u?info->ramp:0.0f;
+    values->slew=axis<4u?info->slew:0.0f;
+    values->lpf=axis<4u?info->lpf:0.0f;
+    values->kick_step=axis<4u?info->kick_step:0.0f;
+    values->kick_max=axis<4u?info->kick_max:0.0f;
+    values->stuck_ratio=axis<4u?info->stuck_ratio:0.0f;
+    return "OK";
+}
+/* PID_ACCESS_END */
+
 static void update_chassis_imu_snapshot(void)
 {
     NavImuSnapshot_t snapshot;
@@ -220,6 +318,7 @@ void AppRuntime_Init(void)
 #endif
     __HAL_TIM_MOE_ENABLE(&htim1);
     init_motors_and_chassis();
+    ULog_SetPidHandler(AppRuntime_PidAccess);
 #if APP_RUN_MODE != APP_MODE_RACE
     DisplayNav_Init();
     VOFA_Init();
@@ -256,6 +355,7 @@ void AppRuntime_Poll(void)
     AppRace_Poll();
     Vbat_Poll();
     update_ulog_snapshot();
+    pid_edit_observe();
     ULog_PidBurstPoll();
     ULog_Poll(&chassis);
 #else
@@ -271,6 +371,7 @@ void AppRuntime_Poll(void)
     Vbat_Poll();
     DisplayNav_Poll(&chassis);
     update_ulog_snapshot();
+    pid_edit_observe();
     ULog_PidBurstPoll();
     ULog_Poll(&chassis);
 #endif

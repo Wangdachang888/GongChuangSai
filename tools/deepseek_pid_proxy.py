@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import Request, urlopen
@@ -33,6 +34,8 @@ def safe_payload(payload: object) -> dict:
             kp, ki, kd = (float(item[k]) for k in ("kp", "ki", "kd"))
         except (KeyError, TypeError, ValueError):
             continue
+        if not all(math.isfinite(x) for x in (kp, ki, kd)):
+            continue
         clean.append({
             "name": str(item.get("name", "candidate"))[:80],
             "kp": clamp(kp, 0.05, 10.0),
@@ -43,7 +46,25 @@ def safe_payload(payload: object) -> dict:
         })
     if not clean:
         raise ValueError("no valid candidates")
+    axis = payload.get("axis")
+    if axis not in {"FL", "FR", "RL", "RR"}:
+        axis = None
+    recorded = payload.get("recordedParameters")
+    actual = None
+    if isinstance(recorded, dict) and axis == recorded.get("axis"):
+        keys = ("kp", "ki", "kd", "periodMs", "outputMax", "integralMax", "revision",
+                "ffGain", "deadzone", "ffMinSpeed", "ramp", "slew", "lpf",
+                "kickStep", "kickMax", "stuckRatio")
+        try:
+            numeric = {k: float(recorded[k]) for k in keys}
+            if all(math.isfinite(x) for x in numeric.values()):
+                actual = {"axis": axis, **numeric}
+        except (KeyError, TypeError, ValueError):
+            pass
     return {
+        "axis": axis,
+        "recordedParameters": actual,
+        "parameterSource": "recorded_runtime" if actual else "unverified_offline",
         "summary": payload.get("summary", {}) if isinstance(payload.get("summary", {}), dict) else {},
         "candidates": clean,
         "constraints": {

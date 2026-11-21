@@ -12,19 +12,32 @@ $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 Push-Location $root
 try {
     $common = @('-DULOG_TEST', '-std=c99', '-Wall', '-Wextra', '-Werror', '-Itests/ulog', '-Itests/race/stubs', '-IConfig', '-IControl', '-IApp', '-IHardware', '-include', 'tests/race/stubs/board.h')
+    # Compile the exact parameter access block and actual Motor constants.
+@'
+from pathlib import Path
+runtime=Path("App/app_runtime.c").read_text(encoding="utf-8")
+block="/* PID_ACCESS_BEGIN:"+runtime.split("/* PID_ACCESS_BEGIN:",1)[1].split("/* PID_ACCESS_END */",1)[0]
+motor=Path("Control/Motor.c").read_bytes().decode("gb18030",errors="replace")
+constants=motor[motor.index("#ifndef MOTOR_FF_GAIN"):motor.index("static int32_t Encoder_ReadDelta")]
+head='#include "board.h"\n#include "app_runtime.h"\n#include "app_mode.h"\n#include "app_race.h"\n#include "app_square.h"\n#include <math.h>\nextern Motor_t motor_left_front,motor_right_front,motor_left_back,motor_right_back;\nextern MecanumChassis_t chassis;\n'
+Path("tmp/runtime_pid_access.c").write_text(head+constants+block+'\nvoid ULog_TestObserve(void){pid_edit_observe();}\n',encoding="utf-8")
+'@ | python -
+    if ($LASTEXITCODE) { throw 'Runtime PID fixture extraction failed' }
     foreach ($mode in @(0, 3)) {
         $binary = "tmp/test_ulog_$mode.exe"
-        & $Compiler @common "-DAPP_RUN_MODE=$mode" -Dsnprintf=ulog_test_snprintf tests/ulog/test_ulog.c Hardware/bsp_ulog.c App/race_task_plan.c -lm -o $binary
+        & $Compiler @common "-DAPP_RUN_MODE=$mode" -Dsnprintf=ulog_test_snprintf tests/ulog/test_ulog.c Hardware/bsp_ulog.c App/race_task_plan.c tmp/runtime_pid_access.c -lm -o $binary
         if ($LASTEXITCODE) { throw 'Logger compile failed' }
-        foreach ($case in @('normal','early','abort','timeout','tx_error','format_error','nonfinite','manual','null','init_error','burst_short','burst_live','burst_deferred','burst_fault','burst_abort','burst_continuous')) {
+        foreach ($case in @('normal','early','abort','timeout','tx_error','format_error','nonfinite','manual','null','init_error','burst_short','burst_live','burst_deferred','burst_fault','burst_abort','burst_continuous','params')) {
             & (Join-Path $root $binary) $case
             if ($LASTEXITCODE) { throw "Logger test failed: $mode $case" }
         }
     }
-    & $Compiler @common -DULOG_ASYNC_TEST -Dsnprintf=ulog_test_snprintf tests/ulog/test_ulog.c Hardware/bsp_ulog.c App/race_task_plan.c -lm -o tmp/test_ulog_async.exe
+    & $Compiler @common -DULOG_ASYNC_TEST -Dsnprintf=ulog_test_snprintf tests/ulog/test_ulog.c Hardware/bsp_ulog.c App/race_task_plan.c tmp/runtime_pid_access.c -lm -o tmp/test_ulog_async.exe
     if ($LASTEXITCODE) { throw 'Async logger compile failed' }
     & (Join-Path $root 'tmp/test_ulog_async.exe') async
     if ($LASTEXITCODE) { throw 'Async logger backpressure failed' }
+    & (Join-Path $root 'tmp/test_ulog_async.exe') params_async
+    if ($LASTEXITCODE) { throw 'Async PID parameter reply failed' }
     if (Get-Command python -ErrorAction SilentlyContinue) {
 @'
 from pathlib import Path
@@ -62,13 +75,31 @@ live = [line for line in Path("tmp/pid_continuous_decoded.csv").read_text(encodi
 assert len(live) == 72006
 seqs = [int(line.split(",")[2]) for line in live]
 assert all((b - a) % 65536 == 1 for a, b in zip(seqs, seqs[1:]))
-print("PASS Python: sync/async split/CRC; continuous 72006 live samples, sequence wrap, last 20-second cache, durable close")
+r=LogReceiver(Path("tmp/pid_params_decoded.csv"),pid_output=Path("tmp/pid_params_decoded.pid.csv"))
+wire=Path("tmp/pid_params_wire.bin").read_bytes()
+for i in range(0,len(wire),7):
+    r.feed(wire[i:i+7])
+r.close()
+pid_text=Path("tmp/pid_params_decoded.pid.csv").read_text(encoding="utf-8")
+assert pid_text.count("#BTLOG,PID_USED,")==7 and "PID_USED,0,2,FL,READ,3," in pid_text
+reply=Path("tmp/pid_params_async.bin").read_bytes()
+assert reply.count(b"#BTLOG,PID_PARAM,1,1,FL,SET,")==1
+from tools.deepseek_pid_proxy import safe_payload
+actual_line=next(line for line in pid_text.splitlines() if line.startswith("#BTLOG,PID_USED,0,2,FL,"))
+f=actual_line.split(",")
+keys=["kp","ki","kd","integralMax","outputMax","periodMs","ffGain","deadzone","ffMinSpeed","ramp","slew","lpf","kickStep","kickMax","stuckRatio"]
+actual={"axis":"FL","revision":int(f[3]),**dict(zip(keys,map(float,f[6:21])))}
+payload={"axis":"FL","recordedParameters":actual,"candidates":[{"kp":2.7,"ki":1.5,"kd":0}]}
+safe=safe_payload(payload)
+assert safe["recordedParameters"]["kp"]==3 and safe["parameterSource"]=="recorded_runtime"
+assert safe_payload({"candidates":payload["candidates"]})["parameterSource"]=="unverified_offline"
+print("PASS Python: split/CRC; continuous 72006 live samples; sequence wrap; last-20s cache; actual seven-axis PID metadata retained")
 '@ | python -
         if ($LASTEXITCODE) { throw 'PID binary receiver verification failed' }
     } else {
         Write-Output 'SKIP: Python PID receiver tests (Python missing)'
     }
-    & $Compiler @common -DULOG_PID_BURST_ENABLE=0 -Dsnprintf=ulog_test_snprintf tests/ulog/test_ulog.c Hardware/bsp_ulog.c App/race_task_plan.c -lm -o tmp/test_ulog_no_burst.exe
+    & $Compiler @common -DULOG_PID_BURST_ENABLE=0 -Dsnprintf=ulog_test_snprintf tests/ulog/test_ulog.c Hardware/bsp_ulog.c App/race_task_plan.c tmp/runtime_pid_access.c -lm -o tmp/test_ulog_no_burst.exe
     if ($LASTEXITCODE) { throw 'No-burst logger compile failed' }
     & (Join-Path $root 'tmp/test_ulog_no_burst.exe') normal
     if ($LASTEXITCODE) { throw 'No-burst logger failed' }

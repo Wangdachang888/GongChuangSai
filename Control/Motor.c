@@ -65,6 +65,16 @@
 /**
  * @brief  读取编码器增量（16 位计数器，处理溢出）
  */
+const MotorControlInfo *Motor_GetControlInfo(void)
+{
+    static const MotorControlInfo info = {
+        MOTOR_SPEED_WIN_MS, MOTOR_FF_GAIN, MOTOR_DZ_OUT, MOTOR_FF_MIN_SPD,
+        MOTOR_TARGET_RAMP, MOTOR_SLEW, MOTOR_SPD_LPF,
+        MOTOR_KICK_STEP, MOTOR_KICK_MAX, MOTOR_STUCK_RATIO
+    };
+    return &info;
+}
+
 static int32_t Encoder_ReadDelta(Motor_t *motor)
 {
     int32_t now_cnt = (int32_t)__HAL_TIM_GET_COUNTER(motor->enc_tim);

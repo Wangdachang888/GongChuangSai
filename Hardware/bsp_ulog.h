@@ -90,6 +90,26 @@ typedef struct {
     float rr_output;
 } ULogPidSample;
 
+/* Parameter transport only. The application owns controller access and safety.
+ * Axes 0..3 = FL/FR/RL/RR speed loops; 4..6 = X/Y/TH position loops. */
+typedef struct {
+    uint32_t id, revision;
+    uint8_t write, axis;
+    float kp, ki, kd;
+} ULogPidRequest;
+typedef struct {
+    uint32_t revision;
+    uint8_t editable;
+    float kp, ki, kd, integral_max, output_max;
+    float period_ms, ff_gain, deadzone, ff_min_speed, ramp, slew, lpf;
+    float kick_step, kick_max, stuck_ratio;
+} ULogPidValues;
+typedef const char *(*ULogPidHandler)(const ULogPidRequest *, ULogPidValues *);
+void ULog_SetPidHandler(ULogPidHandler handler);
+#ifdef ULOG_TEST
+void ULog_TestRx(const char *text);
+#endif
+
 /* Init once per boot. Stop stays latched until MCU reset. */
 void ULog_Init(void);
 uint8_t ULog_IsRecording(void); /* Stream enabled, NOT a card-close ACK */

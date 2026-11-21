@@ -53,6 +53,7 @@ class LogReceiver:
         self._pid_header_written = False
         self._pid_session = 0
         self._pid_header_fields: list[str] = []
+        self._pid_used: dict[str, str] = {}
         self._pending = bytearray()
         self._wire_resync = False
         self.state = "UNKNOWN"
@@ -156,6 +157,8 @@ class LogReceiver:
         if self._pid_file is None:
             return
         # Use csv.writer so a future field containing a comma remains valid CSV.
+        for snapshot in self._pid_used.values():
+            self._pid_file.write(snapshot + "\n")
         csv.writer(self._pid_file, lineterminator="\n").writerow(fields)
         self._pid_header_written = True
         self._pid_header_fields = list(fields)
@@ -170,6 +173,14 @@ class LogReceiver:
         accepted and written as a named CSV row for forward compatibility.
         """
         if self.pid_output is None or not line.startswith("#BTLOG,PID"):
+            return
+        if line.startswith("#BTLOG,PID_ARMED"):
+            self._pid_used.clear()
+            return
+        if line.startswith("#BTLOG,PID_USED,"):
+            fields = line.split(",")
+            if len(fields) == 22 and fields[4] in ("FL", "FR", "RL", "RR", "X", "Y", "TH"):
+                self._pid_used[fields[4]] = line
             return
         if line == "#BTLOG,PID_END" or line.startswith("#BTLOG,PID_END,"):
             if self._pid_file is not None:

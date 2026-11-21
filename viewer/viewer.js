@@ -171,9 +171,9 @@ function buildAiPidAdvice(analysis,base={},options={}) {
 async function requestDeepSeekAdvice() {
   const state=S.pidBurst, status=$('pid-deepseek-status'), out=$('pid-deepseek-advice');
   if(!state){if(status)status.textContent='请先导入 PID Burst。';return;}
-  const base={kp:Number($('pid-burst-kp').value),ki:Number($('pid-burst-ki').value),kd:Number($('pid-burst-kd').value)};
-  const local=buildAiPidAdvice(state.analysis,base,{lowSpeed:$('pid-ai-low-speed')?.checked!==false,feedforward:$('pid-ai-feedforward')?.checked!==false});
-  const payload={summary:local.summary,candidates:local.ranked.map(({name,kp,ki,kd,score,reason})=>({name,kp,ki,kd,score,reason})),lowSpeed:$('pid-ai-low-speed')?.checked!==false,feedforward:$('pid-ai-feedforward')?.checked!==false};
+  const context=pidAnalysisContext(),base=context.base;
+  const local=buildAiPidAdvice(context.analysis,base,{lowSpeed:$('pid-ai-low-speed')?.checked!==false,feedforward:$('pid-ai-feedforward')?.checked!==false});
+  const payload={axis:context.axis,recordedParameters:context.known?context.used:null,baseline:base,summary:local.summary,candidates:local.ranked.map(({name,kp,ki,kd,score,reason})=>({name,kp,ki,kd,score,reason})),lowSpeed:$('pid-ai-low-speed')?.checked!==false,feedforward:$('pid-ai-feedforward')?.checked!==false};
   if(status)status.textContent='正在请求本机 DeepSeek 代理…';
   try{
     const endpoint=String($('pid-deepseek-url')?.value||'http://127.0.0.1:8787').replace(/\/$/,''); const response=await fetch(endpoint+'/v1/pid-advice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -195,14 +195,105 @@ async function connectDeepSeek() {
   if(!state){status.textContent='尚未导入高频 PID CSV。';box.innerHTML='<div class="pid-burst-empty">请在停车后导入带字段名的 PID Burst CSV。</div>';cand.innerHTML='';return;}
   const a=state.analysis;status.textContent=`已加载 ${state.name}：${a.rows} 帧，${fmt(a.times.at(-1),2)} s，默认 ${a.rate} Hz。${state.data.skipped?'跳过 '+state.data.skipped+' 行。':''}`;
   box.innerHTML=WHEELS.map(w=>{const m=a.wheels[w];return `<div class="pid-burst-wheel"><h3 style="color:${COLORS[w]}">${NAMES[w]}</h3><table>${tableRows([['有效样本',m.n],['IAE',fmt(m.iae,4)],['ISE',fmt(m.ise,4)],['最大误差',fmt(m.maxAbsError,3)],['峰值超调',finite(m.overshootPct)?fmt(m.overshootPct,1)+' %':'未记录'],['稳定时间',finite(m.settlingTime)?fmt(m.settlingTime,3)+' s':'未达到'],['尾段稳态误差',fmt(m.steadyError,3)],['输出饱和占比',finite(m.saturationRatio)?fmt(m.saturationRatio*100,1)+' %':'未记录']])}</table></div>`;}).join('');
-  const base={kp:Number($('pid-burst-kp').value),ki:Number($('pid-burst-ki').value),kd:Number($('pid-burst-kd').value)},result=buildPidCandidates(a,base);cand.innerHTML='<h3>候选参数（人工验证）</h3>'+result.candidates.map(c=>`<div class="pid-candidate"><h3>${c.name}</h3><strong>Kp ${fmt(c.kp,3)} · Ki ${fmt(c.ki,3)} · Kd ${fmt(c.kd,3)}</strong><small>${c.reason}</small></div>`).join('');
-  const advice=buildAiPidAdvice(a,base,{lowSpeed:$('pid-ai-low-speed')?.checked!==false,feedforward:$('pid-ai-feedforward')?.checked!==false});
-  const ai=$('pid-ai-advice'); if(ai) ai.innerHTML=`<div class="ai-summary"><strong>本地 AI 辅助建议</strong><span>置信度 ${advice.confidence}% · 仅供人工评估</span></div><p>${advice.ranked[0]?`推荐先验证：<b>${advice.ranked[0].name}</b>（评分 ${advice.ranked[0].score}/100）<br>Kp ${fmt(advice.ranked[0].kp,3)} · Ki ${fmt(advice.ranked[0].ki,3)} · Kd ${fmt(advice.ranked[0].kd,3)}<br><small>${advice.ranked[0].reason}</small>`:'暂无可评分候选'}</p><ol>${advice.ranked.map(c=>`<li><b>${c.name}</b>：${c.score}/100 — Kp ${fmt(c.kp,3)} / Ki ${fmt(c.ki,3)} / Kd ${fmt(c.kd,3)}</li>`).join('')}</ol>${advice.warnings.map(w=>`<p class="warning">${w}</p>`).join('')}<p class="note">建议按低速直行、横移、旋转分别采集 Burst，每次只改一组参数并保留回滚值。网页不会自动写入车辆。</p>`;
+  const context=pidAnalysisContext(),base=context.base,result=buildPidCandidates(context.analysis,base);
+  for(const k of ['kp','ki','kd']){const input=$('pid-burst-'+k);input.disabled=!!context.known;if(context.known)input.value=String(base[k]);}
+  pidOnline.candidates=result.candidates;pidOnline.candidateAxis=context.canApply?context.axis:null;
+  cand.innerHTML='<h3>候选参数 · '+(context.axis||'当前选中位置环：请手动编辑，以下速度环候选不能用于位置环')+'</h3><p class="note">'+(context.known?'基准来自本次日志中的车辆实际参数，版本 '+context.used.revision:'本次数据未记录该通道的唯一参数快照；基准仅供离线分析，不允许直接套用到车上。')+(context.known&&!context.canApply?'；有效运动样本不足，候选填入暂不可用。':'')+'</p>'+result.candidates.map((c,i)=>'<div class="pid-candidate"><h3>'+c.name+'</h3><strong>Kp '+fmt(c.kp,3)+' · Ki '+fmt(c.ki,3)+' · Kd '+fmt(c.kd,3)+'</strong><small>'+c.reason+'</small><button data-pid-candidate="'+i+'" '+(context.canApply?'':'disabled')+'>填入 '+(context.axis||'速度环')+' 写入区</button></div>').join('');
+  cand.querySelectorAll('[data-pid-candidate]').forEach(b=>b.onclick=()=>usePidCandidate(Number(b.dataset.pidCandidate)));
+
+  const advice=buildAiPidAdvice(context.analysis,base,{lowSpeed:$('pid-ai-low-speed')?.checked!==false,feedforward:$('pid-ai-feedforward')?.checked!==false});
+  const ai=$('pid-ai-advice'); if(ai) ai.innerHTML=`<div class="ai-summary"><strong>本地 AI 辅助建议</strong><span>置信度 ${advice.confidence}% · 仅供人工评估</span></div><p>${advice.ranked[0]?`推荐先验证：<b>${advice.ranked[0].name}</b>（评分 ${advice.ranked[0].score}/100）<br>Kp ${fmt(advice.ranked[0].kp,3)} · Ki ${fmt(advice.ranked[0].ki,3)} · Kd ${fmt(advice.ranked[0].kd,3)}<br><small>${advice.ranked[0].reason}</small>`:'暂无可评分候选'}</p><ol>${advice.ranked.map(c=>`<li><b>${c.name}</b>：${c.score}/100 — Kp ${fmt(c.kp,3)} / Ki ${fmt(c.ki,3)} / Kd ${fmt(c.kd,3)}</li>`).join('')}</ol>${advice.warnings.map(w=>`<p class="warning">${w}</p>`).join('')}<p class="note">建议按低速直行、横移、旋转分别采集 Burst，每次只改一组参数并保留回滚值。选择候选只填表；点击在线写入并经固件读回确认后才生效。</p>`;
 }
-function loadPidBurst(text,name='pid_burst.csv') {const data=parsePidBurstCsv(text),rate=Number($('pid-burst-rate')?.value)||100,sat=Number($('pid-burst-sat')?.value)||0,tol=Number($('pid-burst-tol')?.value)||.02;S.pidBurst={data,name,analysis:analyzePidBurst(data,{rate,satLimit:sat,tolerance:tol})};renderPidBurst();notify(`已加载独立 PID Burst：${name}。它不会改变 ULog43 任务日志。`);}
+function loadPidBurst(text,name='pid_burst.csv') {const data=parsePidBurstCsv(text),rate=Number($('pid-burst-rate')?.value)||100,sat=Number($('pid-burst-sat')?.value)||0,tol=Number($('pid-burst-tol')?.value)||.02;S.pidBurst={data,name,recorded:pidRecordedParams(data.comments),analysis:analyzePidBurst(data,{rate,satLimit:sat,tolerance:tol})};renderPidBurst();notify(`已加载独立 PID Burst：${name}。它不会改变 ULog43 任务日志。`);}
+
+const PID_AXES=['FL','FR','RL','RR','X','Y','TH'];
+const PID_VALUE_KEYS=['kp','ki','kd','integralMax','outputMax','periodMs','ffGain','deadzone','ffMinSpeed','ramp','slew','lpf','kickStep','kickMax','stuckRatio'];
+const pidOnline={current:{},revision:null,pending:null,nextId:Date.now()%1000000000,busy:false,previous:{},saved:{},candidates:[],candidateAxis:null};
+function decodePidParam(line){
+  const f=line.split(',');if(!['PID_PARAM','PID_USED'].includes(f[1])||f.length!==22||!PID_AXES.includes(f[4])||!['READ','SET'].includes(f[5]))return null;
+  const a=f.slice(6).map(Number);if(!a.every(finite)||f.slice(6).some(x=>x==='')||![0,1].includes(a[15]))return null;
+  const id=Number(f[2]),revision=Number(f[3]);if(!Number.isInteger(id)||!Number.isInteger(revision)||id<0||revision<0)return null;
+  return {kind:f[1],id,revision,axis:f[4],operation:f[5],editable:a[15]===1,...Object.fromEntries(PID_VALUE_KEYS.map((k,i)=>[k,a[i]]))};
+}
+function pidRecordedParams(comments){
+  const axes={},mixed=new Set();
+  for(const line of comments){const p=decodePidParam(line);if(!p||p.kind!=='PID_USED')continue;const old=axes[p.axis];if(old&&['kp','ki','kd','revision'].some(k=>old[k]!==p[k]))mixed.add(p.axis);axes[p.axis]=p;}
+  return {axes,mixed:[...mixed]};
+}
+function receivePidParamLine(line){
+  if(line.startsWith('#BTLOG,PID_USED,')){
+    const p=decodePidParam(line);if(p){pidStream.used[p.axis]=p;return true;}return false;
+  }
+  const isError=line.startsWith('#BTLOG,PID_ERROR,');
+  if(!isError&&!line.startsWith('#BTLOG,PID_PARAM,'))return false;
+  const pending=pidOnline.pending,id=Number(line.split(',')[2]);
+  if(!pending||id!==pending.id)return true;
+  if(isError){clearTimeout(pending.timer);pidOnline.pending=null;pending.reject(new Error(line.split(',').slice(3).join(',')));return true;}
+  const p=decodePidParam(line);if(!p||p.axis!==pending.axis||p.operation!==pending.operation)return true;
+  clearTimeout(pending.timer);pidOnline.pending=null;pidOnline.current[p.axis]=p;pidOnline.revision=p.revision;pending.resolve(p);return true;
+}
+function pidParamDisconnected(){
+  const pending=pidOnline.pending;if(pending){clearTimeout(pending.timer);pending.reject(new Error('蓝牙已断开；写入结果未知，请重新读取。'));}
+  pidOnline.pending=null;pidOnline.current={};pidOnline.revision=null;renderPidParams();
+}
+function renderPidParams(){
+  $('pid-param-table').innerHTML='<table><thead><tr><th>车辆当前通道</th><th>Kp</th><th>Ki</th><th>Kd</th><th>周期 ms</th><th>积分限幅</th><th>输出限幅</th><th>版本</th><th>可写</th></tr></thead><tbody>'+PID_AXES.map(axis=>{const p=pidOnline.current[axis];return '<tr><td>'+axis+'</td>'+(['kp','ki','kd','periodMs','integralMax','outputMax','revision'].map(k=>'<td>'+(p?String(p[k]):'未读取')+'</td>').join(''))+'<td>'+(p&&p.revision===pidOnline.revision?(p.editable?'固件最终检查':'否'):'待读取')+'</td></tr>';}).join('')+'</tbody></table>';
+  const selected=pidOnline.current[$('pid-param-axis').value];
+  $('pid-param-context').textContent=selected?'当前只读配置：周期 '+selected.periodMs+' ms；前馈增益 '+selected.ffGain+'，死区 '+selected.deadzone+'，前馈速度阈值 '+selected.ffMinSpeed+'，目标斜坡 '+selected.ramp+'，输出变化限幅 '+selected.slew+'，测速低通 '+selected.lpf+'，kick '+selected.kickStep+'/'+selected.kickMax+'。':'';
+  $('pid-param-write').disabled=pidOnline.busy;$('pid-param-read').disabled=pidOnline.busy;
+}
+function fillPidParamForm(p){if(!p)return;for(const k of ['kp','ki','kd'])$('pid-param-'+k).value=String(p[k]);}
+function selectPidParamAxis(){const axis=$('pid-param-axis').value;fillPidParamForm(pidOnline.current[axis]);renderPidParams();if(S.pidBurst)renderPidBurst();}
+function pidExchange(operation,axis,values,revision){
+  if(!bt10.device?.gatt?.connected||!bt10.writeCharacteristic)return Promise.reject(new Error('请先直接连接 BT10。'));
+  if(pidOnline.pending)return Promise.reject(new Error('上一条参数命令尚未结束。'));
+  const id=++pidOnline.nextId;
+  return new Promise((resolve,reject)=>{
+    const pending={id,axis,operation:operation==='GET'?'READ':operation,resolve,reject,timer:setTimeout(()=>{if(pidOnline.pending!==pending)return;pidOnline.pending=null;pidOnline.current={};renderPidParams();reject(new Error('等待固件应答超时；不会自动重发写入，请重新读取确认实际值。'));},5000)};
+    pidOnline.pending=pending;
+    const command='@PID '+operation+' '+id+' '+(operation==='SET'?revision+' ':'')+axis+(operation==='SET'?' '+['kp','ki','kd'].map(k=>Number(values[k]).toPrecision(8)).join(' '):'')+'\n';
+    bt10WriteText(command).catch(e=>{if(pidOnline.pending!==pending)return;clearTimeout(pending.timer);pidOnline.pending=null;reject(e);});
+  });
+}
+async function withPidOnlineWork(work){
+  if(pidOnline.busy)return;pidOnline.busy=true;renderPidParams();
+  try{return await work();}catch(e){$('pid-param-status').textContent='操作未确认：'+e.message;notify('在线 PID：'+e.message,true);return null;}
+  finally{pidOnline.busy=false;renderPidParams();}
+}
+function readVehiclePid(){return withPidOnlineWork(async()=>{
+  $('pid-param-status').textContent='正在读取车辆全部七组实际参数…';let revision=null;
+  for(const axis of PID_AXES){const p=await pidExchange('GET',axis);if(revision!==null&&p.revision!==revision)throw new Error('读取期间参数版本变化，请重新读取。');revision=p.revision;}
+  fillPidParamForm(pidOnline.current[$('pid-param-axis').value]);
+  $('pid-param-status').textContent='已读取车辆实际参数，版本 '+revision+'。前馈、限幅等只读；请选通道后写入。';
+  if(S.pidBurst)renderPidBurst();return pidOnline.current;
+});}
+function validateOnlinePid(axis,p){const max=PID_AXES.indexOf(axis)<4?[10,8,3]:[20,5,3];return PID_AXES.includes(axis)&&['kp','ki','kd'].every((k,i)=>finite(p[k])&&p[k]>=0&&p[k]<=max[i]);}
+function savePidPreset(){try{localStorage.setItem('mecanum-pid-presets-v1',JSON.stringify(pidOnline.saved));}catch(e){notify('参数已写入，但本机保存失败：'+e.message,true);}}
+function writeVehiclePid(){return withPidOnlineWork(async()=>{
+  const axis=$('pid-param-axis').value,p=Object.fromEntries(['kp','ki','kd'].map(k=>[k,$('pid-param-'+k).value.trim()===''?NaN:Number($('pid-param-'+k).value)]));
+  if(!validateOnlinePid(axis,p))throw new Error('参数必须为范围内的非负有限数值：速度环 Kp≤10、Ki≤8，位置环 Kp≤20、Ki≤5，Kd≤3。');
+  $('pid-param-status').textContent='正在读取写入前参数并检查停车状态…';
+  const before=await pidExchange('GET',axis);if(!before.editable)throw new Error('车辆尚不允许写入；请停止采集、等待缓存上传，并保持停车至少 500 ms。');
+  const applied=await pidExchange('SET',axis,p,before.revision);
+  const verified=await pidExchange('GET',axis);
+  if(applied.revision!==verified.revision||['kp','ki','kd'].some(k=>Math.abs(verified[k]-p[k])>Math.max(1e-7,Math.abs(p[k])*2e-6)))throw new Error('读回值或版本不匹配，禁止视为写入成功。');
+  pidOnline.previous[axis]=before;pidOnline.saved[axis]={kp:verified.kp,ki:verified.ki,kd:verified.kd};savePidPreset();fillPidParamForm(verified);
+  $('pid-param-status').textContent=axis+' 已写入并读回确认：Kp '+verified.kp+' / Ki '+verified.ki+' / Kd '+verified.kd+'，版本 '+verified.revision+'。仅当前 RAM 生效；其他通道不变。';
+  return verified;
+});}
+function loadPidPreset(previous=false){const axis=$('pid-param-axis').value,p=(previous?pidOnline.previous:pidOnline.saved)[axis];if(!p)return notify('该通道没有'+(previous?'可回滚':'本机保存')+'的参数。',true);fillPidParamForm(p);$('pid-param-status').textContent='已将 '+axis+' 的'+(previous?'上一组':'本机保存')+'参数填入，点击“停车写入并读回确认”后才生效。';}
+function usePidCandidate(index){const c=pidOnline.candidates[index],axis=pidOnline.candidateAxis;if(!c||!axis)return; $('pid-param-axis').value=axis;fillPidParamForm(c);$('pid-param-status').textContent='已填入 '+axis+' 候选 '+c.name+'；尚未写入。停车后点击写入并核对回传。';}
+function pidAnalysisContext(){
+  const axis=$('pid-param-axis').value,inner=PID_AXES.indexOf(axis)<4,recorded=S.pidBurst?.recorded;
+  const used=inner?recorded?.axes[axis]:null,known=used&&!recorded.mixed.includes(axis);
+  const base=known?{kp:used.kp,ki:used.ki,kd:used.kd}:{kp:Number($('pid-burst-kp').value),ki:Number($('pid-burst-ki').value),kd:Number($('pid-burst-kd').value)};
+  const analysis=S.pidBurst?.analysis,selected=inner?axis.toLowerCase():null;
+  const metric=selected?analysis?.wheels[selected]:null,canApply=known&&metric?.n>=20&&metric.maxTarget>1e-6;
+  return {axis:inner?axis:null,base,known,canApply,used,analysis:analysis&&selected?{...analysis,wheels:Object.fromEntries(WHEELS.map(w=>[w,w===selected?analysis.wheels[w]:{n:0}]))}:analysis};
+}
 
 const PID_HEADER='timestamp_ms,fl_target,fl_actual,fl_output,fr_target,fr_actual,fr_output,rl_target,rl_actual,rl_output,rr_target,rr_actual,rr_output';
-const pidStream={live:[],stored:[],liveCount:0,lastSeq:null,gaps:0,crc:0,expected:null,stats:'',lastDraw:0,complete:false};
+const pidStream={live:[],stored:[],liveCount:0,used:{},lastSeq:null,gaps:0,crc:0,expected:null,stats:'',lastDraw:0,complete:false};
 function pidCrc(bytes){let crc=65535;for(const b of bytes){crc^=b<<8;for(let i=0;i<8;i++)crc=((crc&32768)?(crc<<1)^0x1021:crc<<1)&65535;}return crc;}
 function createPidWireDecoder(onText){
   let pending=[],resync=false;
@@ -228,8 +319,9 @@ function createPidWireDecoder(onText){
     }
   },reset(){pending=[];resync=false;}};
 }
-function resetPidStream(){Object.assign(pidStream,{live:[],stored:[],liveCount:0,lastSeq:null,gaps:0,crc:0,expected:null,stats:'',lastDraw:0,complete:false});}
-function pidCsv(){return PID_HEADER+'\n'+pidStream.stored.map(r=>r.join(',')).join('\n')+'\n'+(pidStream.stats?pidStream.stats+'\n':'');}
+function resetPidStream(){Object.assign(pidStream,{live:[],stored:[],liveCount:0,used:{},lastSeq:null,gaps:0,crc:0,expected:null,stats:'',lastDraw:0,complete:false});}
+function encodePidUsed(p){return '#BTLOG,PID_USED,0,'+p.revision+','+p.axis+',READ,'+PID_VALUE_KEYS.map(k=>p[k]).join(',')+','+(p.editable?1:0)+'\n';}
+function pidCsv(){return Object.values(pidStream.used).map(encodePidUsed).join('')+PID_HEADER+'\n'+pidStream.stored.map(r=>r.join(',')).join('\n')+'\n'+(pidStream.stats?pidStream.stats+'\n':'');}
 function receivePidLine(line){
   if(line.startsWith('#BTLOG,PID_ARMED')){resetPidStream();$('pid-live-status').textContent='已开始：持续 200 Hz 实时；100 Hz 循环保留最近 20 秒。手动停止或整车日志结束后冻结缓存。';return true;}
   if(line.startsWith('#BTLOG,PID_REJECTED')){$('pid-live-status').textContent='启动被拒绝：请停车、等待开机至少 2 秒，并等待上次上传完成。';return true;}
@@ -265,8 +357,9 @@ function renderPidStream(){
 }
 function downloadPidStream(){if(!pidStream.stored.length){notify('尚未收到停车上传的 PID 数据。',true);return;}const a=document.createElement('a'),url=URL.createObjectURL(new Blob([pidCsv()],{type:'text/csv;charset=utf-8'}));a.href=url;a.download='pid_100Hz_'+Date.now()+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 async function sendPidCommand(command){
+  if(command==='START'&&pidOnline.busy){notify('参数操作未结束，请等待读回确认后再开始采集。',true);return;}
   if(!bt10.writeCharacteristic){notify('请先直接连接 BT10；电脑日志源只接收数据。',true);return;}
-  try{await bt10.writeCharacteristic.writeValueWithResponse(new TextEncoder().encode('@PID '+command+'\n'));$('pid-live-status').textContent='命令已发送，等待车辆确认；不会让车辆运动或修改 PID。';}catch(e){notify('PID 命令发送失败：'+e.message,true);}
+  try{await bt10WriteText('@PID '+command+'\n');$('pid-live-status').textContent='命令已发送，等待车辆确认；不会让车辆运动或修改 PID。';}catch(e){notify('PID 命令发送失败：'+e.message,true);}
 }
 function pidWireSelfTest(){
   if(bt10.device||realtime.socket){notify('请断开实时连接后运行模拟自测，避免混入实车数据。',true);return;}
@@ -420,7 +513,7 @@ function downloadParts(parts,name){const a=document.createElement('a'),url=URL.c
 function archiveDownload(id){return archiveQueue(async()=>{await archiveFlushPending();const x=await archiveParts(id??archive.session?.id??archive.lastId);if(!x)return false;downloadParts(x.parts,x.rec.name+'.csv');return true;});}
 function pidLiveParts(parts){
   const result=[PID_HEADER+'\n'];let remainder='';
-  const convert=line=>{if(!line.startsWith('#BTLOG,PID_LIVE,'))return '';const a=line.split(',').slice(3);return a.length===13&&a.every(x=>x!==''&&finite(Number(x)))?a.join(',')+'\n':'';};
+  const convert=line=>{if(line.startsWith('#BTLOG,PID_USED,'))return line+'\n';if(!line.startsWith('#BTLOG,PID_LIVE,'))return '';const a=line.split(',').slice(3);return a.length===13&&a.every(x=>x!==''&&finite(Number(x)))?a.join(',')+'\n':'';};
   for(const part of parts){const lines=(remainder+part).split(/\r?\n/);remainder=lines.pop()||'';const rows=lines.map(convert).join('');if(rows)result.push(rows);}
   if(remainder){const row=convert(remainder);if(row)result.push(row);}
   return result;
@@ -431,7 +524,12 @@ function archiveDelete(id){return archiveQueue(async()=>{
   const db=await archiveOpen();await archiveTransaction(db,['logs','chunks'],tx=>{tx.objectStore('logs').delete(id);const r=tx.objectStore('chunks').index('log').openCursor(id);r.onsuccess=()=>{const c=r.result;if(c){c.delete();c.continue();}};});archiveRender();
 });}
 function archiveClear(){return archiveQueue(async()=>{if(archive.session)return notify('请先结束或断开当前记录，再清空仓库。',true);const db=await archiveOpen();await archiveTransaction(db,['logs','chunks'],tx=>{tx.objectStore('logs').clear();tx.objectStore('chunks').clear();});archive.lastId=null;archiveRender();});}
-const bt10={device:null,characteristic:null,writeCharacteristic:null,decoder:null,ended:false};
+const bt10={device:null,characteristic:null,writeCharacteristic:null,decoder:null,ended:false,txWork:Promise.resolve()};
+function bt10WriteText(text){
+  const ch=bt10.writeCharacteristic;
+  const result=bt10.txWork.then(async()=>{if(!ch||bt10.writeCharacteristic!==ch)throw new Error('蓝牙写入连接已变化。');const bytes=new TextEncoder().encode(text);for(let i=0;i<bytes.length;i+=20)await ch.writeValueWithResponse(bytes.slice(i,i+20));});
+  bt10.txWork=result.catch(()=>{});return result;
+}
 const serialEcho={port:null,reader:null,writer:null,running:false};
 const localSim={running:false,timer:null};
 const BT10_SERVICE='0000ffe0-0000-1000-8000-00805f9b34fb';
@@ -442,7 +540,7 @@ function downloadBt10Log(){return archiveDownload();}
 function bt10DecodedText(text){receiveRealtimeText(text);if(text.trim()==='#BTLOG,END'&&!bt10.ended){bt10.ended=true;downloadBt10Log().then(ok=>btStatus(ok?'BT10 日志已结束，已生成会话下载':'BT10 日志已结束；保存未成功，请查看提示并重试','connected'));}}
 function bt10Notification(event){const v=event.target.value;bt10.wire.feed(new Uint8Array(v.buffer,v.byteOffset,v.byteLength));}
 function bt10TestRows(){ const rows=['#BTLOG,BEGIN']; for(let i=0;i<20;i++){const t=i*100,x=i*.01,y=Math.sin(i*.2)*.1; const a=[0,1,1,0,0,t,0,0,1,0,.5,.2,.5,.2,0,0,i*.5,i*.5,0,.5385,.5385,x,y,i*.5,0,0,0,100,100,100,100,100,x,y,x,100,100,100,20,0,24,12,0]; rows.push(a.map(v=>typeof v==='number'&&v%1?v.toFixed(4):String(v)).join(','));} rows.push('#BTLOG,END'); return rows; }
-async function sendBt10SelfTest(){ if(!bt10.writeCharacteristic){btStatus('请先连接 BT10','error');return;} const button=$('bt-selftest'); button.disabled=true; try{for(const line of bt10TestRows()){await bt10.writeCharacteristic.writeValueWithResponse(new TextEncoder().encode(line+'\r\n')); await new Promise(resolve=>setTimeout(resolve,60));} btStatus('自测已发送，等待回传','connected'); notify('BT10 自测已发送；需要 UART 回传或回环才能在网页收到测试曲线。');}catch(e){btStatus('自测发送失败：'+e.message,'error');}finally{button.disabled=false;} }
+async function sendBt10SelfTest(){ if(!bt10.writeCharacteristic){btStatus('请先连接 BT10','error');return;} const button=$('bt-selftest'); button.disabled=true; try{for(const line of bt10TestRows()){await bt10WriteText(line+'\r\n'); await new Promise(resolve=>setTimeout(resolve,60));} btStatus('自测已发送，等待回传','connected'); notify('BT10 自测已发送；需要 UART 回传或回环才能在网页收到测试曲线。');}catch(e){btStatus('自测发送失败：'+e.message,'error');}finally{button.disabled=false;} }
 function toggleLocalSim(){
   if(localSim.running){localSim.running=false;clearInterval(localSim.timer);localSim.timer=null;$('local-sim').textContent='本地模拟';realtimeStatus('本地模拟已停止');return;}
   resetRealtimeSession(); localSim.running=true; $('local-sim').textContent='停止模拟'; realtimeStatus('本地模拟运行中','connected');
@@ -485,10 +583,10 @@ async function connectBt10(){
         break;
       }catch(error){ lastError=error; try{device.gatt?.disconnect();}catch(_){ } if(attempt===2)throw lastError; }
     }
-    bt10.device=device; bt10.characteristic=ch; bt10.writeCharacteristic=await service.getCharacteristic(BT10_WRITE); bt10.decoder=new TextDecoder(); bt10.wire=createPidWireDecoder(bt10DecodedText); resetPidStream(); bt10.ended=false; resetRealtimeSession();
+    bt10.device=device; bt10.characteristic=ch; bt10.writeCharacteristic=await service.getCharacteristic(BT10_WRITE); bt10.decoder=new TextDecoder(); bt10.wire=createPidWireDecoder(bt10DecodedText); resetPidStream(); bt10.ended=false;pidParamDisconnected(); resetRealtimeSession();
     ch.addEventListener('characteristicvaluechanged',bt10Notification); await ch.startNotifications();
-    device.addEventListener('gattserverdisconnected',()=>{if(bt10.device===device){bt10.device=null;bt10.characteristic=null;bt10.writeCharacteristic=null;$('bt-selftest').disabled=true;archiveFinish(false);btStatus('BT10 已断开，日志已保留','error');}});
-    $('bt-selftest').disabled=false; btStatus('BT10 已连接，等待日志','connected'); notify('BT10 已连接，日志将实时显示并在 END 后自动下载。');
+    device.addEventListener('gattserverdisconnected',()=>{if(bt10.device===device){bt10.device=null;bt10.characteristic=null;bt10.writeCharacteristic=null;$('bt-selftest').disabled=true;pidParamDisconnected();archiveFinish(false);btStatus('BT10 已断开，日志已保留','error');}});
+    $('bt-selftest').disabled=false; btStatus('BT10 已连接，等待日志','connected'); notify('BT10 已连接，日志将实时显示并在 END 后自动下载。');readVehiclePid();
   }catch(e){ bt10.device=null; btStatus('BT10 连接失败：'+e.message,'error'); }
 }
 function realtimeStatus(text,kind='') { const box=document.querySelector('.realtime-connect'); $('ws-status').textContent=text; box?.classList.toggle('connected',kind==='connected'); box?.classList.toggle('error',kind==='error'); }
@@ -510,7 +608,7 @@ function flushRealtime() {
 }
 function receiveRealtimeText(text) {
   realtime.buffer+=text;const lines=realtime.buffer.split(/\r?\n/);realtime.buffer=lines.pop()||'';
-  for(const line of lines){const raw=line.trim();if(!raw)continue;archiveLine(raw+'\n');if(receivePidLine(raw))continue;if(/^#BTLOG,END\b/i.test(raw)){realtime.ended=true;archiveFinish(true);realtimeStatus('已收到 END','connected');continue;}if(raw.startsWith('#')||raw.startsWith('//'))continue;
+  for(const line of lines){const raw=line.trim();if(!raw)continue;if(raw.startsWith('#BTLOG,PID_PARAM,')||raw.startsWith('#BTLOG,PID_ERROR,')){receivePidParamLine(raw);continue;}archiveLine(raw+'\n');if(receivePidParamLine(raw))continue;if(receivePidLine(raw))continue;if(/^#BTLOG,END\b/i.test(raw)){realtime.ended=true;archiveFinish(true);realtimeStatus('已收到 END','connected');continue;}if(raw.startsWith('#')||raw.startsWith('//'))continue;
     try{const parsed=parse(raw+'\n');if(parsed.rows[0])queueRealtimeRow(parsed.rows[0]);}catch(_){/* Ignore partial/status lines from the collector. */}
   }
 }
@@ -918,6 +1016,13 @@ function init() {
   $('wave-apply').onclick=()=>{const a=Number($('wave-start').value),b=Number($('wave-end').value);if(!finite(a)||!finite(b)||b<=a){notify('时间窗口的终点必须大于起点。',true);return;}setWindow(a,b);};
   $('apply-tolerance').onclick=()=>{const next={lateral:Number($('tol-lateral').value),yaw:Number($('tol-yaw').value),omega:Number($('tol-omega').value)};if(!Object.values(next).every(v=>finite(v)&&v>0)){notify('参考值必须大于 0。',true);return;}S.tolerances=next;drawStability();drawStrip();};
   $('pid-axis').onchange=()=>{calculatePid();drawPid();};$('pid-apply').onclick=()=>{calculatePid();drawPid();};
+  $('pid-param-read').onclick=()=>readVehiclePid();
+  $('pid-param-write').onclick=()=>writeVehiclePid();
+  $('pid-param-axis').onchange=selectPidParamAxis;
+  $('pid-param-rollback').onclick=()=>loadPidPreset(true);
+  $('pid-param-restore').onclick=()=>loadPidPreset(false);
+  try{const saved=JSON.parse(localStorage.getItem('mecanum-pid-presets-v1')||'{}');pidOnline.saved=Object.fromEntries(Object.entries(saved).filter(([axis,p])=>p&&validateOnlinePid(axis,p)));}catch(_){}
+  renderPidParams();
   $('pid-live-start').onclick=()=>sendPidCommand('START');
   $('pid-live-stop').onclick=()=>sendPidCommand('STOP');
   $('pid-live-test').onclick=pidWireSelfTest;

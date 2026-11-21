@@ -1,5 +1,6 @@
 #include "board.h"
 #include "bsp_ulog.h"
+#include "app_runtime.h"
 #include "app_race.h"
 #include "app_square.h"
 #include "app_mode.h"
@@ -9,6 +10,14 @@
 #include <string.h>
 #include <stdarg.h>
 #include <math.h>
+Motor_t motor_left_front,motor_right_front,motor_left_back,motor_right_back;
+MecanumChassis_t chassis;
+volatile uint8_t g_tune_mode;
+void ULog_TestObserve(void);
+static uint32_t test_irq;
+uint32_t __get_PRIMASK(void) { return test_irq; }
+void __disable_irq(void) { test_irq=1u; }
+void __set_PRIMASK(uint32_t mask) { test_irq=mask; }
 static uint32_t now, writes;
 static uint8_t finished, square = SQUARE_RUNNING;
 static uint8_t terminal_outputs_stopped;
@@ -27,6 +36,14 @@ static RaceTaskPlan plan;
 static char last[800];
 static FILE *capture;
 static uint32_t live_frames, stored_frames;
+#if defined(ULOG_ASYNC_TEST)
+static unsigned param_sets;
+static const char *async_params(const ULogPidRequest *r,ULogPidValues *v)
+{
+    if(r->write) {param_sets++;}
+    v->revision=param_sets;v->kp=2.5f;v->ki=1.6f;v->editable=1;return "OK";
+}
+#endif
 static uint32_t first_stored_ms, last_stored_ms;
 uint32_t HAL_GetTick(void) { return now; }
 float app_imu_yaw_deg(void) { return 0; }
@@ -103,6 +120,12 @@ static void complete_tx(void)
     }
 }
 #endif
+#if ULOG_ENABLE && ULOG_PID_BURST_ENABLE
+static void command(const char *text)
+{
+    ULog_TestRx(text);for(unsigned i=0;i<10;i++) ULog_PidBurstPoll();
+}
+#endif
 int main(int argc, char **argv)
 {
     Motor_t motors[4] = {{0}};
@@ -121,6 +144,69 @@ int main(int argc, char **argv)
 #endif
     if (init_error) { ULog_Poll(&c); ULog_Printf("x"); assert(!writes && !ULog_IsRecording()); return 0; }
     assert(ULog_IsRecording());
+#if ULOG_ENABLE && ULOG_PID_BURST_ENABLE
+    if (!strcmp(scenario,"params")) {
+        ULogPidRequest request={0};ULogPidValues v={0};
+        Motor_t *m[4]={&motor_left_front,&motor_right_front,&motor_left_back,&motor_right_back};
+        PosPID_t *pos[3]={&chassis.pid_x,&chassis.pid_y,&chassis.pid_theta};
+        capture=fopen("tmp/pid_params_wire.bin","wb");assert(capture);
+        ULog_SetPidHandler(AppRuntime_PidAccess);
+        race.state=RACE_READY;square=SQUARE_IDLE;now=2000;
+        for(unsigned i=0;i<4;i++){m[i]->kp=2.5f;m[i]->ki=1.6f;m[i]->output_max=1000;m[i]->integral_max=800;}
+        for(unsigned i=0;i<3;i++){pos[i]->kp=i==2?3.2f:1.6f;pos[i]->ki=i==2?.08f:.05f;pos[i]->kd=i==2?.18f:.12f;}
+        ULog_TestObserve();now+=499;
+        command("@PID SET 1 0 FL 3 1.7 0.01\n");assert(strstr(last,"NOT_PARKED_500MS"));assert(m[0]->kp==2.5f);
+        now++;ULog_TestObserve();
+        command("@PID GET 2 FL\n");assert(strstr(last,"PID_PARAM,2,0,FL,READ,2.5"));
+        command("@PID SET 3 0 FL 3 1.7 0.01\n");assert(m[0]->kp==3.0f&&m[1]->kp==2.5f);assert(strstr(last,"PID_PARAM,3,1,FL,SET,3"));
+        command("@PID SET 3 0 FL 4 1 0\n");assert(strstr(last,"STALE_REVISION"));assert(m[0]->kp==3.0f);
+        command("@PID SET 4 1 FL nan 1 0\n");assert(strstr(last,"MALFORMED"));
+        command("@PID SET 5 1 FL 11 1 0\n");assert(strstr(last,"RANGE"));
+        command("@PID SET 6 1 FL -1 1 0\n");assert(strstr(last,"RANGE"));
+        command("@PID SET 7 1 FL 3 1 0 junk\n");assert(strstr(last,"MALFORMED"));
+        command("@PID GET 8 FLjunk\n");assert(strstr(last,"MALFORMED"));
+        command("@PID GET 4294967296 FL\n");assert(strstr(last,"MALFORMED"));
+        ULog_TestRx("@PID GET 9 ");ULog_PidBurstPoll();command("FR\n");assert(strstr(last,"PID_PARAM,9,1,FR,READ"));
+        command("@PID SET 10 1 TH 3.5 0.09 0.2\n");assert(chassis.pid_theta.kp==3.5f);assert(chassis.pid_x.kp==1.6f);
+        command("@PID GET 11 TH\n");assert(strstr(last,"PID_PARAM,11,2,TH,READ,3.5"));
+        m[0]->target_cmd=1;ULog_TestObserve();command("@PID SET 12 2 FL 4 1 0\n");assert(strstr(last,"NOT_PARKED"));m[0]->target_cmd=0;
+        m[0]->output=.1f;ULog_TestObserve();command("@PID SET 13 2 FL 4 1 0\n");assert(strstr(last,"NOT_PARKED"));m[0]->output=0;
+        m[0]->actual_speed=NAN;ULog_TestObserve();command("@PID SET 14 2 FL 4 1 0\n");assert(strstr(last,"NOT_PARKED"));m[0]->actual_speed=0;
+        race.state=RACE_RUNNING;square=SQUARE_RUNNING;ULog_TestObserve();command("@PID SET 15 2 FL 4 1 0\n");assert(strstr(last,"NOT_PARKED"));
+        command("@PID GET 16 FL\n");assert(strstr(last,"PID_PARAM,16,2,FL,READ"));
+        race.state=RACE_READY;square=SQUARE_IDLE;ULog_TestObserve();now+=500;ULog_TestObserve();
+        ULog_PidBurstSetParked(1);command("@PID START\n");assert(ULog_PidBurstActive());
+        for(int i=0;i<300;i++){ULogPidSample sample={0};sample.fl_target=100;sample.fl_actual=90;sample.timestamp_ms=++now;ULog_PidBurstSampleIsr(&sample);ULog_PidBurstPoll();}
+        command("@PID SET 17 2 FL 4 1 0\n");assert(strstr(last,"CAPTURE_BUSY"));
+        ULog_PidBurstStop();now+=500;for(int i=0;i<50;i++)ULog_PidBurstPoll();
+        ULog_Stop();assert(!ULog_IsRecording());
+        command("@PID GET 18 FL\n");assert(strstr(last,"PID_PARAM,18,2,FL,READ"));assert(!ULog_IsRecording());
+        command("@PID SET 19 2 FL 2.8 1.5 0\n");assert(m[0]->kp==2.8f);assert(strstr(last,"PID_PARAM,19,3,FL,SET"));assert(!ULog_IsRecording());
+        /* Exercise each remaining controller and check atomic IRQ restoration. */
+        { const char *names[7]={"FL","FR","RL","RR","X","Y","TH"};
+          for(unsigned axis=1;axis<6;axis++){
+            char line[96];request.axis=(uint8_t)axis;request.write=0;
+            assert(!strcmp(AppRuntime_PidAccess(&request,&v),"OK"));
+            snprintf(line,sizeof(line),"@PID SET %u %lu %s 1.9 0.1 0.02\n",20u+axis,(unsigned long)v.revision,names[axis]);command(line);
+            request.write=0;assert(!strcmp(AppRuntime_PidAccess(&request,&v),"OK"));assert(v.kp==1.9f);
+          }
+        }
+        request.axis=0;request.write=0;assert(!strcmp(AppRuntime_PidAccess(&request,&v),"OK"));
+        request.write=1;request.revision=v.revision;request.kp=2.5f;request.ki=1.6f;request.kd=0;
+        chassis.mode=1;assert(!strcmp(AppRuntime_PidAccess(&request,&v),"NOT_PARKED_500MS"));chassis.mode=0;
+        g_tune_mode=1;assert(!strcmp(AppRuntime_PidAccess(&request,&v),"NOT_PARKED_500MS"));g_tune_mode=0;
+        race.state=RACE_FAULT;square=SQUARE_TIMEOUT;terminal_outputs_stopped=1;sync_snapshot();
+        assert(!strcmp(AppRuntime_PidAccess(&request,&v),"NOT_PARKED_500MS"));
+        race.state=RACE_READY;square=SQUARE_IDLE;
+        /* Overlong/malformed receive lines must not modify parameters. */
+        { char line[120];memset(line,'9',sizeof(line));line[119]=0;ULog_TestRx(line);for(int i=0;i<5;i++)ULog_PidBurstPoll();command("\n@PID GET 30 FL\n");assert(strstr(last,"PID_PARAM,30,")); }
+        request.axis=7;assert(!strcmp(AppRuntime_PidAccess(&request,&v),"AXIS"));
+        request.axis=0;request.write=1;request.revision=3;request.kp=INFINITY;assert(!strcmp(AppRuntime_PidAccess(&request,&v),"RANGE"));
+        assert(test_irq==0u);
+        fclose(capture);capture=0;
+        puts("PASS online PID: actual runtime/FF constants, 7 axes, atomic parked SET, version/replay/range/fragments, capture busy, commands after END");return 0;
+    }
+#endif
     if (!strcmp(scenario,"burst_fault") || !strcmp(scenario,"burst_abort")) {
         ULogPidSample sample={0};
         capture=fopen("tmp/pid_terminal_wire.bin","wb"); assert(capture);
@@ -163,6 +249,19 @@ int main(int argc, char **argv)
         return 0;
     }
 #if defined(ULOG_ASYNC_TEST)
+    if (!strcmp(scenario,"params_async")) {
+        char fill[1000];memset(fill,' ',sizeof(fill));
+        capture=fopen("tmp/pid_params_async.bin","wb");assert(capture);
+        ULog_SetPidHandler(async_params);
+        for(int i=0;i<4;i++)ULog_WriteRaw((uint8_t *)fill,sizeof(fill));
+        ULog_TestRx("@PID SET 1 0 FL 2.5 1.6 0\n");for(int i=0;i<5;i++)ULog_PidBurstPoll();assert(param_sets==1);
+        for(int i=0;i<40;i++) {ULog_PidBurstPoll();}
+        assert(param_sets==1);
+        while(pending_len) {complete_tx();}
+        for(int i=0;i<10;i++){ULog_PidBurstPoll();while(pending_len)complete_tx();}
+        assert(param_sets==1);fclose(capture);capture=0;
+        puts("PASS online PID async backpressure: SET applies once, response retained/retried");return 0;
+    }
     if (!strcmp(scenario,"async")) {
         ULogPidSample sample={0};
         uint32_t i, before;

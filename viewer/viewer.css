@@ -37,3 +37,5 @@
   .transport-wave-icon #wave-card{right:10px;bottom:10px}
 }
 .ai-tuner{margin-top:16px;padding:14px;border:1px solid #355d78;border-radius:10px;background:#101f30;color:var(--text)}.ai-summary{display:flex;justify-content:space-between;gap:12px}.ai-advice ol{margin:.5rem 0;padding-left:1.4rem}.ai-advice .warning{color:var(--amber);font-weight:600}.ai-advice small{color:var(--muted)}
+
+.pid-online{margin:14px 0;padding:14px;background:#101f30;border:1px solid #3d6b91;border-radius:8px}.pid-online input{width:105px}.pid-param-table{overflow:auto}.pid-param-table table{width:100%;margin:10px 0}.pid-param-table th,.pid-param-table td{padding:5px 10px;text-align:right;white-space:nowrap}.pid-param-table th:first-child,.pid-param-table td:first-child{text-align:left}.pid-online .toolbar{flex-wrap:wrap}.pid-candidate button{margin-top:8px}

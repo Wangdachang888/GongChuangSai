@@ -57,6 +57,13 @@ void Motor_Init(Motor_t *motor,
 			   int8_t motor_dir, int8_t enc_dir
                 );
 
+/* Read-only constants compiled into the active speed controller. */
+typedef struct {
+    float period_ms, ff_gain, deadzone, ff_min_speed, ramp, slew, lpf;
+    float kick_step, kick_max, stuck_ratio;
+} MotorControlInfo;
+const MotorControlInfo *Motor_GetControlInfo(void);
+
 void Motor_SetTargetSpeed(Motor_t *motor, float target_speed);
 void Motor_Update(Motor_t *motor, float dt);
 void Motor_Stop(Motor_t *motor);

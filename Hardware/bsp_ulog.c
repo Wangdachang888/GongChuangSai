@@ -37,6 +37,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <stdlib.h>
+#include <errno.h>
+#include <limits.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -98,9 +101,22 @@ static uint8_t s_rx_byte;
 #endif
 static volatile uint8_t s_rx_head, s_rx_tail, s_rx_overflow;
 static uint8_t s_rx_queue[128];
-static char s_rx_line[32];
+static char s_rx_line[96];
+static ULogPidHandler s_pid_handler;
+static char s_param_reply[384];
+static uint16_t s_param_reply_len;
+static uint8_t s_param_snapshot_axis=7u;
 static uint8_t s_rx_len, s_rx_bad;
 #endif
+
+void ULog_SetPidHandler(ULogPidHandler handler)
+{
+#if (ULOG_PID_BURST_ENABLE != 0)
+    s_pid_handler=handler;
+#else
+    (void)handler;
+#endif
+}
 
 UART_HandleTypeDef *ULog_GetHandle(void)
 {
@@ -120,7 +136,9 @@ static uint8_t ulog_try_write(const uint8_t *data, uint16_t len, uint16_t reserv
 #if !defined(ULOG_TEST) || defined(ULOG_ASYNC_TEST)
     uint16_t head, tail, used, free_space, first;
 #endif
-    if (!s_inited || !s_stream_enabled || !data || !len) return 0u;
+    /* Low-level queue also serves explicit parameter replies after log END.
+     * Every ordinary logger producer still checks s_stream_enabled. */
+    if (!s_inited || s_tx_failed || !data || !len) return 0u;
 #if defined(ULOG_TEST) && !defined(ULOG_ASYNC_TEST)
     (void)reserve;
     if (HAL_UART_Transmit(&s_huart2, (uint8_t *)data, len, 30u) != HAL_OK) {
@@ -236,6 +254,7 @@ void ULog_PidBurstStart(void)
     g_ulog_pid_quantized_clipped = 0u;
     s_pid_fault_reported = 0u; s_pid_upload_started = 0u; s_pid_pending = 1u;
     s_data_sent = 1u;
+    s_param_snapshot_axis=s_pid_handler?0u:7u;
     s_pid_active = 1u; /* publish last */
 #endif
 }
@@ -342,29 +361,108 @@ static uint8_t pid_send(const PidPacked *p, uint8_t kind, uint16_t seq)
     return ulog_try_write(f,sizeof(f),1024u); /* reserve room for ULog43 */
 }
 
+static const char *const s_param_axes[7]={"FL","FR","RL","RR","X","Y","TH"};
+
+static void pid_param_reply(const ULogPidRequest *r, const char *kind)
+{
+    ULogPidValues v={0};
+    const char *reason;
+    int n;
+    if (r->write && (s_pid_active || s_pid_pending)) reason="CAPTURE_BUSY";
+    else reason=s_pid_handler?s_pid_handler(r,&v):"UNSUPPORTED";
+    if (strcmp(reason,"OK"))
+        n=snprintf(s_param_reply,sizeof(s_param_reply),"#BTLOG,PID_ERROR,%lu,%s\r\n",
+                   (unsigned long)r->id,reason);
+    else {
+        if (s_pid_active || s_pid_pending) v.editable=0u;
+        n=snprintf(s_param_reply,sizeof(s_param_reply),
+            "#BTLOG,%s,%lu,%lu,%s,%s,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%u\r\n",
+            kind,(unsigned long)r->id,(unsigned long)v.revision,s_param_axes[r->axis],
+            r->write?"SET":"READ",v.kp,v.ki,v.kd,v.integral_max,v.output_max,
+            v.period_ms,v.ff_gain,v.deadzone,v.ff_min_speed,v.ramp,v.slew,v.lpf,
+            v.kick_step,v.kick_max,v.stuck_ratio,(unsigned)v.editable);
+    }
+    s_param_reply_len=(n>0 && (size_t)n<sizeof(s_param_reply))?(uint16_t)n:0u;
+}
+
+static uint8_t pid_parse_u32(const char *s, uint32_t *v)
+{
+    char *end; unsigned long x;
+    if (!s || !*s || *s<'0' || *s>'9') return 0u;
+    errno=0; x=strtoul(s,&end,10);
+    if (errno || *end || x>UINT32_MAX) return 0u;
+    *v=(uint32_t)x; return 1u;
+}
+
+static void pid_param_command(void)
+{
+    char *tokens[9], *p; unsigned n=0u,i; ULogPidRequest r={0};
+    for (p=strtok(s_rx_line," ");p && n<9u;p=strtok(0," ")) tokens[n++]=p;
+    if (n>=3u) (void)pid_parse_u32(tokens[2],&r.id);
+    if (p || (n!=4u && n!=8u) || strcmp(tokens[0],"@PID") ||
+        !pid_parse_u32(tokens[2],&r.id) || !r.id) goto malformed;
+    if (n==4u && !strcmp(tokens[1],"GET")) {
+        for (i=0u;i<7u && strcmp(tokens[3],s_param_axes[i]);++i) {}
+    } else if (n==8u && !strcmp(tokens[1],"SET")) {
+        r.write=1u;
+        if (!pid_parse_u32(tokens[3],&r.revision)) goto malformed;
+        for (i=0u;i<7u && strcmp(tokens[4],s_param_axes[i]);++i) {}
+        for (unsigned j=0u;j<3u;++j) {
+            char *end; float value;
+            errno=0; value=strtof(tokens[5u+j],&end);
+            if (errno || end==tokens[5u+j] || *end || !isfinite(value)) goto malformed;
+            if (j==0u) r.kp=value; else if (j==1u) r.ki=value; else r.kd=value;
+        }
+    } else goto malformed;
+    if (i>=7u) goto malformed;
+    r.axis=(uint8_t)i; pid_param_reply(&r,"PID_PARAM");return;
+malformed:
+    {
+        int len=snprintf(s_param_reply,sizeof(s_param_reply),
+                         "#BTLOG,PID_ERROR,%lu,MALFORMED\r\n",(unsigned long)r.id);
+        s_param_reply_len=(len>0 && (size_t)len<sizeof(s_param_reply))?(uint16_t)len:0u;
+    }
+}
+
 static void pid_commands(void)
 {
-    char ch;
-    uint8_t budget=32u;
-    if (s_rx_overflow) { s_rx_bad=1u; s_rx_overflow=0u; }
+    char ch; uint8_t budget=32u;
+    if (s_rx_overflow) {s_rx_bad=1u;s_rx_overflow=0u;}
+    /* Backpressure retains the already-executed response; never repeat SET. */
+    if (s_param_reply_len) {
+        if (ulog_try_write((uint8_t *)s_param_reply,s_param_reply_len,0u)) s_param_reply_len=0u;
+        else return;
+    }
     while (s_rx_tail != s_rx_head && budget--) {
-        ch=(char)s_rx_queue[s_rx_tail];
-        s_rx_tail=(uint8_t)((s_rx_tail+1u)&127u);
+        ch=(char)s_rx_queue[s_rx_tail];s_rx_tail=(uint8_t)((s_rx_tail+1u)&127u);
         if (ch=='\r') continue;
         if (ch=='\n') {
             s_rx_line[s_rx_len]=0;
             if (!s_rx_bad) {
                 if (!strcmp(s_rx_line,"@PID START")) {
                     ULog_PidBurstStart();
-                    if (!s_pid_active)
-                        ULog_Printf("#BTLOG,PID_REJECTED,busy_or_not_parked_or_warmup\r\n");
+                    if (!s_pid_active) ULog_Printf("#BTLOG,PID_REJECTED,busy_or_not_parked_or_warmup\r\n");
                 } else if (!strcmp(s_rx_line,"@PID STOP")) ULog_PidBurstStop();
+                else if (!strncmp(s_rx_line,"@PID ",5u)) pid_param_command();
             }
-            s_rx_len=0u; s_rx_bad=0u;
+            s_rx_len=0u;s_rx_bad=0u;
+            break; /* At most one complete command per main-loop poll. */
         } else if (s_rx_len < sizeof(s_rx_line)-1u) s_rx_line[s_rx_len++]=ch;
         else s_rx_bad=1u;
     }
+    if (s_param_reply_len && ulog_try_write((uint8_t *)s_param_reply,s_param_reply_len,0u))
+        s_param_reply_len=0u;
 }
+#ifdef ULOG_TEST
+void ULog_TestRx(const char *text)
+{
+    while (*text) {
+        uint8_t next=(uint8_t)((s_rx_head+1u)&127u);
+        if (next==s_rx_tail) {s_rx_overflow=1u;break;}
+        s_rx_queue[s_rx_head]=(uint8_t)*text++;s_rx_head=next;
+    }
+}
+#endif
 #endif
 
 void ULog_RxCpltCallback(void)
@@ -397,8 +495,13 @@ void ULog_PidBurstPoll(void)
 #if !defined(ULOG_TEST)
     uint32_t irq_state;
 #endif
+    if (!s_inited || s_tx_failed) return;
+    pid_commands(); /* Remains available after END; does not rearm recording. */
     if (!s_stream_enabled) return;
-    pid_commands();
+    if (s_param_snapshot_axis<7u && !s_param_reply_len) {
+        ULogPidRequest request={0};request.axis=s_param_snapshot_axis++;
+        pid_param_reply(&request,"PID_USED");
+    }
     /* Final-upload fallback cannot arm a capture or bypass the ordinary
      * parked gate while recording is still running. */
     upload_ready = s_pid_parked ||
@@ -451,7 +554,7 @@ void ULog_PidBurstPoll(void)
 #endif
     if (s_stop_requested) {
 #if (ULOG_PID_BURST_ENABLE != 0)
-        if (s_pid_pending) return;
+        if (s_pid_pending || s_param_snapshot_axis<7u || s_param_reply_len) return;
 #endif
         ULog_Stop();
     }
@@ -710,6 +813,7 @@ volatile uint32_t g_ulog_format_error_count;
 volatile uint16_t g_ulog_last_line_len;
 
 void ULog_Init(void) {}
+void ULog_SetPidHandler(ULogPidHandler handler) { (void)handler; }
 void ULog_Poll(const MecanumChassis_t *chassis) { (void)chassis; }
 void ULog_SetAppSnapshot(const ULogAppSnapshot *snapshot) { (void)snapshot; }
 void ULog_Stop(void) {}
