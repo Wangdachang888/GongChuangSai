@@ -224,17 +224,20 @@ const asyncGuard=setTimeout(()=>{console.error('FAIL: asynchronous test stalled'
   env.TextEncoder=TextEncoder;const timers=new Map();let timerId=0;
   env.setTimeout=fn=>{timers.set(++timerId,fn);return timerId;};env.clearTimeout=id=>timers.delete(id);
   const local=new Map();env.localStorage={getItem:k=>local.get(k)||null,setItem:(k,v)=>local.set(k,v)};
-  const model=Object.fromEntries(Object.entries(metadata.axes).map(([axis,p])=>[axis,{...p,editable:true}]));let revision=2,input='',setCount=0,parked=true,corruptReadback=false,suppress=false;
+  const model=Object.fromEntries(Object.entries(metadata.axes).map(([axis,p])=>[axis,{...p,editable:true}]));let revision=2,input='',setCount=0,parked=true,corruptReadback=false,suppress=false,blockedAxis=null,rejectSetAxis=null,dropSetAxis=null,changeFinal=false;
   const wireDecoder=env.createPidWireDecoder(env.bt10DecodedText),commands=[];
   env.pidMockWrite=async bytes=>{
     assert(bytes.length<=20);input+=Buffer.from(bytes).toString();if(!input.endsWith('\n'))return;
     const t=input.trim().split(' ');commands.push(input);input='';const op=t[1],id=Number(t[2]),axis=t[op==='SET'?4:3];
     if(suppress)return;
     if(op==='SET'){
+      if(axis===rejectSetAxis){wireDecoder.feed(Buffer.from('#BTLOG,PID_ERROR,'+id+',STALE_REVISION\n'));return;}
       assert.equal(Number(t[3]),revision);assert(parked);setCount++;revision++;
       ['kp','ki','kd'].forEach((k,i)=>model[axis][k]=Number(t[i+5]));
+      if(axis===dropSetAxis)return; // The MCU applied SET but its reply was lost.
     }
-    let value={...model[axis],editable:parked,revision};if(corruptReadback&&op==='GET'&&setCount>1)value.kp+=.5;
+    if(changeFinal&&op==='GET'&&axis==='FL'&&commands.at(-2)?.includes(' GET ')&&commands.at(-2)?.trim().endsWith('RR')){revision++;changeFinal=false;}
+    let value={...model[axis],editable:parked&&axis!==blockedAxis,revision};if(corruptReadback&&op==='GET'&&setCount>1)value.kp+=.5;
     const response=env.encodePidUsed(value).replace('PID_USED,0,','PID_PARAM,'+id+',').replace(',READ,',','+op.replace('GET','READ')+',');
     const data=Buffer.from(response);for(let i=0;i<data.length;i+=7)wireDecoder.feed(data.subarray(i,i+7));
   };
@@ -247,6 +250,46 @@ const asyncGuard=setTimeout(()=>{console.error('FAIL: asynchronous test stalled'
   parked=false;await env.writeVehiclePid();assert.equal(setCount,1);parked=true;
   el('pid-param-kp').value='NaN';await env.writeVehiclePid();assert.equal(setCount,1);
   el('pid-param-kp').value='2.8';corruptReadback=true;assert.equal(await env.writeVehiclePid(),null);assert.equal(setCount,2);assert(el('pid-param-status').textContent.includes('不匹配'));corruptReadback=false;
+  // Four-wheel editing uses the original single-axis protocol, never an implied
+  // atomic update. Validate everything first; report partial/unknown outcomes.
+  const motors=['FL','FR','RL','RR'],gains=['kp','ki','kd'];
+  const fillMotor=(axis,p)=>gains.forEach(k=>el('pid-motor-'+axis+'-'+k).value=String(p[k]));
+  const checkMotor=(axis,p)=>gains.forEach(k=>assert.equal(Number(el('pid-motor-'+axis+'-'+k).value),p[k]));
+  await env.readVehiclePid();env.loadMotorPidForms('current');motors.forEach(axis=>checkMotor(axis,model[axis]));
+  const beforeFill=commands.length;
+  el('pid-motors-kp').value='2.6';el('pid-motors-ki').value='1.4';el('pid-motors-kd').value='0';el('pid-motors-fill').onclick();
+  motors.forEach(axis=>checkMotor(axis,{kp:2.6,ki:1.4,kd:0}));assert.equal(commands.length,beforeFill,'unified fill never sends data');
+  el('pid-motors-kp').value='11';env.fillAllMotorPid();motors.forEach(axis=>checkMotor(axis,{kp:2.6,ki:1.4,kd:0}));
+  env.loadMotorPidForms('saved');motors.forEach(axis=>checkMotor(axis,{kp:2.6,ki:1.4,kd:0})); // Incomplete preset: no partial fill.
+  const requested=Object.fromEntries(motors.map((axis,i)=>[axis,{kp:2.2+i*.1,ki:1+i*.1,kd:i*.001}]));
+  motors.forEach(axis=>fillMotor(axis,requested[axis]));el('pid-motor-RR-ki').value='';
+  assert.equal(await env.writeMotorPids(),null);assert.equal(commands.length,beforeFill,'bad last row cannot write the first three motors');
+  fillMotor('RR',requested.RR);blockedAxis='RR';const beforePreflight=setCount;
+  assert.equal(await env.writeMotorPids(),null);assert.equal(setCount,beforePreflight);assert(el('pid-param-status').textContent.includes('未发送任何写入'));blockedAxis=null;
+  const savedPositions=JSON.stringify([model.X,model.Y,model.TH]),beforeBatch=Object.fromEntries(motors.map(axis=>[axis,{...model[axis]}]));
+  const batchStart=commands.length,writing=el('pid-motors-write').onclick();assert(el('pid-motors-write').disabled);assert(el('pid-motor-FL-kp').disabled);assert(el('pid-param-write').disabled);
+  assert.equal(await env.writeMotorPids(),undefined,'no concurrent batch');assert(await writing);assert(!el('pid-motors-write').disabled);
+  assert.equal(commands.length-batchStart,16);assert(commands.slice(batchStart,batchStart+4).every(c=>c.includes(' GET ')));
+  assert(commands.slice(-4).every(c=>c.includes(' GET ')),'a complete final revision sweep is required');
+  motors.forEach(axis=>{gains.forEach(k=>near(model[axis][k],requested[axis][k]));assert(el('pid-motor-'+axis+'-status').textContent.includes('整组读回确认'));});
+  assert.equal(JSON.stringify([model.X,model.Y,model.TH]),savedPositions,'four-wheel writes do not touch position controllers');
+  const motorPreset=JSON.parse(local.get('mecanum-pid-presets-v1'));motors.forEach(axis=>gains.forEach(k=>near(motorPreset[axis][k],requested[axis][k])));
+  env.loadMotorPidForms('previous');motors.forEach(axis=>checkMotor(axis,beforeBatch[axis]));env.loadMotorPidForms('saved');motors.forEach(axis=>gains.forEach(k=>near(Number(el('pid-motor-'+axis+'-'+k).value),requested[axis][k])));
+  // A rejected third SET stops the fourth and requires fresh reads; no rollback.
+  const partialStart=commands.length,partialSets=setCount;rejectSetAxis='RL';
+  assert.equal(await env.writeMotorPids(),null);assert.equal(setCount,partialSets+2);assert(!commands.slice(partialStart).some(c=>c.includes(' SET ')&&c.split(' ')[4]==='RR'));
+  assert(el('pid-motor-FL-status').textContent.includes('此前已逐轮读回'));assert(el('pid-motor-RL-status').textContent.includes('未确认'));assert(el('pid-motor-RR-status').textContent.includes('本轮未写入'));assert(el('pid-param-status').textContent.includes('可能部分生效'));
+  assert.equal(vm.runInContext('Object.keys(pidOnline.current).length',env),0);rejectSetAxis=null;
+  // Lost SET ACK may mean the parameter is already applied: never retry it.
+  const lostStart=commands.length,lostSets=setCount;dropSetAxis='FR';const lost=env.writeMotorPids();
+  for(let i=0;i<100&&!vm.runInContext('pidOnline.pending?.operation==="SET"&&pidOnline.pending?.axis==="FR"',env);i++)await new Promise(setImmediate);
+  assert(vm.runInContext('pidOnline.pending?.operation==="SET"&&pidOnline.pending?.axis==="FR"',env));[...timers.values()].forEach(fn=>fn());assert.equal(await lost,null);
+  assert.equal(setCount,lostSets+2);assert.equal(commands.slice(lostStart).filter(c=>c.includes(' SET ')&&c.split(' ')[4]==='FR').length,1);assert(el('pid-motor-FR-status').textContent.includes('未确认'));assert(el('pid-motor-RL-status').textContent.includes('本轮未写入'));dropSetAxis=null;
+  // Even after all four individual confirmations, an intervening revision at
+  // the final sweep prevents a false whole-group success.
+  changeFinal=true;assert.equal(await env.writeMotorPids(),null);assert(el('pid-param-status').textContent.includes('整组复核'));motors.forEach(axis=>assert(el('pid-motor-'+axis+'-status').textContent.includes('最终结果未确认')));
+  await env.readVehiclePid();env.loadMotorPidForms('current');motors.forEach(axis=>checkMotor(axis,model[axis]));
+  console.log('PASS: four-wheel unified/individual edits; complete validation and parked preflight; serialized writes and final revision sweep; presets; partial rejection/lost ACK/external change stop without retries or rollback.');
   // No automatic retransmission after an uncertain response.
   suppress=true;const timed=env.pidExchange('GET','FL');await new Promise(setImmediate);const pendingId=vm.runInContext('pidOnline.pending.id',env);const count=commands.length;
   [...timers.values()].forEach(fn=>fn());await assert.rejects(timed,/超时/);await new Promise(setImmediate);assert.equal(commands.length,count);

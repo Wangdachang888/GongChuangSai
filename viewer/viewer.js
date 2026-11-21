@@ -374,6 +374,7 @@ function drawPidModelTrace(context,result){
 function loadPidBurst(text,name='pid_burst.csv') {const data=parsePidBurstCsv(text),rate=Number($('pid-burst-rate')?.value)||100,sat=Number($('pid-burst-sat')?.value)||0,tol=Number($('pid-burst-tol')?.value)||.02;S.pidBurst={data,name,recorded:pidRecordedParams(data.comments),analysis:analyzePidBurst(data,{rate,satLimit:sat,tolerance:tol})};renderPidBurst();notify(`已加载独立 PID Burst：${name}。它不会改变 ULog43 任务日志。`);}
 
 const PID_AXES=['FL','FR','RL','RR','X','Y','TH'];
+const PID_MOTOR_AXES=PID_AXES.slice(0,4);
 const PID_VALUE_KEYS=['kp','ki','kd','integralMax','outputMax','periodMs','ffGain','deadzone','ffMinSpeed','ramp','slew','lpf','kickStep','kickMax','stuckRatio'];
 const pidOnline={current:{},revision:null,pending:null,nextId:Date.now()%1000000000,busy:false,previous:{},saved:{},candidates:[],candidateAxis:null};
 function decodePidParam(line){
@@ -408,6 +409,7 @@ function renderPidParams(){
   const selected=pidOnline.current[$('pid-param-axis').value];
   $('pid-param-context').textContent=selected?'当前只读配置：周期 '+selected.periodMs+' ms；前馈增益 '+selected.ffGain+'，死区 '+selected.deadzone+'，前馈速度阈值 '+selected.ffMinSpeed+'，目标斜坡 '+selected.ramp+'，输出变化限幅 '+selected.slew+'，测速低通 '+selected.lpf+'，kick '+selected.kickStep+'/'+selected.kickMax+'。':'';
   $('pid-param-write').disabled=pidOnline.busy;$('pid-param-read').disabled=pidOnline.busy;
+  for(const id of ['pid-param-axis','pid-param-kp','pid-param-ki','pid-param-kd','pid-param-rollback','pid-param-restore','pid-motors-fill','pid-motors-current','pid-motors-saved','pid-motors-previous','pid-motors-write',...['kp','ki','kd'].map(k=>'pid-motors-'+k),...PID_MOTOR_AXES.flatMap(axis=>['kp','ki','kd'].map(k=>'pid-motor-'+axis+'-'+k))])$(id).disabled=pidOnline.busy;
 }
 function fillPidParamForm(p){if(!p)return;for(const k of ['kp','ki','kd'])$('pid-param-'+k).value=String(p[k]);}
 function selectPidParamAxis(){const axis=$('pid-param-axis').value;fillPidParamForm(pidOnline.current[axis]);renderPidParams();if(S.pidBurst)renderPidBurst();}
@@ -449,6 +451,68 @@ function writeVehiclePid(){return withPidOnlineWork(async()=>{
   return verified;
 });}
 function loadPidPreset(previous=false){const axis=$('pid-param-axis').value,p=(previous?pidOnline.previous:pidOnline.saved)[axis];if(!p)return notify('该通道没有'+(previous?'可回滚':'本机保存')+'的参数。',true);fillPidParamForm(p);$('pid-param-status').textContent='已将 '+axis+' 的'+(previous?'上一组':'本机保存')+'参数填入，点击“停车写入并读回确认”后才生效。';}
+function pidMotorStatus(axis,text){$('pid-motor-'+axis+'-status').textContent=text;}
+function fillMotorPidForms(values){
+  for(const axis of PID_MOTOR_AXES){for(const k of ['kp','ki','kd'])$('pid-motor-'+axis+'-'+k).value=String(values[axis][k]);pidMotorStatus(axis,'待写入（编辑值）');}
+}
+function fillAllMotorPid(){
+  if(pidOnline.busy)return;
+  const p=Object.fromEntries(['kp','ki','kd'].map(k=>[k,$('pid-motors-'+k).value.trim()===''?NaN:Number($('pid-motors-'+k).value)]));
+  if(!validateOnlinePid('FL',p))return notify('统一填入失败：速度环 Kp 0…10、Ki 0…8、Kd 0…3，三项均不能为空。',true);
+  fillMotorPidForms(Object.fromEntries(PID_MOTOR_AXES.map(axis=>[axis,p])));
+  $('pid-param-status').textContent='同一组手动参数已填入四轮，尚未写入；单轮候选不能视为已适配其他轮子。';
+}
+function loadMotorPidForms(source){
+  if(pidOnline.busy)return;
+  const values=source==='current'?pidOnline.current:source==='previous'?pidOnline.previous:pidOnline.saved;
+  const missing=PID_MOTOR_AXES.filter(axis=>!values[axis]||!validateOnlinePid(axis,values[axis])||(source==='current'&&values[axis].revision!==pidOnline.revision));
+  if(missing.length)return notify('四轮载入未执行：'+missing.join('/')+' 缺少有效值'+(source==='current'?'或版本已过期，请先读取车辆全部 PID。':'。'),true);
+  fillMotorPidForms(values);
+  $('pid-param-status').textContent='已载入四轮'+({current:'读回值',previous:'各轮上次写入前值',saved:'本机保存值'}[source])+'，尚未写入。';
+}
+function pidGainsMatch(actual,expected){return ['kp','ki','kd'].every(k=>Math.abs(actual[k]-expected[k])<=Math.max(1e-7,Math.abs(expected[k])*2e-6));}
+function writeMotorPids(){return withPidOnlineWork(async()=>{
+  // Snapshot and validate all four edits before sending any SET. The existing
+  // firmware protocol is single-axis; revisions detect intervening changes.
+  const requested=Object.fromEntries(PID_MOTOR_AXES.map(axis=>[axis,Object.fromEntries(['kp','ki','kd'].map(k=>[k,$('pid-motor-'+axis+'-'+k).value.trim()===''?NaN:Number($('pid-motor-'+axis+'-'+k).value)]))]));
+  const invalid=PID_MOTOR_AXES.filter(axis=>!validateOnlinePid(axis,requested[axis]));
+  if(invalid.length)throw new Error(invalid.join('/')+' 参数无效；四轮均未写入。速度环 Kp 0…10、Ki 0…8、Kd 0…3，三项均不能为空。');
+  const before={},confirmed=[];let revision=null,attempted=null,stage='preflight';
+  for(const axis of PID_MOTOR_AXES)pidMotorStatus(axis,'本轮未写入');
+  try{
+    $('pid-param-status').textContent='四轮预检：读取实际参数和停车许可…';
+    for(const axis of PID_MOTOR_AXES){
+      const p=await pidExchange('GET',axis);before[axis]=p;
+      if(!p.editable)throw new Error(axis+' 不允许写入，请停止采集、等待缓存上传，并停车至少 500 ms。');
+      if(revision!==null&&revision!==p.revision)throw new Error('预检期间参数版本变化，请重新读取。');revision=p.revision;
+    }
+    stage='write';
+    for(const axis of PID_MOTOR_AXES){
+      attempted=axis;pidMotorStatus(axis,'正在写入 / 等待读回');
+      $('pid-param-status').textContent='正在写入 '+axis+'；已逐轮确认 '+confirmed.length+'/4…';
+      const applied=await pidExchange('SET',axis,requested[axis],revision);
+      const verified=await pidExchange('GET',axis);
+      if(applied.revision!==((revision+1)>>>0)||verified.revision!==applied.revision||!pidGainsMatch(applied,requested[axis])||!pidGainsMatch(verified,requested[axis]))throw new Error(axis+' 读回值或版本不匹配。');
+      revision=verified.revision;confirmed.push(axis);attempted=null;
+      pidOnline.previous[axis]=before[axis];pidOnline.saved[axis]={kp:verified.kp,ki:verified.ki,kd:verified.kd};savePidPreset();
+      pidMotorStatus(axis,'已逐轮读回；等待整组复核');
+    }
+    stage='final';
+    for(const axis of PID_MOTOR_AXES){const p=await pidExchange('GET',axis);if(p.revision!==revision||!pidGainsMatch(p,requested[axis]))throw new Error('整组复核时 '+axis+' 的值或版本变化。');}
+    for(const axis of PID_MOTOR_AXES)pidMotorStatus(axis,'整组读回确认 · 版本 '+revision);
+    fillPidParamForm(pidOnline.current[$('pid-param-axis').value]);
+    $('pid-param-status').textContent='四轮 PID 已全部写入并在同一版本 '+revision+' 读回确认。仅 RAM 生效，复位后需重新写入；请按原流程进行实车复测。';
+    return pidOnline.current;
+  }catch(e){
+    if(stage==='final')for(const axis of confirmed)pidMotorStatus(axis,'曾逐轮读回；整组最终结果未确认');
+    else for(const axis of confirmed)pidMotorStatus(axis,'此前已逐轮读回；整组未完成');
+    if(attempted)pidMotorStatus(attempted,'写入未确认；需重新读取实际值');
+    // A lost reply can hide a successful write or a device reset. Do not retain
+    // stale values as current, retry writes, or silently roll back other motors.
+    pidOnline.current={};pidOnline.revision=null;
+    throw new Error('四轮操作中止：'+e.message+' '+(confirmed.length?'此前逐轮确认：'+confirmed.join('/')+'。':'尚无逐轮确认。')+(stage==='preflight'?'预检未通过，未发送任何写入。':'已停止后续写入；可能部分生效，请先重新读取全部 PID，再决定后续操作。'));
+  }
+});}
 function usePidCandidate(index){const c=pidOnline.candidates[index],axis=pidOnline.candidateAxis,context=pidAnalysisContext();if(!c?.eligible||!axis||context.axis!==axis||!context.canApply)return; $('pid-param-axis').value=axis;fillPidParamForm(c);$('pid-param-status').textContent='已填入 '+axis+' 候选 '+c.name+'；尚未写入。停车后点击写入并核对回传。';}
 function pidAnalysisContext(){
   const axis=$('pid-param-axis').value,inner=PID_AXES.indexOf(axis)<4,recorded=S.pidBurst?.recorded;
@@ -1189,6 +1253,12 @@ function init() {
   $('pid-param-axis').onchange=selectPidParamAxis;
   $('pid-param-rollback').onclick=()=>loadPidPreset(true);
   $('pid-param-restore').onclick=()=>loadPidPreset(false);
+  $('pid-motors-fill').onclick=fillAllMotorPid;
+  $('pid-motors-current').onclick=()=>loadMotorPidForms('current');
+  $('pid-motors-saved').onclick=()=>loadMotorPidForms('saved');
+  $('pid-motors-previous').onclick=()=>loadMotorPidForms('previous');
+  $('pid-motors-write').onclick=writeMotorPids;
+  for(const axis of PID_MOTOR_AXES)for(const k of ['kp','ki','kd'])$('pid-motor-'+axis+'-'+k).oninput=()=>pidMotorStatus(axis,'待写入（编辑值）');
   try{const saved=JSON.parse(localStorage.getItem('mecanum-pid-presets-v1')||'{}');pidOnline.saved=Object.fromEntries(Object.entries(saved).filter(([axis,p])=>p&&validateOnlinePid(axis,p)));}catch(_){}
   renderPidParams();
   $('pid-live-start').onclick=()=>sendPidCommand('START');
