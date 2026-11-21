@@ -45,13 +45,18 @@ void PidFixture_Observe(void){pid_edit_observe();}
 Path("tmp/runtime_pid_test.c").write_text(head+extra+constants+stop+block+inputs+body+tick+wrappers,encoding="utf-8")
 '@ | python -
     if ($LASTEXITCODE) { throw 'Runtime PID fixture extraction failed' }
-    foreach ($profile in @('forward','lateral','normal06','normal09','creep','creep012')) {
+    foreach ($profile in @('forward','lateral','reverse','lateralreverse','custom','badorder','badnan','badlimit','badzero','creep','creep012')) {
         $testArgs = @('-DAPP_PID_TEST_ENABLE=1','-DAPP_RUN_MODE=4','-DAPP_PID_TEST_HOST')
         if ($profile -eq 'lateral') { $testArgs += '-DAPP_PID_TEST_AXIS=1' }
-        if ($profile -eq 'normal06') { $testArgs += '-DAPP_PID_TEST_SPEED_MPS=0.06f' }
-        if ($profile -eq 'normal09') { $testArgs += '-DAPP_PID_TEST_SPEED_MPS=0.09f' }
+        if ($profile -eq 'reverse') { $testArgs += '-DAPP_PID_TEST_DIRECTION=-1' }
+        if ($profile -eq 'lateralreverse') { $testArgs += @('-DAPP_PID_TEST_AXIS=1','-DAPP_PID_TEST_DIRECTION=-1') }
+        if ($profile -eq 'custom') { $testArgs += @('-DAPP_PID_TEST_LOW_MPS=0.02f','-DAPP_PID_TEST_MID_MPS=0.035f','-DAPP_PID_TEST_HIGH_MPS=0.06f') }
         if ($profile -eq 'creep') { $testArgs += @('-DAPP_PID_TEST_CREEP=1','-DAPP_PID_TEST_SPEED_MPS=0.006f') }
         if ($profile -eq 'creep012') { $testArgs += @('-DAPP_PID_TEST_CREEP=1','-DAPP_PID_TEST_SPEED_MPS=0.012f') }
+        if ($profile -eq 'badorder') { $testArgs += @('-DAPP_PID_TEST_INVALID','-DAPP_PID_TEST_MID_MPS=0.01f') }
+        if ($profile -eq 'badnan') { $testArgs += @('-DAPP_PID_TEST_INVALID','-DAPP_PID_TEST_LOW_MPS=NAN') }
+        if ($profile -eq 'badlimit') { $testArgs += @('-DAPP_PID_TEST_INVALID','-DAPP_PID_TEST_HIGH_MPS=0.3f') }
+        if ($profile -eq 'badzero') { $testArgs += @('-DAPP_PID_TEST_INVALID','-DAPP_PID_TEST_LOW_MPS=0.0f') }
         $binary = "tmp/test_pid_$profile.exe"
         & $Compiler @common @testArgs tests/ulog/test_ulog.c App/app_pid_test.c Hardware/bsp_ulog.c tmp/runtime_pid_test.c -lm -o $binary
         if ($LASTEXITCODE) { throw "PID test compile failed: $profile" }

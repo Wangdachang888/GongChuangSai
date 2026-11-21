@@ -6,21 +6,31 @@ static MecanumChassis_t *s_chassis;
 static AppPidTestStatus s_status;
 static uint32_t s_entered;
 
-/* 0: initial zero; 1..12: (+,0,-,0) x3; 13: final zero.
- * No repeated PID reset in intermediate zero stages. */
+/* Normal: initial zero, (A,B,C)x3 with six levels each, final zero.
+ * Creep retains its separate (+,0,-,0)x3 diagnostic. No PID resets. */
+static uint8_t final_step(void) { return APP_PID_TEST_CREEP ? 13u : 55u; }
 static uint32_t duration(uint8_t step)
 {
-    if (step == 0u || step == 13u || (step & 1u) == 0u) return 1000u;
-    return APP_PID_TEST_CREEP ? 4000u : 2000u;
+    static const uint16_t hold[6] = {500u,1000u,1500u,500u,1000u,1500u};
+    if (step == 0u || step == final_step()) return 1000u;
+    if (APP_PID_TEST_CREEP) return (step & 1u) ? 4000u : 1000u;
+    return hold[(step - 1u) % 6u];
 }
 
 static void command(void)
 {
     float v = 0.0f;
     uint32_t irq;
-    if (s_status.step > 0u && s_status.step < 13u) {
-        if ((s_status.step % 4u) == 1u) v = s_status.speed_mps;
-        else if ((s_status.step % 4u) == 3u) v = -s_status.speed_mps;
+    if (s_status.step > 0u && s_status.step < final_step()) {
+        if (APP_PID_TEST_CREEP) {
+            if ((s_status.step % 4u) == 1u) v = s_status.speed_mps;
+            else if ((s_status.step % 4u) == 3u) v = -s_status.speed_mps;
+        } else {
+            static const uint8_t order[18] = {0,1,0,2,1,2, 1,0,2,0,1,2, 2,1,0,1,2,0};
+            static const float levels[3] = {APP_PID_TEST_LOW_MPS,
+                APP_PID_TEST_MID_MPS, APP_PID_TEST_HIGH_MPS};
+            v = APP_PID_TEST_DIRECTION * levels[order[(s_status.step - 1u) % 18u]];
+        }
     }
     irq = __get_PRIMASK();
     __disable_irq();
@@ -51,15 +61,17 @@ void AppPidTest_Init(MecanumChassis_t *chassis)
 {
     s_chassis = chassis;
     s_status = (AppPidTestStatus){PID_TEST_IDLE, PID_TEST_REASON_NONE,
-        0u, APP_PID_TEST_AXIS, APP_PID_TEST_SPEED_MPS, 0u};
+        0u, APP_PID_TEST_AXIS, APP_PID_TEST_CREEP ? APP_PID_TEST_SPEED_MPS : APP_PID_TEST_HIGH_MPS, 0u};
     if (!chassis || !chassis->motor_lf || !chassis->motor_rf ||
         !chassis->motor_lb || !chassis->motor_rb ||
         !isfinite(s_status.speed_mps) || s_status.speed_mps <= 0.0f ||
         !isfinite(chassis->max_speed) || s_status.speed_mps > chassis->max_speed ||
         (APP_PID_TEST_CREEP ?
          (s_status.speed_mps != 0.006f && s_status.speed_mps != 0.012f) :
-         (s_status.speed_mps != 0.03f && s_status.speed_mps != 0.06f &&
-          s_status.speed_mps != 0.09f))) {
+         (!isfinite(APP_PID_TEST_LOW_MPS) || !isfinite(APP_PID_TEST_MID_MPS) ||
+          APP_PID_TEST_LOW_MPS <= 0.0f ||
+          APP_PID_TEST_LOW_MPS >= APP_PID_TEST_MID_MPS ||
+          APP_PID_TEST_MID_MPS >= APP_PID_TEST_HIGH_MPS))) {
         s_status.state = PID_TEST_FAULT;
         s_status.reason = PID_TEST_REASON_CONFIG;
     }
@@ -81,12 +93,12 @@ void AppPidTest_Poll(uint32_t now, AppPidTestReason fault)
     if (fault != PID_TEST_REASON_NONE) { AppPidTest_Stop(fault); return; }
     /* A delayed Poll never compresses/skips multiple motion phases. */
     if ((uint32_t)(now - s_status.started_ms) >=
-        (APP_PID_TEST_CREEP ? 40000u : 25000u)) {
+        (APP_PID_TEST_CREEP ? 40000u : 70000u)) {
         AppPidTest_Stop(PID_TEST_REASON_TIMEOUT);
         return;
     }
     if ((uint32_t)(now - s_entered) >= duration(s_status.step)) {
-        if (s_status.step == 13u) { AppPidTest_Stop(PID_TEST_REASON_COMPLETE); return; }
+        if (s_status.step == final_step()) { AppPidTest_Stop(PID_TEST_REASON_COMPLETE); return; }
         ++s_status.step;
         s_entered = now;
         command();

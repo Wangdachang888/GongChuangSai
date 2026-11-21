@@ -31,8 +31,25 @@
 #ifndef APP_PID_TEST_AXIS
 #define APP_PID_TEST_AXIS 0
 #endif
+/* Creep-only speed; normal profile uses LOW/MID/HIGH below. */
 #ifndef APP_PID_TEST_SPEED_MPS
 #define APP_PID_TEST_SPEED_MPS 0.03f
+#endif
+/* Normal identification: one direction per run, three strictly ordered levels. */
+#ifndef APP_PID_TEST_DIRECTION
+#define APP_PID_TEST_DIRECTION 1
+#endif
+#ifndef APP_PID_TEST_LOW_MPS
+#define APP_PID_TEST_LOW_MPS 0.015f
+#endif
+#ifndef APP_PID_TEST_MID_MPS
+#define APP_PID_TEST_MID_MPS 0.030f
+#endif
+#ifndef APP_PID_TEST_HIGH_MPS
+#define APP_PID_TEST_HIGH_MPS 0.045f
+#endif
+#if APP_PID_TEST_DIRECTION != 1 && APP_PID_TEST_DIRECTION != -1
+#error Invalid PID test direction
 #endif
 /* Separate, unvalidated creep profile: explicitly select 0.006/0.012 m/s. */
 #ifndef APP_PID_TEST_CREEP

@@ -70,9 +70,18 @@ static void reset_module(void)
 }
 static void check_stage(unsigned step)
 {
-    float v = (step > 0 && step < 13) ?
-        (step % 4 == 1 ? APP_PID_TEST_SPEED_MPS :
-         step % 4 == 3 ? -APP_PID_TEST_SPEED_MPS : 0) : 0;
+    /* Independent expected rows, covering every block and all three cycles. */
+    static const float expected[3][6] = {
+        {APP_PID_TEST_LOW_MPS,APP_PID_TEST_MID_MPS,APP_PID_TEST_LOW_MPS,APP_PID_TEST_HIGH_MPS,APP_PID_TEST_MID_MPS,APP_PID_TEST_HIGH_MPS},
+        {APP_PID_TEST_MID_MPS,APP_PID_TEST_LOW_MPS,APP_PID_TEST_HIGH_MPS,APP_PID_TEST_LOW_MPS,APP_PID_TEST_MID_MPS,APP_PID_TEST_HIGH_MPS},
+        {APP_PID_TEST_HIGH_MPS,APP_PID_TEST_MID_MPS,APP_PID_TEST_LOW_MPS,APP_PID_TEST_MID_MPS,APP_PID_TEST_HIGH_MPS,APP_PID_TEST_LOW_MPS}};
+    float v = 0;
+    if (APP_PID_TEST_CREEP) {
+        if (step > 0 && step < 13)
+            v = step % 4 == 1 ? APP_PID_TEST_SPEED_MPS : step % 4 == 3 ? -APP_PID_TEST_SPEED_MPS : 0;
+    } else if (step > 0 && step < 55) {
+        v = APP_PID_TEST_DIRECTION * expected[((step-1)/6)%3][(step-1)%6];
+    }
     assert(fabsf(chassis.vx_target-(APP_PID_TEST_AXIS == 0 ? v : 0)) < 1e-7f);
     assert(fabsf(chassis.vy_target-(APP_PID_TEST_AXIS == 1 ? v : 0)) < 1e-7f);
     assert(chassis.mode == 0 && chassis.body_frame && chassis.omega_target == 0);
@@ -89,23 +98,34 @@ static void poll_step(uint32_t ms)
 }
 int main(int argc, char **argv)
 {
-    uint32_t start, expected = APP_PID_TEST_CREEP ? 32000u : 20000u;
+    double displacement = 0;
+    uint32_t start, expected = APP_PID_TEST_CREEP ? 32000u : 56000u;
     const char *scenario = argc > 1 ? argv[1] : "unit";
     reset_module();
+#if defined(APP_PID_TEST_INVALID)
+    assert(AppPidTest_Status()->reason == PID_TEST_REASON_CONFIG && !AppPidTest_Start(0));
+    puts("PASS invalid level configuration rejected"); return 0;
+#endif
     assert(AppPidTest_Status()->state == PID_TEST_IDLE && !commands && !stops);
     for (now=0; now<10000; now++) AppPidTest_Poll(now, PID_TEST_REASON_NONE);
     assert(AppPidTest_Status()->state == PID_TEST_IDLE && !commands);
     start = now = 0xfffffff0u;
     assert(AppPidTest_Start(now) && !AppPidTest_Start(now));
-    for (unsigned step=0; step<14; ++step) {
-        uint32_t duration = (step == 0 || step == 13 || step % 2 == 0) ?
-            1000 : APP_PID_TEST_CREEP ? 4000 : 2000;
+    for (unsigned step=0; step<(APP_PID_TEST_CREEP ? 14u : 56u); ++step) {
+        const unsigned final = APP_PID_TEST_CREEP ? 13u : 55u;
+        static const unsigned holds[6]={500,1000,1500,500,1000,1500};
+        uint32_t duration = step == 0 || step == final ? 1000 :
+            APP_PID_TEST_CREEP ? (step % 2 ? 4000 : 1000) : holds[(step-1)%6];
         check_stage(step);
+        displacement += (chassis.vx_target + chassis.vy_target) * duration / 1000.0;
         AppPidTest_Poll(now+duration-1, PID_TEST_REASON_NONE);
         assert(AppPidTest_Status()->step == step && commands == step+1 && !stops);
         now+=duration; AppPidTest_Poll(now, PID_TEST_REASON_NONE);
     }
-    assert(now-start == expected && commands == 14 && stops == 4);
+    if (!APP_PID_TEST_CREEP)
+        assert(fabs(displacement - APP_PID_TEST_DIRECTION *
+            (19.5 * APP_PID_TEST_LOW_MPS + 15.0 * APP_PID_TEST_MID_MPS + 19.5 * APP_PID_TEST_HIGH_MPS)) < 1e-6);
+    assert(now-start == expected && commands == (APP_PID_TEST_CREEP ? 14u : 56u) && stops == 4);
     assert(AppPidTest_Status()->state == PID_TEST_DONE && !AppPidTest_Start(now));
     AppPidTest_Stop(PID_TEST_REASON_MANUAL);
     assert(AppPidTest_Status()->reason == PID_TEST_REASON_COMPLETE);
@@ -117,8 +137,13 @@ int main(int argc, char **argv)
         assert(AppPidTest_Status()->reason == (AppPidTestReason)reason && !AppPidTest_Start(now));
     }
     reset_module(); assert(AppPidTest_Start(now));
-    AppPidTest_Poll(now+(APP_PID_TEST_CREEP ? 40000 : 25000), PID_TEST_REASON_NONE);
+    AppPidTest_Poll(now+(APP_PID_TEST_CREEP ? 40000 : 70000), PID_TEST_REASON_NONE);
     assert(AppPidTest_Status()->state == PID_TEST_TIMEOUT && stops == 4);
+    reset_module(); assert(AppPidTest_Start(now));
+    AppPidTest_Poll(now+5000, PID_TEST_REASON_NONE);
+    assert(AppPidTest_Status()->step == 1 && commands == 2);
+    AppPidTest_Poll(now+5001, PID_TEST_REASON_NONE);
+    assert(AppPidTest_Status()->step == 1); /* delayed polls cannot skip holds */
     reset_module(); assert(AppPidTest_Start(now));
     AppPidTest_Poll(now+1, PID_TEST_REASON_IMU);
     assert(AppPidTest_Status()->state == PID_TEST_FAULT && stops == 4);
