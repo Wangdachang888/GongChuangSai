@@ -140,13 +140,13 @@ function pidResponseMetrics(samples,tol=.02,satLimit=1000,lowSpeed=true) {
 }
 function analyzePidBurst(data,options={}) {
   const rate=clamp(Number(options.rate)||100,1,2000),rawTimes=data.rows.map((r,i)=>data.fields.time===null?i/rate:burstNumber(r,data.fields.time)/1000),positive=rawTimes.slice(1).map((t,i)=>t-rawTimes[i]).filter(x=>x>0),dt=pidMedian(positive)||1/rate;
-  let nonMonotonic=0,missing=0,gaps=0,jitter=0;const times=[];
-  rawTimes.forEach((t,i)=>{if(!finite(t))missing++;if(i){const h=t-rawTimes[i-1];if(h<=0)nonMonotonic++;if(h>dt*1.8)gaps++;else if(h>0&&Math.abs(h-dt)>Math.max(.00101,dt*.15))jitter++;}times.push(finite(t)&&(!i||t>times[i-1])?t:(i?times[i-1]+dt:0));});
+  let nonMonotonic=0,missing=0,gaps=0,jitter=0;const times=[],issues=[];
+  rawTimes.forEach((t,i)=>{if(!finite(t))missing++;if(i){const h=t-rawTimes[i-1];if(h<=0){nonMonotonic++;if(issues.length<10)issues.push({row:i+1,previous:rawTimes[i-1],time:t,kind:'rollback_or_duplicate'});}if(h>dt*1.8){gaps++;if(issues.length<10)issues.push({row:i+1,previous:rawTimes[i-1],time:t,kind:'gap'});}else if(h>0&&Math.abs(h-dt)>Math.max(.00101,dt*.15))jitter++;}times.push(finite(t)&&(!i||t>times[i-1])?t:(i?times[i-1]+dt:0));});
   const tolerance=clamp(Number(options.tolerance)||.02,.001,.5),satLimit=Math.max(0,Number(options.satLimit)||0),wheels={};
   for(const w of WHEELS){const samples=data.rows.map((r,i)=>({t:times[i],target:burstNumber(r,data.fields[w+'_target']),actual:burstNumber(r,data.fields[w+'_actual']),output:burstNumber(r,data.fields[w+'_output'])}));
     wheels[w]={samples,...pidResponseMetrics(samples,tolerance,satLimit),hasTarget:data.fields[w+'_target']!==null,hasActual:data.fields[w+'_actual']!==null,hasOutput:data.fields[w+'_output']!==null};}
   const span=rawTimes.at(-1)-rawTimes[0];
-  return {times,wheels,rate,tolerance,satLimit,rows:data.rows.length,quality:{dt,measuredRate:span>0?(rawTimes.length-1)/span:NaN,medianRate:1/dt,nonMonotonic,missing,gaps,jitter,inferredTime:data.fields.time===null,skipped:data.skipped||0}};
+  return {times,wheels,rate,tolerance,satLimit,rows:data.rows.length,quality:{dt,measuredRate:span>0&&!nonMonotonic&&!missing?(rawTimes.length-1)/span:NaN,medianRate:1/dt,issues,nonMonotonic,missing,gaps,jitter,inferredTime:data.fields.time===null,skipped:data.skipped||0}};
 }
 function pidLinearSolve(matrix,vector){
   const a=matrix.map((r,i)=>[...r,vector[i]]),n=vector.length;
@@ -190,22 +190,53 @@ function pidOutputErrorFit(samples,end,dt,delay,tau,friction){
   coef=coef.map((v,j)=>v/scales[j]);if(!(coef[0]>0&&coef[0]<100))return null;
   return {a,b:coef[0]*(1-a),friction:friction?coef[1]*(1-a):0,bias:coef[friction?2:1]*(1-a),delay,dt,tau,gain:coef[0],deadTime:delay*dt,method:'output-error'};
 }
+// Firmware order: measured y[k] -> PID -> applied u[k]; the plant sees u[k-1].
+function pidControllerStep(state,r,y,params,control){
+  const h=control.periodMs/1000,e=r-y,sign=Math.abs(r)>control.ffMinSpeed?Math.sign(r):0;
+  const ff=sign?r*control.ffGain+sign*control.deadzone:0,p=params.kp*e,d=params.kd*(e-state.previousError)/h,pre=ff+p+d;
+  state.previousError=e;
+  if(pre<control.outputMax&&pre> -control.outputMax)state.integral=clamp(state.integral+e*h,-control.integralMax,control.integralMax);
+  state.kick=sign&&Math.abs(y)<control.stuckRatio*Math.abs(r)?Math.min(control.kickMax,state.kick+control.kickStep):state.kick*.97;
+  if(state.kick<1)state.kick=0;
+  let next=pre+params.ki*state.integral+sign*state.kick;if(sign&&next*sign<0)next=0;
+  const limited=clamp(next,-control.outputMax,control.outputMax);
+  state.output+=clamp(limited-state.output,-control.slew,control.slew);
+  return {ff,p,d,pre,integral:state.integral,kick:state.kick,limited,output:state.output};
+}
+function pidControllerInitial(s,params,control){
+  const e=s.target-s.actual,sign=Math.abs(s.target)>control.ffMinSpeed?Math.sign(s.target):0;
+  return {output:s.output,previousError:e,kick:0,integral:params.ki>0?clamp((s.output-(sign?s.target*control.ffGain+sign*control.deadzone:0)-params.kp*e)/params.ki,-control.integralMax,control.integralMax):0};
+}
 function auditPidController(metric,control){
-  const samples=metric.samples,h=control.periodMs/1000,ff=r=>Math.abs(r)>control.ffMinSpeed?r*control.ffGain+Math.sign(r)*control.deadzone:0;
-  let last=samples[0].output,previousError=samples[0].target-samples[0].actual,kick=0,integral=control.ki>0?clamp((last-ff(samples[0].target)-control.kp*previousError)/control.ki,-control.integralMax,control.integralMax):0;
-  let error=0,n=0;const regimes={forward:{n:0,trackingError:0,saturated:0,stall:0},reverse:{n:0,trackingError:0,saturated:0,stall:0},zero:{n:0,trackingError:0,saturated:0,stall:0}};
-  for(let i=1;i<samples.length;i++){const s=samples[i];if(![s.target,s.actual,s.output].every(finite))continue;
-    const sub=Math.max(1,Math.round((s.t-samples[i-1].t)/h));if(sub>4)continue;
-    for(let j=1;j<=sub;j++){const f=j/sub,r=samples[i-1].target+(s.target-samples[i-1].target)*f,y=samples[i-1].actual+(s.actual-samples[i-1].actual)*f,e=r-y,sign=Math.abs(r)>control.ffMinSpeed?Math.sign(r):0,pre=ff(r)+control.kp*e+control.kd*(e-previousError)/h;previousError=e;
-      if(Math.abs(pre)<control.outputMax)integral=clamp(integral+e*h,-control.integralMax,control.integralMax);
-      kick=sign&&Math.abs(y)<control.stuckRatio*Math.abs(r)?Math.min(control.kickMax,kick+control.kickStep):kick*.97;if(kick<1)kick=0;
-      let u=pre+control.ki*integral+sign*kick;if(sign&&u*sign<0)u=0;last+=clamp(clamp(u,-control.outputMax,control.outputMax)-last,-control.slew,control.slew);}
-    if(i>40){error+=Math.abs(last-s.output);n++;}
+  const samples=metric.samples,h=control.periodMs/1000,state=pidControllerInitial(samples[0],control,control);
+  let error=0,n=0,aligned=true,maxError=0;const regimes={forward:{n:0,trackingError:0,saturated:0,stall:0},reverse:{n:0,trackingError:0,saturated:0,stall:0},zero:{n:0,trackingError:0,saturated:0,stall:0}};
+  for(let i=1;i<samples.length;i++){const s=samples[i],gap=s.t-samples[i-1].t;
+    if(![s.target,s.actual,s.output].every(finite)||Math.abs(gap-h)>.00101){aligned=false;continue;}
+    const predicted=pidControllerStep(state,s.target,s.actual,control,control).output;
+    if(i>40){const e=Math.abs(predicted-s.output);error+=e;maxError=Math.max(maxError,e);n++;}
     const regime=regimes[s.target>control.ffMinSpeed?'forward':s.target< -control.ffMinSpeed?'reverse':'zero'];regime.n++;regime.trackingError+=Math.abs(s.target-s.actual);if(Math.abs(s.output)>=control.outputMax*.999)regime.saturated++;
     if(Math.abs(s.target)>Math.max(20,metric.maxTarget*.05)&&Math.abs(s.actual)<Math.max(10,Math.abs(s.target)*.1)&&Math.abs(s.output)>control.outputMax*.3)regime.stall++;
   }
   for(const r of Object.values(regimes)){r.meanAbsError=r.n?r.trackingError/r.n:null;r.saturationRatio=r.n?r.saturated/r.n:null;r.stallRatio=r.n?r.stall/r.n:null;delete r.trackingError;}
-  return {meanAbsOutputError:n?error/n:null,normalizedError:n?error/n/control.outputMax:null,regimes,meaning:'使用实测轮速重放固件输出；初始积分/kick未知，跳过前40帧；不是电机模型验证',stallMeaning:'非零目标、接近零轮速且输出>30%限幅的样本，仅提示停滞/静摩擦/负载待查，不证明机械故障'};
+  return {aligned,initialStateEstimated:true,meanAbsOutputError:n?error/n:null,normalizedError:n?error/n/control.outputMax:null,maxAbsOutputError:n?maxError:null,regimes,meaning:'逐帧使用实测轮速；不插值补造控制周期。初始积分/kick仍为估计，跳过前40帧不代表状态已知；不是电机模型验证',stallMeaning:'非零目标、接近零轮速且输出>30%限幅仅提示停滞；先检查反馈/驱动/机械，不因评分低强推PID'};
+}
+function pidRegimeErrors(model,samples,start,end,scale){
+  const groups={forward:[],reverse:[],low:[],high:[]},max=samples.reduce((v,s)=>Math.max(v,Math.abs(s.target)),0);let y=samples[start-1].actual;
+  for(let k=start;k<end;k++){const u=samples[k-1-model.delay].output;y=model.a*y+model.b*u+model.friction*Math.sign(u)+model.bias;
+    const e=(samples[k].actual-y)/scale,r=samples[k].target;
+    if(Math.abs(r)>5){groups[r>0?'forward':'reverse'].push(e);groups[Math.abs(r)<=max*.35?'low':'high'].push(e);}}
+  return Object.fromEntries(Object.entries(groups).map(([k,v])=>[k,{n:v.length,freeRunNrmse:v.length?Math.sqrt(pidMean(v.map(e=>e*e))):null}]));
+}
+let pidValidation=null;
+function validatePidExperiment(plant,analysis,wheel){
+  const q=analysis.quality||{},samples=analysis.wheels[wheel]?.samples||[],reasons=[];
+  if(!plant.model)return {valid:false,reasons:['训练模型不可用']};
+  if(q.inferredTime||q.nonMonotonic||q.gaps||q.jitter||q.missing||q.skipped||Math.abs(q.dt-plant.model.dt)>.0001||samples.length<160||samples.some(s=>![s.t,s.target,s.actual,s.output].every(finite)))return {valid:false,reasons:['验证文件须为独立完整200Hz目标/实测/输出日志，不拼接、不重采样']};
+  if(pidStd(samples.map(s=>s.target))<=3||pidStd(samples.map(s=>s.output))<=1||pidStd(samples.map(s=>s.actual))<=5)return {valid:false,reasons:['验证试验激励/轮速变化不足，静止文件不能证明模型泛化']};
+  const start=plant.model.delay+1,test=pidModelErrors(plant.model,samples,start,samples.length,plant.scale),regimes=pidRegimeErrors(plant.model,samples,start,samples.length,plant.scale);
+  if(test.freeRunNrmse>.25||test.oneStepNrmse>.15)reasons.push('跨试验预测未通过：自由运行≤25%、单步≤15%');
+  for(const [name,r] of Object.entries(regimes))if(r.n>=40&&r.freeRunNrmse>.25)reasons.push(name+'分组自由运行误差超过25%');
+  return {valid:!reasons.length,reasons,test,regimes,meaning:'冻结原模型，用另一文件的实际输出预测；不重新拟合，也不证明新PID已改善'};
 }
 const pidPlantCache=new WeakMap(),pidCandidateCache=new WeakMap();
 let pidPlotState=null;
@@ -213,16 +244,17 @@ function identifyPidPlant(analysis,wheel){const key=analysis.wheels[wheel];if(pi
 function computePidPlant(analysis,wheel){
   const m=analysis.wheels[wheel],q=analysis.quality||{},reasons=[];
   if(!m?.hasOutput)reasons.push('缺少该轮实际输出，不能用目标速度冒充电机输入');
-  if(q.inferredTime||q.missing||q.nonMonotonic||q.gaps||q.jitter||q.skipped)reasons.push('时间戳缺失、重复、跳帧或采样不均匀，请使用完整停车缓存');
-  if(m?.n<160||!(q.dt>0&&q.dt<=.02001))reasons.push('需要至少160帧、50 Hz以上的连续目标/实测/输出数据');
+  if(q.inferredTime||q.missing||q.nonMonotonic||q.gaps||q.jitter||q.skipped)reasons.push('时间戳缺失、重复、跳帧或采样不均匀，请使用完整200Hz实时PID CSV；100Hz缓存仅用于诊断');
+  if(m?.n<160||!(q.dt>0&&Math.abs(q.dt-.005)<.0001))reasons.push('辨识须至少160帧完整200Hz实时目标/实测/输出数据；100Hz缓存不能恢复5ms控制过程');
+  if(q.issues?.length)reasons.push(wheel.toUpperCase()+'异常区间：'+q.issues.map(v=>'第'+v.row+'数据帧 '+fmt(v.previous,3)+'→'+fmt(v.time,3)+'s').join('；')+'；分别导出每次采集，不能拼接复位前后日志');
   let samples=(m?.samples||[]).slice(-12000);if(samples.some(s=>![s.t,s.target,s.actual,s.output].every(finite)))reasons.push('目标、实测或输出存在缺失值');
   const targetStd=pidStd(samples.map(s=>s.target)),outputStd=pidStd(samples.map(s=>s.output));let scale=Math.max(5,pidStd(samples.map(s=>s.actual))||0);
+  if(samples.some(v=>Math.abs(v.target)>5)&&samples.every(v=>Math.abs(v.actual)<.1))reasons.push(wheel.toUpperCase()+'实测轮速全为零：先检查编码器/驱动/机械，不能靠改PID解决缺失反馈');
   if(!(targetStd>Math.max(3,(m?.maxTarget||0)*.025)&&outputStd>1&&scale>5))reasons.push('目标或控制输出激励不足，恒速/静止数据不能唯一辨识动态模型');
   if(reasons.length)return {valid:false,reasons};
-  // Millisecond timestamp quantisation (e.g. 5/6 ms) is not a dropped frame.
-  // Resample within that tolerance only: speed/target linear, applied PWM held.
-  const source=samples,resampled=[];let pos=0;
-  for(let t=source[0].t;t<=source.at(-1).t+1e-9;t+=q.dt){while(pos+1<source.length&&source[pos+1].t<t)pos++;const a=source[pos],b=source[Math.min(pos+1,source.length-1)],f=b.t>a.t?clamp((t-a.t)/(b.t-a.t),0,1):0;resampled.push({t,target:a.target+(b.target-a.target)*f,actual:a.actual+(b.actual-a.actual)*f,output:f>=1-1e-8?b.output:a.output});}samples=resampled;
+  // Preserve each observed controller sample, not an interpolated 5ms waveform.
+  // HAL ms timestamps have 5/6ms quantisation; model time is firmware control time.
+  samples=samples.map((v,i)=>({...v,observedTime:v.t,t:samples[0].t+i*q.dt}));
   const train=Math.floor(samples.length*.6),validation=Math.floor(samples.length*.8),models=[];
   scale=Math.max(5,pidStd(samples.slice(0,train).map(s=>s.actual))||0);
   if(scale<=5)return {valid:false,reasons:['训练时段轮速变化不足，不能用后续测试时段替代辨识激励']};
@@ -239,27 +271,22 @@ function computePidPlant(analysis,wheel){
   if(!models.length)return {valid:false,reasons:['未找到稳定正增益模型；可能存在编码器方向、非线性或闭环辨识偏差']};
   const model=models[0],test=pidModelErrors(model,samples,validation,samples.length,scale);
   if(model.validation.freeRunNrmse>.25||test.freeRunNrmse>.25||test.oneStepNrmse>.15)reasons.push('独立时段自由运行预测未通过（归一化误差须≤25%，单步≤15%）');
-  return {valid:!reasons.length,reasons,model,test,scale,samples,split:{train,validation,test:samples.length-validation},fitPercent:clamp(100*(1-test.freeRunNrmse),0,100),limitations:['闭环日志辨识可能有噪声偏差，模型通过不代表实车保证','模型已包含测速低通的有效动态，不重复叠加LPF','单轮有效模型不包含载重变化、打滑、四轮耦合与电池变化']};
+  const regimes=pidRegimeErrors(model,samples,validation,samples.length,scale);
+  for(const [name,r] of Object.entries(regimes))if(r.n>=40&&r.freeRunNrmse>.25)reasons.push(name+'测试分组预测误差超过25%');
+  const scope={directions:[...new Set(samples.slice(0,train).filter(s=>Math.abs(s.target)>5).map(s=>s.target>0?'forward':'reverse'))],targetRange:[Math.min(...samples.slice(0,train).map(s=>s.target)),Math.max(...samples.slice(0,train).map(s=>s.target))],clock:'firmware_control_period',used:samples.length,omitted:Math.max(0,m.samples.length-samples.length)};
+  return {valid:!reasons.length,reasons,model,test,regimes,scope,scale,samples,split:{train,validation,test:samples.length-validation},fitPercent:clamp(100*(1-test.freeRunNrmse),0,100),limitations:['闭环日志辨识可能有噪声偏差，模型通过不代表实车保证','模型已包含测速低通的有效动态，不重复叠加LPF','单轮有效模型不包含载重变化、打滑、四轮耦合与电池变化']};
 }
 function simulatePidCandidate(plant,params,control,variation={gain:1,tau:1,delay:0}){
-  const samples=plant.samples,model=plant.model,h=control.periodMs/1000,dt=model.dt,sub=Math.round(dt/h);
-  if(!(h>0&&sub>=1&&Math.abs(sub*h-dt)<dt*.05))return null;
+  const samples=plant.samples,model=plant.model,h=control.periodMs/1000;
+  if(!(h>0&&Math.abs(model.dt-h)<h*.01))return null;
   const a=Math.exp(-h/(model.tau*variation.tau)),b=model.gain*variation.gain*(1-a),factor=(1-a)/(1-model.a),delay=Math.max(0,Math.round((model.deadTime+variation.delay)/h));
-  const history=Array(delay+1).fill(samples[0].output),pred=[{...samples[0]}];let y=samples[0].actual,u=samples[0].output,kick=0,lastError=samples[0].target-y;
-  const ff=r=>Math.abs(r)>control.ffMinSpeed?r*control.ffGain+Math.sign(r)*control.deadzone:0;
-  let integral=params.ki>1e-9?clamp((u-ff(samples[0].target)-params.kp*lastError)/params.ki,-control.integralMax,control.integralMax):0;
+  const history=Array(delay+1).fill(samples[0].output),pred=[{...samples[0]}],state=pidControllerInitial(samples[0],control,control);let y=samples[0].actual;
   for(let i=1;i<samples.length;i++){
-    for(let j=1;j<=sub;j++){const r=samples[i-1].target+(samples[i].target-samples[i-1].target)*j/sub,e=r-y,d=params.kd*(e-lastError)/h;lastError=e;
-      const pre=ff(r)+params.kp*e+d;if(Math.abs(pre)<control.outputMax)integral=clamp(integral+e*h,-control.integralMax,control.integralMax);
-      const sign=Math.abs(r)>control.ffMinSpeed?Math.sign(r):0;
-      kick=sign&&Math.abs(y)<control.stuckRatio*Math.abs(r)?Math.min(control.kickMax,kick+control.kickStep):kick*.97;if(kick<1)kick=0;
-      let next=pre+params.ki*integral+sign*kick;if(sign&&next*sign<0)next=0;
-      next=clamp(next,-control.outputMax,control.outputMax);u+=clamp(next-u,-control.slew,control.slew);
-      history.push(u);const delayed=history[history.length-2-delay];if(history.length>delay+3)history.shift();
-      y=a*y+b*delayed+factor*(model.friction*Math.sign(delayed)+model.bias);
-      if(!finite(y)||Math.abs(y)>Math.max(200,plant.scale*40))return null;
-    }
-    pred.push({t:samples[i].t,target:samples[i].target,actual:y,output:u});
+    const delayed=history.shift();
+    y=a*y+b*delayed+factor*(model.friction*Math.sign(delayed)+model.bias);
+    if(!finite(y)||Math.abs(y)>Math.max(200,plant.scale*40))return null;
+    const u=pidControllerStep(state,samples[i].target,y,params,control).output;history.push(u);
+    pred.push({t:samples[i].t,observedTime:samples[i].observedTime,target:samples[i].target,actual:y,output:u});
   }
   return {samples:pred,...pidResponseMetrics(pred,.02,control.outputMax)};
 }
@@ -272,30 +299,36 @@ function evaluatePidProposal(plant,base,control,candidate,baselineRuns){
 }
 function buildPidCandidates(analysis,base={},options={}){
   const key=WHEELS.map(w=>analysis.wheels[w]).find(m=>m?.n);if(!key)return computePidCandidates(analysis,base,options);
-  const signature=JSON.stringify({base,control:options.control}),old=pidCandidateCache.get(key);if(old?.signature===signature)return old.result;
-  const result=computePidCandidates(analysis,base,options);pidCandidateCache.set(key,{signature,result});return result;
+  const signature=JSON.stringify({base,control:options.control}),old=pidCandidateCache.get(key);if(old?.signature===signature&&old.validation===options.validation)return old.result;
+  const result=computePidCandidates(analysis,base,options);pidCandidateCache.set(key,{signature,validation:options.validation,result});return result;
 }
 function computePidCandidates(analysis,base={},options={}){
   const wheel=WHEELS.find(w=>analysis.wheels[w]?.n),m=analysis.wheels[wheel];
   const summary={overshoot:m?.overshootPct,settling:m?.settlingTime,sat:m?.saturationRatio,steady:m?.steadyError,steadyRatio:m?.maxTarget?m.steadyError/m.maxTarget:null};
   if(!wheel)return {candidates:[],summary,plant:{valid:false,reasons:['没有有效轮速样本']}};
-  const plant=identifyPidPlant(analysis,wheel),control=options.control,controllerAudit=control?auditPidController(m,control):null;
+  const plant={...identifyPidPlant(analysis,wheel)},control=options.control,controllerAudit=control?auditPidController(m,control):null;
   if(controllerAudit)plant.controllerAudit=controllerAudit;
+  if(options.validation){plant.external=validatePidExperiment(plant,options.validation,wheel);if(!plant.external.valid){plant.valid=false;plant.reasons=[...(plant.reasons||[]),...plant.external.reasons];}}
+  plant.limitations=[...(plant.limitations||[]),options.validation?'跨文件结果只验证电机模型，不证明新参数实车改善':'尚无跨试验验证，只允许作为本轮工况下待复测候选'];
   if(!plant.valid||!control)return {candidates:[],summary,plant,warnings:control?[]:['缺少唯一的车辆实际PID与前馈/限幅快照，不能验证候选']};
-  if(controllerAudit.normalizedError>.08)return {candidates:[],summary,plant,warnings:['实测反馈驱动的控制输出重放偏差超过8%限幅，参数快照/初始状态/采样不足以验证控制器，暂停推荐']};
+  if(!controllerAudit.aligned||!finite(controllerAudit.normalizedError)||controllerAudit.normalizedError>.08)return {candidates:[],summary,plant,warnings:['实测反馈驱动的控制输出重放偏差超过8%限幅，参数快照/初始状态/采样不足以验证控制器，暂停推荐']};
   const scenarios=[{gain:1,tau:1,delay:0},{gain:.8,tau:1.2,delay:plant.model.dt},{gain:1.2,tau:.8,delay:0}],baselineRuns=scenarios.map(v=>simulatePidCandidate(plant,base,control,v));
   if(baselineRuns.some(r=>!r))return {candidates:[],summary,plant,warnings:['基准控制器仿真发散或采样周期不匹配']};
   const replayError=Math.sqrt(pidMean(baselineRuns[0].samples.map((s,i)=>(s.actual-plant.samples[i].actual)**2)))/plant.scale;
   plant.controllerReplayNrmse=replayError;
-  if(replayError>.35)return {candidates:[],summary,plant,warnings:['实际PID基准闭环重放误差超过35%，模型或初始状态不可信，暂停推荐']};
+  if(replayError>.25)return {candidates:[],summary,plant,warnings:['实际PID基准闭环重放误差超过25%，模型或初始状态不可信，暂停推荐']};
   const bounded=p=>Object.fromEntries(['kp','ki','kd'].map((k,i)=>{const lo=Math.max(0,base[k]*.8),hi=Math.min([10,8,3][i],Math.max(base[k]*1.2,k==='kd'?base.kp*control.periodMs/1000*.1:.0001));return [k,clamp(p[k],lo,hi)];}));
   const raw=[];for(const p of [.8,.9,1,1.1,1.2])for(const i of [.8,1,1.2])raw.push({name:'局部搜索 P×'+p+' I×'+i,...bounded({kp:base.kp*p,ki:base.ki*i,kd:base.kd}),reason:'保留实车前馈、条件积分、同向约束、kick和输出slew'});
   // SIMC PI: Kc=tau/(K*(lambda+theta)), Ti=min(tau,4*(lambda+theta)).
   // Absolute SIMC values are projected into the same small-step trust region.
   for(const factor of [1,2,4]){const lambda=Math.max(plant.model.deadTime,plant.model.tau*.5,control.periodMs/1000*4)*factor,kp=plant.model.tau/(plant.model.gain*(lambda+plant.model.deadTime)),ti=Math.min(plant.model.tau,4*(lambda+plant.model.deadTime));raw.push({name:'SIMC PI λ×'+factor,...bounded({kp,ki:kp/ti,kd:0}),reason:'SIMC模型种子；按实际固件并联式Ki换算后限制单次改变量'});}
+  for(const d of [.025,.05,.1])for(const p of [.9,1.1])raw.push({name:'联合P/D小步搜索',...bounded({...base,kp:base.kp*p,kd:base.kd>0?base.kd*(1+d):base.kp*control.periodMs/1000*d}),reason:'微分上限沿用原步幅边界；低速量化噪声下仍须复测'});
   if(base.kd>0)raw.push({name:'降低微分噪声',...bounded({...base,kd:base.kd*.8}),reason:'当前固件对误差微分，保留其实现并检查减小D的效果'});
   const unique=[...new Map(raw.filter(c=>['kp','ki','kd'].some(k=>Math.abs(c[k]-base[k])>1e-8)).map(c=>[['kp','ki','kd'].map(k=>c[k].toFixed(8)).join(','),c])).values()];
-  const candidates=unique.map(c=>evaluatePidProposal(plant,base,control,c,baselineRuns)).sort((a,b)=>(b.eligible-a.eligible)||((b.prediction?.worstImprovement??-Infinity)-(a.prediction?.worstImprovement??-Infinity))).slice(0,6);
+  const evaluated=unique.map(c=>evaluatePidProposal(plant,base,control,c,baselineRuns));
+  let seed=evaluated.reduce((a,b)=>(b.prediction?.worstImprovement??-Infinity)>(a.prediction?.worstImprovement??-Infinity)?b:a,evaluated[0]);
+  for(const step of [.1,.05]){if(!seed)break;const neighbors=[];for(const k of ['kp','ki','kd'])for(const sign of [-1,1]){const delta=k==='kd'?Math.max(base.kd,base.kp*control.periodMs/1000*.1)*step:Math.max(base[k],.0001)*step;neighbors.push(evaluatePidProposal(plant,base,control,{name:'有界坐标细化',...bounded({...seed,[k]:seed[k]+sign*delta}),reason:'Kp/Ki/Kd联合局部优化，保持原步幅与压力门控'},baselineRuns));}evaluated.push(...neighbors);seed=[seed,...neighbors].sort((a,b)=>(b.prediction?.worstImprovement??-Infinity)-(a.prediction?.worstImprovement??-Infinity))[0];}
+  const candidates=[...new Map(evaluated.map(c=>[['kp','ki','kd'].map(k=>c[k].toFixed(8)).join(','),c])).values()].sort((a,b)=>(b.eligible-a.eligible)||((b.prediction?.worstImprovement??-Infinity)-(a.prediction?.worstImprovement??-Infinity))).slice(0,6);
   return {candidates,summary,plant,baselineRuns,baselinePrediction:{score:baselineRuns[0].performanceScore,cost:baselineRuns[0].cost},warnings:candidates.some(c=>c.eligible)?[]:['没有候选在全部压力场景中改善；保留原参数，不为提高分数强行推荐']};
 }
 function buildAiPidAdvice(analysis,base={},options={}){
@@ -305,15 +338,15 @@ function buildAiPidAdvice(analysis,base={},options={}){
 function pidEvidencePayload(context,local){
   const metric=WHEELS.map(w=>context.analysis.wheels[w]).find(m=>m?.n),samples=metric?.samples||[],stride=Math.max(1,Math.ceil(samples.length/160));
   const series=[];for(let i=0;i<samples.length;i+=stride){const chunk=samples.slice(i,i+stride),s=chunk[0];series.push({t:s.t,target:s.target,actual:s.actual,output:s.output,minActual:Math.min(...chunk.map(s=>s.actual)),maxActual:Math.max(...chunk.map(s=>s.actual)),maxAbsOutput:Math.max(...chunk.map(s=>Math.abs(s.output)))});}
-  const p=local.plant;return {version:2,axis:context.axis,recordedParameters:context.known?context.used:null,baseline:context.base,summary:local.summary,quality:context.analysis.quality,controllerAudit:p.controllerAudit,model:{valid:p.valid,reasons:p.reasons,parameters:p.model,test:p.test,split:p.split,controllerReplayNrmse:p.controllerReplayNrmse,limitations:p.limitations},segments:(metric?.segments||[]).slice(-30),series,seriesStride:stride,baselinePrediction:local.baselinePrediction,candidates:local.ranked.map(({name,kp,ki,kd,score,reason,prediction,eligible})=>({name,kp,ki,kd,score,reason,prediction,eligible})),lowSpeed:true,feedforward:true};
+  const p=local.plant;return {version:2,axis:context.axis,recordedParameters:context.known?context.used:null,baseline:context.base,summary:local.summary,quality:context.analysis.quality,controllerAudit:p.controllerAudit,model:{valid:p.valid,reasons:p.reasons,parameters:p.model,test:p.test,regimes:p.regimes,scope:p.scope,external:p.external,split:p.split,controllerReplayNrmse:p.controllerReplayNrmse,limitations:p.limitations},segments:(metric?.segments||[]).slice(-30),series,seriesStride:stride,baselinePrediction:local.baselinePrediction,candidates:local.ranked.map(({name,kp,ki,kd,score,reason,prediction,eligible})=>({name,kp,ki,kd,score,reason,prediction,eligible})),lowSpeed:true,feedforward:true};
 }
 async function requestDeepSeekAdvice(){
   const status=$('pid-deepseek-status'),out=$('pid-deepseek-advice');if(!S.pidBurst){status.textContent='请先导入 PID 数据。';return;}
-  const state=S.pidBurst,context=pidAnalysisContext(),local=buildAiPidAdvice(context.analysis,context.base,{control:context.known?context.used:null}),payload=pidEvidencePayload(context,local);
+  const validationState=pidValidation,state=S.pidBurst,context=pidAnalysisContext(),local=buildAiPidAdvice(context.analysis,context.base,{control:context.known?context.used:null,validation:pidValidation?.analysis}),payload=pidEvidencePayload(context,local);
   if(!context.axis){status.textContent='本模块分析四轮速度环；请先选择 FL/FR/RL/RR。位置环仍支持手动在线读写。';return;}
   status.textContent='正在发送实测分段、时序摘要和模型验证证据给 DeepSeek…';
   try{const endpoint=String($('pid-deepseek-url')?.value||'http://127.0.0.1:8787').replace(/\/$/,''),response=await fetch(endpoint+'/v1/pid-advice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),result=await response.json();if(!response.ok)throw new Error(result.error||`HTTP ${response.status}`);
-    if(S.pidBurst!==state||S.pidBurst.analysis!==context.sourceAnalysis||pidAnalysisContext().axis!==context.axis){status.textContent='分析对象已改变，已忽略旧 AI 结果。';return;}
+    if(pidValidation!==validationState||S.pidBurst!==state||S.pidBurst.analysis!==context.sourceAnalysis||pidAnalysisContext().axis!==context.axis){status.textContent='分析对象已改变，已忽略旧 AI 结果。';return;}
     const proposed=Array.isArray(result.proposed)?result.proposed:[],checked=[];
     if(local.baselineRuns&&context.known)for(const c of proposed){if(!pidProposalInBounds(c,context.base,context.used))continue;checked.push(evaluatePidProposal(local.plant,context.base,context.used,{...c,name:'AI · '+c.name},local.baselineRuns));}
     const accepted=checked.filter(c=>c.eligible);pidOnline.candidates.push(...accepted);
@@ -329,22 +362,23 @@ async function connectDeepSeek() {
   const endpoint=String(input?.value||'').replace(/\/$/,'');
   if(!/^https?:\/\//i.test(endpoint)){if(status)status.textContent='代理地址必须以 http:// 或 https:// 开头。';return false;}
   if(status)status.textContent='正在检查本地代理…';
-  try { const response=await fetch(endpoint+'/health',{cache:'no-store'}); const data=await response.json(); if(!response.ok||!data.ok)throw new Error(data.error||`HTTP ${response.status}`); if(!data.key_configured)throw new Error('代理未配置 DEEPSEEK_API_KEY'); if(Number(data.advisor_version)<2||!data.advisor_version)throw new Error('AI代理仍是旧版，请重新运行 tools/start_deepseek_pid.ps1 完成升级'); if(button)button.disabled=false; if(status)status.textContent='DeepSeek v2 已连接，可分析时序证据。'; return true; }
+  try { const response=await fetch(endpoint+'/health',{cache:'no-store'}); const data=await response.json(); if(!response.ok||!data.ok)throw new Error(data.error||`HTTP ${response.status}`); if(!data.key_configured)throw new Error('代理未配置 DEEPSEEK_API_KEY'); if(Number(data.advisor_version)<3||!data.advisor_version)throw new Error('AI代理仍是旧版，请重新运行 tools/start_deepseek_pid.ps1 完成升级'); if(button)button.disabled=false; if(status)status.textContent='DeepSeek v3 已连接，可分析时序证据。'; return true; }
   catch(err){if(button)button.disabled=true;if(status)status.textContent='连接失败：'+err.message+'；请先启动本机代理。';return false;}
 }function renderPidBurst(){
   const box=$('pid-burst-metrics'),cand=$('pid-burst-candidates'),status=$('pid-burst-status'),ai=$('pid-ai-advice');if(!box||!cand||!status)return;
   pidOnline.candidates=[];pidOnline.candidateAxis=null;if($('pid-deepseek-advice'))$('pid-deepseek-advice').innerHTML='';
   const state=S.pidBurst;if(!state){pidPlotState=null;drawPidModelTrace();status.textContent='尚未导入高频 PID CSV。';box.innerHTML='<div class="pid-burst-empty">请导入带字段名的 PID CSV。</div>';cand.innerHTML='';if(ai)ai.innerHTML='导入数据后生成证据分析。';return;}
-  const a=state.analysis,q=a.quality;status.textContent=`已加载 ${state.name}：${a.rows} 帧，时长 ${fmt(a.times.at(-1)-a.times[0],2)} s，实测 ${fmt(q.measuredRate,1)} Hz。跳帧 ${q.gaps}，乱序/重复 ${q.nonMonotonic}，缺失时间 ${q.missing}，抖动 ${q.jitter}。`;
+  const a=state.analysis,q=a.quality;status.textContent=`已加载 ${state.name}：${a.rows} 帧，时长 ${fmt(a.times.at(-1)-a.times[0],2)} s，实测 ${fmt(q.measuredRate,1)} Hz。跳帧 ${q.gaps}，乱序/重复 ${q.nonMonotonic}，缺失时间 ${q.missing}，抖动 ${q.jitter}。${q.nonMonotonic?'跨复位时序无效，显示时间仅用于查看字段，不能用于响应/频率分析。':''}`;
   box.innerHTML=WHEELS.map(w=>{const m=a.wheels[w];return `<div class="pid-burst-wheel"><h3 style="color:${COLORS[w]}">${NAMES[w]}</h3><table>${tableRows([['有效样本',m.n],['IAE',fmt(m.iae,4)],['ISE',fmt(m.ise,4)],['归一化跟踪误差',fmt(m.trackingRatio*100,1)+' %'],['本轮实测表现',m.performanceScore===null?'不可计算':m.performanceScore+'/100'],['阶跃超调',finite(m.overshootPct)?fmt(m.overshootPct,1)+' %':'无有效平台阶跃'],['稳定时间',finite(m.settlingTime)?fmt(m.settlingTime,3)+' s':'无平台或未稳定'],['平台尾段误差',fmt(m.steadyError,3)],['输出饱和占比',finite(m.saturationRatio)?fmt(m.saturationRatio*100,1)+' %':'未记录']])}</table></div>`;}).join('');
-  const context=pidAnalysisContext(),base=context.base,result=buildAiPidAdvice(context.analysis,base,{control:context.known?context.used:null});
+  const context=pidAnalysisContext(),base=context.base,result=buildAiPidAdvice(context.analysis,base,{control:context.known?context.used:null,validation:pidValidation?.analysis});
+  const external=result.plant.external; $('pid-validation-status').textContent=pidValidation?('验证文件：'+pidValidation.name+'；'+(external?.valid?'跨文件预测通过':'未通过/模型不可用')+(external?.test?'；自由预测误差 '+fmt(external.test.freeRunNrmse*100,1)+'%':'')+'。原模型未重新拟合。'):'未加载独立验证文件；候选仅适用于本轮已覆盖工况，尚无跨试验改善证据。';
   drawPidModelTrace(context,result);
   for(const k of ['kp','ki','kd']){const input=$('pid-burst-'+k);input.disabled=!!context.known;if(context.known)input.value=String(base[k]);}
   pidOnline.candidates=result.candidates;pidOnline.candidateAxis=context.canApply?context.axis:null;
   cand.innerHTML='<h3>模型候选 · '+(context.axis||'位置环请手动编辑，速度环辨识不适用')+'</h3><p class="note">'+(context.known?'基准来自本轮实际参数，版本 '+context.used.revision:'未记录唯一的实际参数快照，只提供数据诊断。')+'；候选以自身闭环预测比较原参数；所有结果均须实车复测。</p>'+result.candidates.map((c,i)=>'<div class="pid-candidate"><h3>'+escapeHtml(c.name)+'</h3><strong>Kp '+fmt(c.kp,4)+' · Ki '+fmt(c.ki,4)+' · Kd '+fmt(c.kd,5)+'</strong><small>'+escapeHtml(c.reason)+'</small><p>预测表现 '+(c.score===null?'不可计算':c.score+'/100')+' · '+(c.eligible?'通过本地模型检查':'暂不推荐')+'</p><button data-pid-candidate="'+i+'" '+(context.canApply&&c.eligible?'':'disabled')+'>填入 '+(context.axis||'速度环')+' 写入区</button></div>').join('');
   cand.querySelectorAll('[data-pid-candidate]').forEach(b=>b.onclick=()=>usePidCandidate(Number(b.dataset.pidCandidate)));
   const p=result.plant;
-  if(ai)ai.innerHTML='<div class="ai-summary"><strong>系统辨识与候选验证 v2</strong><span>'+(p.valid?'独立预测验证通过':'模型不可用于整定')+'</span></div>'+(p.model?'<p>有效模型 K='+fmt(p.model.gain,4)+'，τ='+fmt(p.model.tau,4)+' s，延迟 '+fmt(p.model.deadTime*1000,1)+' ms；最后20%未参与选模的测试段，自由预测归一化误差 '+fmt(p.test.freeRunNrmse*100,1)+'%，单步误差 '+fmt(p.test.oneStepNrmse*100,1)+'%。</p>':'')+(finite(p.controllerReplayNrmse)?'<p>原PID闭环重放归一化误差 '+fmt(p.controllerReplayNrmse*100,1)+'%；±20%增益/时间常数与额外一帧延迟作为压力检查，不代表统计置信区间。</p>':'')+(p.controllerAudit?'<p>使用实测轮速重放控制输出，平均偏差 '+fmt(p.controllerAudit.meanAbsOutputError,2)+' / '+context.used.outputMax+'；'+escapeHtml(p.controllerAudit.meaning)+'</p><table>'+tableRows(Object.entries(p.controllerAudit.regimes).map(([name,r])=>[({forward:'正向',reverse:'反向',zero:'零目标'})[name],r.n+' 帧 · 平均误差 '+fmt(r.meanAbsError,1)+' · 饱和 '+fmt(r.saturationRatio*100,1)+'% · 低速停滞 '+fmt(r.stallRatio*100,1)+'%']))+'</table><p class="note">'+escapeHtml(p.controllerAudit.stallMeaning)+'</p>':'')+(result.baselinePrediction?'<p>原参数模型预测表现 '+result.baselinePrediction.score+'/100。该分数与上方本轮实测表现分开，AI不会修改本地分数。</p>':'')+result.warnings.map(w=>'<p class="warning">'+escapeHtml(w)+'</p>').join('')+'<p class="note">低速误差加权；仅在平稳目标段统计阶跃超调和稳定时间。最多使用最后12000帧辨识；模型未知、回放不符或无稳健改善时保留原参数。DeepSeek可分析证据和提出小步候选，须通过同一检查才可填表。</p>';
+  if(ai)ai.innerHTML='<div class="ai-summary"><strong>系统辨识与候选验证 v2</strong><span>'+(p.valid?'独立预测验证通过':'模型不可用于整定')+'</span></div>'+(p.model?'<p>有效模型 K='+fmt(p.model.gain,4)+'，τ='+fmt(p.model.tau,4)+' s，延迟 '+fmt(p.model.deadTime*1000,1)+' ms；最后20%未参与选模的测试段，自由预测归一化误差 '+fmt(p.test.freeRunNrmse*100,1)+'%，单步误差 '+fmt(p.test.oneStepNrmse*100,1)+'%。</p>':'')+(finite(p.controllerReplayNrmse)?'<p>原PID闭环重放归一化误差 '+fmt(p.controllerReplayNrmse*100,1)+'%；±20%增益/时间常数与额外一帧延迟作为压力检查，不代表统计置信区间。</p>':'')+(p.scope?'<p>模型训练方向：'+escapeHtml(p.scope.directions.join('/'))+'；目标范围 '+p.scope.targetRange.map(x=>fmt(x,1)).join(' ~ ')+' pulse/s；使用 '+p.scope.used+' 帧，省略早期 '+p.scope.omitted+' 帧。不代表其他地面/载重适用。</p>':'')+(p.regimes?'<p>测试分组自由预测误差：'+Object.entries(p.regimes).map(([k,v])=>k+' '+v.n+'帧 / '+(v.freeRunNrmse===null?'未覆盖':fmt(v.freeRunNrmse*100,1)+'%')).join('；')+'</p>':'')+(p.controllerAudit?'<p>使用实测轮速重放控制输出，平均偏差 '+fmt(p.controllerAudit.meanAbsOutputError,2)+' / '+context.used.outputMax+'；'+escapeHtml(p.controllerAudit.meaning)+'</p><table>'+tableRows(Object.entries(p.controllerAudit.regimes).map(([name,r])=>[({forward:'正向',reverse:'反向',zero:'零目标'})[name],r.n+' 帧 · 平均误差 '+fmt(r.meanAbsError,1)+' · 饱和 '+fmt(r.saturationRatio*100,1)+'% · 低速停滞 '+fmt(r.stallRatio*100,1)+'%']))+'</table><p class="note">'+escapeHtml(p.controllerAudit.stallMeaning)+'</p>':'')+(result.baselinePrediction?'<p>原参数模型预测表现 '+result.baselinePrediction.score+'/100。该分数与上方本轮实测表现分开，AI不会修改本地分数。</p>':'')+result.warnings.map(w=>'<p class="warning">'+escapeHtml(w)+'</p>').join('')+'<p class="note">低速误差加权；仅在平稳目标段统计阶跃超调和稳定时间。200Hz逐帧对齐，不插值恢复丢失控制周期；100Hz缓存只诊断。最多使用最后12000帧辨识；模型未知、回放不符或无稳健改善时保留原参数。DeepSeek可分析证据和提出小步候选，须通过同一检查才可填表。</p>';
 }
 
 function drawPidModelTrace(context,result){
@@ -353,8 +387,8 @@ function drawPidModelTrace(context,result){
   const metric=context.analysis?.wheels[context.axis?.toLowerCase()];
   const best=result.candidates.find(c=>c.eligible),forecast=best&&result.baselineRuns?simulatePidCandidate(result.plant,best,context.used):null;
   const series=[{samples:metric?.samples||[],key:'target',color:'#fbbf24'},{samples:metric?.samples||[],key:'actual',color:'#38bdf8'}];
-  if(result.baselineRuns)series.push({samples:result.baselineRuns[0].samples,key:'actual',color:'#c084fc'});
-  if(forecast)series.push({samples:forecast.samples,key:'actual',color:'#50dfae'});
+  if(result.baselineRuns)series.push({samples:result.baselineRuns[0].samples.map(s=>({...s,t:s.observedTime??s.t})),key:'actual',color:'#c084fc'});
+  if(forecast)series.push({samples:forecast.samples.map(s=>({...s,t:s.observedTime??s.t})),key:'actual',color:'#50dfae'});
   for(const [id,output] of [['pid-analysis-speed',false],['pid-analysis-output',true]]){
     const ctx=canvasContext(id);if(!ctx)continue;const {g,w,h}=ctx;
     g.fillStyle='#a9bfd4';g.font='12px sans-serif';g.fillText(output?'本文件实际输出（蓝） · 原参数预测（紫） · 最优通过候选预测（绿）':'本文件目标（黄） · 实测（蓝） · 原参数预测（紫） · 候选预测（绿）',12,18);
@@ -371,7 +405,13 @@ function drawPidModelTrace(context,result){
   }
 }
 
-function loadPidBurst(text,name='pid_burst.csv') {const data=parsePidBurstCsv(text),rate=Number($('pid-burst-rate')?.value)||100,sat=Number($('pid-burst-sat')?.value)||0,tol=Number($('pid-burst-tol')?.value)||.02;S.pidBurst={data,name,recorded:pidRecordedParams(data.comments),analysis:analyzePidBurst(data,{rate,satLimit:sat,tolerance:tol})};renderPidBurst();notify(`已加载独立 PID Burst：${name}。它不会改变 ULog43 任务日志。`);}
+function loadPidValidation(text,name){
+  if(!S.pidBurst)throw new Error('先导入用于辨识的主PID文件');
+  const data=parsePidBurstCsv(text);
+  if(JSON.stringify(data.rows)===JSON.stringify(S.pidBurst.data.rows))throw new Error('验证文件与主文件相同，不能作为独立试验');
+  pidValidation={name,analysis:analyzePidBurst(data,{rate:200,satLimit:1000})};renderPidBurst();
+}
+function loadPidBurst(text,name='pid_burst.csv') {const data=parsePidBurstCsv(text),rate=Number($('pid-burst-rate')?.value)||100,sat=Number($('pid-burst-sat')?.value)||0,tol=Number($('pid-burst-tol')?.value)||.02;pidValidation=null;S.pidBurst={data,name,recorded:pidRecordedParams(data.comments),analysis:analyzePidBurst(data,{rate,satLimit:sat,tolerance:tol})};renderPidBurst();notify(`已加载独立 PID Burst：${name}。它不会改变 ULog43 任务日志。`);}
 
 const PID_AXES=['FL','FR','RL','RR','X','Y','TH'];
 const PID_MOTOR_AXES=PID_AXES.slice(0,4);
@@ -1267,9 +1307,11 @@ function init() {
   $('pid-live-download').onclick=downloadPidStream;
   $('pid-live-download-live').onclick=()=>downloadPidLive();
   $('pid-live-wheel').onchange=renderPidStream;
+  $('pid-validation-file').onchange=async e=>{const file=e.target.files[0];if(file){try{loadPidValidation(await file.text(),file.name);}catch(err){notify('跨试验验证失败：'+err.message,true);}e.target.value='';}};
+  $('pid-validation-clear').onclick=()=>{pidValidation=null;renderPidBurst();};
   $('pid-burst-file').onchange=async e=>{const file=e.target.files[0];if(file){try{loadPidBurst(await file.text(),file.name);}catch(err){notify('PID Burst 导入失败：'+err.message,true);}e.target.value='';}};
   $('pid-burst-analyze').onclick=()=>{if(!S.pidBurst){notify('请先导入 PID Burst CSV。',true);return;}try{const data=S.pidBurst.data;S.pidBurst.analysis=analyzePidBurst(data,{rate:Number($('pid-burst-rate').value),satLimit:Number($('pid-burst-sat').value),tolerance:Number($('pid-burst-tol').value)});renderPidBurst();}catch(err){notify('PID Burst 分析失败：'+err.message,true);}};
-  $('pid-burst-clear').onclick=()=>{S.pidBurst=null;renderPidBurst();};
+  $('pid-burst-clear').onclick=()=>{S.pidBurst=null;pidValidation=null;renderPidBurst();};
   $('pid-deepseek-connect').onclick=()=>connectDeepSeek();
   $('pid-deepseek').onclick=()=>requestDeepSeekAdvice();
   for(const id of ['pid-burst-rate','pid-burst-sat','pid-burst-tol','pid-burst-kp','pid-burst-ki','pid-burst-kd'])$(id).onchange=()=>{if(S.pidBurst&&id!=='pid-burst-kp'&&id!=='pid-burst-ki'&&id!=='pid-burst-kd'){$('pid-burst-analyze').click();}else if(S.pidBurst)renderPidBurst();};

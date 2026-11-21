@@ -1,6 +1,6 @@
 // Strict DOM fixture + deterministic animation clock. Optional native canvas
 // snapshots validate the drawing only, not browser CSS layout.
-const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),cp=require('node:child_process');
 const html=fs.readFileSync('kart_log_view_mecanum_v4.html','utf8');
 const script=html.split('<script>')[1].split('</script>')[0];
 const elements=new Map(),draws=[],nativeCanvases=new Map();let active='transport';
@@ -116,14 +116,62 @@ if(fs.existsSync('tmp/pid_continuous_wire.bin')){
   console.log('PASS: 360-second firmware stream, 16-bit sequence wrap, all 72006 live samples exported, rolling last 20-second cache.');
 }
 
+// Execute the actual Motor.c against HAL counter/PWM stubs. No copy of its
+// controller implementation is used as the parity oracle.
+const gcc=process.env.PID_GCC||(fs.existsSync('D:/minGW/mingw64/bin/gcc.exe')?'D:/minGW/mingw64/bin/gcc.exe':'gcc');
+fs.writeFileSync('tmp/stm32f4xx_hal.h',`
+#ifndef PID_PARITY_HAL
+#define PID_PARITY_HAL
+#include <stdint.h>
+typedef struct {int32_t cnt;uint32_t ccr[4];} TIM_HandleTypeDef;
+#define TIM_CHANNEL_1 0
+#define TIM_CHANNEL_2 1
+#define __HAL_TIM_GET_COUNTER(t) ((t)->cnt)
+#define __HAL_TIM_SET_COMPARE(t,c,v) ((t)->ccr[c]=(v))
+#define HAL_TIM_PWM_Start(t,c) ((void)(t),(void)(c))
+#define HAL_TIM_Encoder_Start(t,c) ((void)(t),(void)(c))
+#endif
+`);
+fs.writeFileSync('tmp/pid_controller_parity.c',`
+#include "motor.h"
+#include <stdio.h>
+int main(void){
+ TIM_HandleTypeDef pwm={0},enc={0};Motor_t m;unsigned i;
+ Motor_Init(&m,&pwm,0,8399,&pwm,1,8399,&enc,2.5f,1.6f,.004f,1,1);
+ m.integral_max=5;
+ for(i=0;i<8000;i++){
+  unsigned phase=i/500;float target=phase%6==0?0:phase%6==1?26.3f:phase%6==2?78.8f:phase%6==3?-52.5f:phase%6==4?900.0f:-900.0f;
+  Motor_SetTargetSpeed(&m,target);
+  if(i%11==0)enc.cnt+=(phase%3==0?-1:1);
+  {float previous=m.err_last;const MotorControlInfo *info=Motor_GetControlInfo();
+  Motor_Update(&m,.001f);
+  if(i%5==4)printf("%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g\\n",m.target_speed,m.actual_speed,m.integral,m.err_last,m.kick,m.output,
+     m.target_speed>info->ff_min_speed?m.target_speed*info->ff_gain+info->deadzone:m.target_speed< -info->ff_min_speed?m.target_speed*info->ff_gain-info->deadzone:0,
+     m.kp*m.err,m.kd*(m.err-previous)/.005f);}
+ }
+ return 0;
+}
+`);
+const compile=cp.spawnSync(gcc,['-std=c99','-Wall','-Wextra','-Werror','-Itmp','-IControl','tmp/pid_controller_parity.c','Control/Motor.c','-lm','-o','tmp/pid_controller_parity.exe'],{encoding:'utf8'});
+assert.equal(compile.status,0,compile.stderr);
+const parityRun=cp.spawnSync('tmp/pid_controller_parity.exe',[],{encoding:'utf8'});assert.equal(parityRun.status,0,parityRun.stderr);
+const parityControl={kp:2.5,ki:1.6,kd:.004,periodMs:5,integralMax:5,outputMax:1000,ffGain:.3,deadzone:150,ffMinSpeed:5,kickStep:3,kickMax:120,stuckRatio:.1,slew:30};
+const parityState={integral:0,previousError:0,kick:0,output:0};let parityN=0;
+for(const line of parityRun.stdout.trim().split(/\r?\n/)){
+ const [r,y,integral,error,kick,output,ff,p,d]=line.split(',').map(Number);
+ const v=env.pidControllerStep(parityState,r,y,parityControl,parityControl);
+ for(const [a,b] of [[v.integral,integral],[parityState.previousError,error],[v.kick,kick],[v.output,output],[v.ff,ff],[v.p,p],[v.d,d]])near(a,b,.04);
+ parityN++;
+}
+assert.equal(parityN,1600);console.log('PASS: actual Motor.c vs JS, 1600 steps: forward/reverse/zero, target ramp, P/I/D, kick, conditional integral, sign clamp, saturation and slew.');
 // Independent, known plant. Generate closed-loop data without calling viewer's
 // simulator; the expected plant parameters are specified separately below.
 function knownPlantFixture({noise=0,delay=2,corruptTest=false}={}){
   const control={axis:'FL',revision:0,kp:.25,ki:.1,kd:0,periodMs:5,outputMax:1000,integralMax:800,ffGain:0,deadzone:0,ffMinSpeed:0,ramp:4000,slew:1000,lpf:1,kickStep:0,kickMax:0,stuckRatio:.1};
   let y=0,u=0,integral=0;const rows=[],history=Array(delay+1).fill(0),alpha=Math.exp(-.005/.12),targets=[0,80,30,-60,110,-30,55,-80];
-  for(let k=0;k<1600;k++){const t=targets[Math.floor(k/200)],actual=y+noise*Math.sin(k*1.37);rows.push([k*5,t,actual,u]);
+  for(let k=0;k<1600;k++){const t=targets[Math.floor(k/200)],actual=y+noise*Math.sin(k*1.37);
     const error=t-actual;integral=Math.max(-800,Math.min(800,integral+error*.005));let next=.25*error+.1*integral;if(t&&next*t<0)next=0;u=Math.max(-1000,Math.min(1000,next));
-    history.push(u);const applied=history.shift();y=alpha*y+2*(1-alpha)*applied;if(corruptTest&&k>1280)y+=1.5*Math.sin(k*.11);
+    rows.push([k*5,t,actual,u]);history.push(u);const applied=history.shift();y=alpha*y+2*(1-alpha)*applied;if(corruptTest&&k>1280)y+=1.5*Math.sin(k*.11);
   }
   const text='timestamp_ms,fl_target,fl_actual,fl_output\n'+rows.map(r=>r.join(',')).join('\n'),a=env.analyzePidBurst(env.parsePidBurstCsv(text),{rate:200,satLimit:1000});return {control,a,text};
 }
@@ -142,10 +190,35 @@ const decel=Array.from({length:200},(_,i)=>({t:i*.005,target:i<100?100:0,actual:
 const transient=Array.from({length:200},(_,i)=>({t:i*.005,target:100,actual:i<10?0:i>140&&i<160?120:100,output:20}));assert(env.pidResponseMetrics(transient).settlingTime>=.8,'settling must remain within band until segment end');
 const ramp=Array.from({length:100},(_,i)=>({t:i*.005,target:i*5,actual:i*5,output:i}));assert(Number.isNaN(env.pidResponseMetrics(ramp).settlingTime));
 const slowRamp=ramp.map((s,i)=>({...s,target:i*.2,actual:i*.2}));assert(Number.isNaN(env.pidResponseMetrics(slowRamp).settlingTime),'cumulative target drift cannot masquerade as a flat plateau');
+const downsampled=env.analyzePidBurst(env.parsePidBurstCsv(golden.text.split('\n').filter((_,i)=>i===0||i%2===1).join('\n')),{rate:100,satLimit:1000});
+assert.equal(env.identifyPidPlant(downsampled,'fl').valid,false,'100Hz must never be interpolated into controller evidence');
+const timestampJitter=env.analyzePidBurst(env.parsePidBurstCsv(golden.text.split('\n').map((l,i)=>i?l.replace(/^\d+/,String(Math.round((i-1)*5.06))):l).join('\n')),{rate:200,satLimit:1000});
+const aligned=env.identifyPidPlant(timestampJitter,'fl');assert(aligned.valid);assert.equal(aligned.samples.length,golden.a.rows,'no invented/deleted control samples');
+for(let i=0;i<golden.a.rows;i++){assert.equal(aligned.samples[i].actual,golden.a.wheels.fl.samples[i].actual);assert.equal(aligned.samples[i].observedTime,timestampJitter.wheels.fl.samples[i].t);}
+const holdout=knownPlantFixture({noise:.15});assert(env.validatePidExperiment(goldenPlant,holdout.a,'fl').valid);
+assert.equal(env.validatePidExperiment(goldenPlant,constant,'fl').valid,false,'constant validation cannot prove generalization');
+assert.equal(env.validatePidExperiment(goldenPlant,mismatch.a,'fl').valid,false,'independent mismatch rejected without refitting');
+const externalAdvice=env.buildAiPidAdvice(golden.a,golden.control,{control:golden.control,validation:mismatch.a});assert.equal(externalAdvice.candidates.length,0);assert.equal(externalAdvice.plant.valid,false);assert(env.identifyPidPlant(golden.a,'fl').valid,'external failure must not mutate cached training model');
+const audit=env.auditPidController(golden.a.wheels.fl,golden.control);assert(audit.aligned);assert(audit.normalizedError<.001,'recorded u[k] follows measured y[k]');
+const exactSimulation=env.simulatePidCandidate(goldenPlant,golden.control,golden.control);assert(exactSimulation);assert(exactSimulation.samples.length===golden.a.rows);
+console.log('PASS: 200Hz sample preservation, 100Hz diagnosis-only, measured-before-output audit, independent holdout pass/fail and cache isolation.');
 const actualSnapshot=env.encodePidUsed({...golden.control,editable:false});el('pid-param-axis').value='FL';env.loadPidBurst(actualSnapshot+golden.text,'known-plant.csv');
+assert.throws(()=>env.loadPidValidation(actualSnapshot+golden.text,'same.csv'),/相同/);
+env.loadPidValidation(holdout.text,'holdout.csv');assert(el('pid-validation-status').textContent.includes('跨文件预测通过'));
+env.loadPidValidation(mismatch.text,'mismatch.csv');assert(el('pid-validation-status').textContent.includes('未通过'));assert.equal(vm.runInContext('pidOnline.candidates.length',env),0);
+el('pid-validation-clear').onclick();assert.equal(vm.runInContext('pidValidation',env),null);assert(vm.runInContext('pidOnline.candidates.length',env)>0);
+vm.runInContext('pidOnline.candidates[0].eligible=false',env);
 const writeBefore=el('pid-param-kp').value;vm.runInContext('pidOnline.candidates[0].eligible=false',env);env.usePidCandidate(0);assert.equal(el('pid-param-kp').value,writeBefore,'rejected candidate cannot fill');
 const evidence=env.pidEvidencePayload(env.pidAnalysisContext(),env.buildAiPidAdvice(golden.a,golden.control,{control:golden.control}));assert(evidence.series.length<=160);assert(evidence.series.every(s=>Number.isFinite(s.minActual)&&Number.isFinite(s.maxActual)));assert(evidence.controllerAudit);assert(evidence.model.test);assert.equal(evidence.axis,'FL');
 fs.writeFileSync('tmp/pid_advisor_request.json',JSON.stringify(evidence));
+if(process.env.PID_DIAG_CSV){
+ const text=fs.readFileSync(process.env.PID_DIAG_CSV,'utf8'),a=env.analyzePidBurst(env.parsePidBurstCsv(text),{rate:200,satLimit:1000});
+ assert.equal(a.quality.nonMonotonic,1);assert.equal(a.quality.issues[0].kind,'rollback_or_duplicate');
+ for(const w of ['fl','fr','rl','rr'])assert.equal(env.identifyPidPlant(a,w).valid,false,'mixed reset sessions cannot produce candidates');
+ assert(a.wheels.rr.samples.every(s=>s.actual===0));
+ const report={rows:a.rows,quality:a.quality,wheels:Object.fromEntries(['fl','fr','rl','rr'].map(w=>[w,env.identifyPidPlant(a,w)]))};
+ fs.writeFileSync('tmp/pid_review_field_diagnosis.json',JSON.stringify(report,null,2));console.log('PASS: real 24772-frame mixed-session file rejected; RR zero feedback correctly diagnosed');
+}
 // A real field file is optional on other computers; never store it in Git.
 if(process.env.PID_FIELD_CSV){const text=fs.readFileSync(process.env.PID_FIELD_CSV,'utf8');env.loadPidBurst(text,'real-field.csv');const a=env.S.pidBurst.analysis;assert.equal(a.rows,4133);assert.equal(a.quality.gaps,0);assert.equal(a.quality.jitter,0);near(a.wheels.fr.saturationRatio,555/4133,1e-9);near(a.wheels.rl.saturationRatio,625/4133,1e-9);assert(el('pid-ai-advice').innerHTML.includes('控制输出'));}
 console.log('PASS: independent delayed/noisy plant recovery; held-out mismatch rejection; per-candidate predictions/robustness; missing/gapped/constant data; deceleration/settling/ramp metrics; real parameter evidence and candidate gates.');
@@ -172,7 +245,8 @@ console.log('PASS: actual C -> JS seven-axis readback, feedforward context, reco
 const asyncGuard=setTimeout(()=>{console.error('FAIL: asynchronous test stalled',vm.runInContext('pidOnline.pending&&[pidOnline.pending.id,pidOnline.pending.axis,pidOnline.pending.operation]',env));process.exitCode=1;},15000);
 (async()=>{
   env.fetch=async()=>({ok:true,json:async()=>({ok:true,key_configured:true})});assert.equal(await env.connectDeepSeek(),false);assert(el('pid-deepseek').disabled);
-  env.fetch=async()=>({ok:true,json:async()=>({ok:true,key_configured:true,advisor_version:2})});assert.equal(await env.connectDeepSeek(),true);assert.equal(el('pid-deepseek').disabled,false);
+  env.fetch=async()=>({ok:true,json:async()=>({ok:true,key_configured:true,advisor_version:2})});assert.equal(await env.connectDeepSeek(),false);
+  env.fetch=async()=>({ok:true,json:async()=>({ok:true,key_configured:true,advisor_version:3})});assert.equal(await env.connectDeepSeek(),true);assert.equal(el('pid-deepseek').disabled,false);
   env.loadPidBurst(actualSnapshot+golden.text,'ai-evidence.csv');
   const approved=env.buildAiPidAdvice(env.pidAnalysisContext().analysis,golden.control,{control:golden.control}).candidates.find(c=>c.eligible);
   assert(approved);
@@ -181,6 +255,7 @@ const asyncGuard=setTimeout(()=>{console.error('FAIL: asynchronous test stalled'
   env.fetch=async()=>({ok:true,json:async()=>({diagnosis:'bounded test',proposed:[{...approved,kp:100}],warnings:[]})});
   env.renderPidBurst();const candidateCount=vm.runInContext('pidOnline.candidates.length',env);await env.requestDeepSeekAdvice();assert.equal(vm.runInContext('pidOnline.candidates.length',env),candidateCount);
   let finishAdvice;env.fetch=()=>new Promise(resolve=>{finishAdvice=resolve;});const late=env.requestDeepSeekAdvice();el('pid-param-axis').value='FR';finishAdvice({ok:true,json:async()=>({proposed:[approved],warnings:[]})});await late;assert(el('pid-deepseek-status').textContent.includes('忽略旧'));el('pid-param-axis').value='FL';
+  let finishValidationAdvice;env.fetch=()=>new Promise(resolve=>{finishValidationAdvice=resolve;});const changedValidation=env.requestDeepSeekAdvice();env.loadPidValidation(holdout.text,'new-validation.csv');finishValidationAdvice({ok:true,json:async()=>({proposed:[approved],warnings:[]})});await changedValidation;assert(el('pid-deepseek-status').textContent.includes('忽略旧'));el('pid-validation-clear').onclick();
   console.log('PASS: AI sends measured evidence; proposals checked locally; out-of-bound/stale results rejected; provider text escaped; no automatic writes.');
   const clone=x=>x===undefined?undefined:structuredClone(x),stores={logs:new Map([[1,{id:1,name:'legacy',text:'old\n',frames:1}]] )};let nextId=2,failNext=false,openedVersion=0;
   const key=(name,v)=>JSON.stringify(name==='logs'?v.id:[v.logId,v.part]);

@@ -114,7 +114,12 @@ def validate_advice(advice: object, data: dict) -> dict:
     audit = data.get("controllerAudit") if isinstance(data.get("controllerAudit"), dict) else {}
     # Proposals are allowed only with a locally validated controller/plant.
     can_propose = actual and model.get("valid") is True and isinstance(data.get("baselinePrediction"), dict)
-    can_propose = can_propose and isinstance(audit.get("normalizedError"), (int, float)) and audit["normalizedError"] <= 0.08
+    can_propose = can_propose and isinstance(audit.get("normalizedError"), (int, float)) and math.isfinite(audit["normalizedError"]) and 0 <= audit["normalizedError"] <= 0.08
+    can_propose = can_propose and audit.get("aligned") is True
+    replay = model.get("controllerReplayNrmse")
+    can_propose = can_propose and isinstance(replay, (int, float)) and math.isfinite(replay) and 0 <= replay <= .25
+    external = model.get("external")
+    can_propose = can_propose and (not isinstance(external, dict) or external.get("valid") is True)
     for item in advice.get("proposed", [])[:4] if can_propose and isinstance(advice.get("proposed"), list) else []:
         if not isinstance(item, dict):
             continue
@@ -141,7 +146,7 @@ def ask_deepseek(data: dict, api_key: str) -> dict:
         "真实PID_USED及前馈/限幅/积分/kick/slew配置分析。series是抽样包络而非完整原始序列；"
         "不可据它发明精确频谱、相位裕度或稳定性结论。区分实测表现、独立模型验证和候选预测，"
         "不得把当前差的日志分数直接当新候选分数。不要重新打分，不要为了得到高分放宽标准。"
-        "先检查时间质量、目标激励、饱和、低速停滞、正反向差异，再检查模型20%测试段、"
+        "100Hz缓存只诊断，不可插值冒充5ms控制证据。scope说明训练方向/速度和截断帧数，未覆盖工况不可声称已适配。external是冻结模型跨文件验证，不是新PID实车改善证据。无external时必须说明尚无跨试验证据。预设压力情景不是统计置信区间。先检查时间质量、目标激励、饱和、低速停滞、正反向差异，再检查模型20%测试段、"
         "残差与原PID重放。停滞只能提示摩擦/负载/电源/机械待查，不断言原因。"
         "完整目标平台才可判断阶跃超调/稳定时间。该固件是并联PID，Ki单位每秒，"
         "D对误差微分；目标已经过斜坡，模型含测速LPF，不要套默认Arduino离散Ki/Kd。"
@@ -174,7 +179,7 @@ def ask_deepseek(data: dict, api_key: str) -> dict:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "PIDProxy/2.0"
+    server_version = "PIDProxy/3.0"
 
     def log_message(self, *_args) -> None:
         return
@@ -196,7 +201,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/health":
             self._reply(404, {"error": "not found"})
             return
-        self._reply(200, {"ok": True, "provider": "deepseek", "advisor_version": 2,
+        self._reply(200, {"ok": True, "provider": "deepseek", "advisor_version": 3,
                          "key_configured": bool(os.environ.get("DEEPSEEK_API_KEY", "").strip())})
 
     def do_POST(self) -> None:  # noqa: N802

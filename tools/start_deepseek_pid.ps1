@@ -16,7 +16,7 @@ Write-Host 'The key is used only by this process and is not saved.'
 $runningHealth = $null
 try { $runningHealth = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 2 } catch { }
 if ($runningHealth -and $runningHealth.ok -and $runningHealth.key_configured) {
-    if ($runningHealth.provider -eq 'deepseek' -and [int]$runningHealth.advisor_version -lt 2) {
+    if ($runningHealth.provider -eq 'deepseek' -and [int]$runningHealth.advisor_version -lt 3) {
         # Restart only this project's verified Python listener; never kill an
         # arbitrary process merely because it occupies the configured port.
         $pidListener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop | Select-Object -First 1
@@ -27,11 +27,11 @@ if ($runningHealth -and $runningHealth.ok -and $runningHealth.key_configured) {
             throw "An older proxy uses port $Port, but its process cannot be verified as this project. Close it manually and rerun."
         }
         Stop-Process -Id $pidListener.OwningProcess -ErrorAction Stop
-        Write-Host 'Stopped the verified old project proxy; starting advisor v2.'
+        Write-Host 'Stopped the verified old project proxy; starting advisor v3.'
         $runningHealth = $null
     }
 }
-if ($runningHealth -and $runningHealth.ok -and $runningHealth.key_configured -and [int]$runningHealth.advisor_version -ge 2) {
+if ($runningHealth -and $runningHealth.ok -and $runningHealth.key_configured -and [int]$runningHealth.advisor_version -ge 3) {
     Start-Process -FilePath (Join-Path $ProjectRoot 'kart_log_view_mecanum_v4.html')
     Write-Host "An existing healthy proxy is already running on port $Port." -ForegroundColor Green
     Write-Host 'The PID web page has been opened. Keep the existing proxy running.'

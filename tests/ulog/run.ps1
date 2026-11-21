@@ -146,8 +146,8 @@ assert safe_payload({"candidates":payload["candidates"]})["parameterSource"]=="u
 from tools.deepseek_pid_proxy import validate_advice, ask_deepseek
 import tools.deepseek_pid_proxy as advisor
 payload.update({"quality":{"gaps":0},"summary":{"steady":float("nan")},
-    "model":{"valid":True,"test":{"freeRunNrmse":.04}},
-    "controllerAudit":{"normalizedError":.001},"baselinePrediction":{"cost":.1},
+    "model":{"valid":True,"controllerReplayNrmse":.02,"test":{"freeRunNrmse":.04}},
+    "controllerAudit":{"normalizedError":.001,"aligned":True},"baselinePrediction":{"cost":.1},
     "series":[{"t":i*.005,"target":100,"actual":90,"output":200,"minActual":80,"maxActual":100} for i in range(200)]})
 safe=safe_payload(payload)
 assert len(safe["series"])==160 and safe["summary"]["steady"] is None
@@ -160,6 +160,12 @@ assert len(checked["proposed"])==1 and len(checked["ranked"])==1 and "score" not
 assert checked["requires_manual_test"] is True
 invalid=safe_payload({**payload,"model":{"valid":False},"candidates":[]})
 assert not validate_advice(response,invalid)["proposed"]
+for model, audit in (({"valid":True}, {"aligned":True,"normalizedError":.001}),
+                     ({"valid":True,"controllerReplayNrmse":.02}, {"aligned":False,"normalizedError":.001}),
+                     ({"valid":True,"controllerReplayNrmse":.3}, {"aligned":True,"normalizedError":.001}),
+                     ({"valid":True,"controllerReplayNrmse":.02,"external":{"valid":False}}, {"aligned":True,"normalizedError":.001})):
+    blocked=safe_payload({**payload,"model":model,"controllerAudit":audit})
+    assert not validate_advice(response,blocked)["proposed"]
 class MockResponse:
     def __enter__(self): return self
     def __exit__(self,*_args): return False
