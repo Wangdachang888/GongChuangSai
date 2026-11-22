@@ -55,11 +55,35 @@
 #ifndef APP_PID_TEST_CREEP
 #define APP_PID_TEST_CREEP 0
 #endif
+#ifndef APP_PID_TEST_FREQUENCY
+#define APP_PID_TEST_FREQUENCY 1
+#endif
+#if APP_PID_TEST_CREEP != 0 && APP_PID_TEST_FREQUENCY != 0
+#error PID test profiles are mutually exclusive
+#endif
+#ifndef APP_PID_TEST_FR_BASE_MPS
+#define APP_PID_TEST_FR_BASE_MPS 0.030f
+#endif
+#ifndef APP_PID_TEST_FR_AMPLITUDE_MPS
+#define APP_PID_TEST_FR_AMPLITUDE_MPS 0.0020f
+#endif
+#ifndef APP_PID_TEST_FR_WARMUP_MS
+#define APP_PID_TEST_FR_WARMUP_MS 4000u
+#endif
+#ifndef APP_PID_TEST_FR_ACTIVE_MS
+#define APP_PID_TEST_FR_ACTIVE_MS 40960u
+#endif
+#ifndef APP_PID_TEST_FR_SETTLE_MS
+#define APP_PID_TEST_FR_SETTLE_MS 2000u
+#endif
 #if APP_PID_TEST_AXIS != 0 && APP_PID_TEST_AXIS != 1
 #error Invalid PID test axis
 #endif
 #if APP_PID_TEST_CREEP != 0 && APP_PID_TEST_CREEP != 1
 #error Invalid PID test profile
+#endif
+#if APP_PID_TEST_FREQUENCY != 0 && APP_PID_TEST_FREQUENCY != 1
+#error Invalid PID frequency profile
 #endif
 #endif
 

@@ -8,21 +8,31 @@ static uint32_t s_entered;
 
 /* Normal: initial zero, (A,B,C)x3 with six levels each, final zero.
  * Creep retains its separate (+,0,-,0)x3 diagnostic. No PID resets. */
-static uint8_t final_step(void) { return APP_PID_TEST_CREEP ? 13u : 55u; }
+static uint8_t final_step(void) { return APP_PID_TEST_FREQUENCY ? 2u : (APP_PID_TEST_CREEP ? 13u : 55u); }
 static uint32_t duration(uint8_t step)
 {
     static const uint16_t hold[6] = {500u,1000u,1500u,500u,1000u,1500u};
-    if (step == 0u || step == final_step()) return 1000u;
+    if (step == 0u) return APP_PID_TEST_FREQUENCY ? APP_PID_TEST_FR_WARMUP_MS : 1000u;
+    if (step == final_step()) return APP_PID_TEST_FREQUENCY ? APP_PID_TEST_FR_SETTLE_MS : 1000u;
+    if (APP_PID_TEST_FREQUENCY) return APP_PID_TEST_FR_ACTIVE_MS;
     if (APP_PID_TEST_CREEP) return (step & 1u) ? 4000u : 1000u;
     return hold[(step - 1u) % 6u];
 }
 
-static void command(void)
+static void command(uint32_t elapsed_ms)
 {
     float v = 0.0f;
     uint32_t irq;
     if (s_status.step > 0u && s_status.step < final_step()) {
-        if (APP_PID_TEST_CREEP) {
+        if (APP_PID_TEST_FREQUENCY) {
+            const float t = (float)elapsed_ms * 0.001f;
+            /* DFT-bin frequencies for a 1024-sample / 5 ms window. */
+            v = APP_PID_TEST_FR_BASE_MPS + APP_PID_TEST_FR_AMPLITUDE_MPS *
+                (sinf(2.0f * 3.14159265359f * 0.390625f * t) +
+                 sinf(2.0f * 3.14159265359f * 0.78125f * t) +
+                 sinf(2.0f * 3.14159265359f * 1.5625f * t) +
+                 sinf(2.0f * 3.14159265359f * 2.34375f * t));
+        } else if (APP_PID_TEST_CREEP) {
             if ((s_status.step % 4u) == 1u) v = s_status.speed_mps;
             else if ((s_status.step % 4u) == 3u) v = -s_status.speed_mps;
         } else {
@@ -83,7 +93,7 @@ uint8_t AppPidTest_Start(uint32_t now)
         return 0u;
     s_status.started_ms = s_entered = now;
     s_status.state = PID_TEST_RUNNING;
-    command();
+    command(0u);
     return 1u;
 }
 
@@ -93,7 +103,9 @@ void AppPidTest_Poll(uint32_t now, AppPidTestReason fault)
     if (fault != PID_TEST_REASON_NONE) { AppPidTest_Stop(fault); return; }
     /* A delayed Poll never compresses/skips multiple motion phases. */
     if ((uint32_t)(now - s_status.started_ms) >=
-        (APP_PID_TEST_CREEP ? 40000u : 70000u)) {
+        (APP_PID_TEST_FREQUENCY ?
+         (APP_PID_TEST_FR_WARMUP_MS + APP_PID_TEST_FR_ACTIVE_MS + APP_PID_TEST_FR_SETTLE_MS + 5000u) :
+         (APP_PID_TEST_CREEP ? 40000u : 70000u))) {
         AppPidTest_Stop(PID_TEST_REASON_TIMEOUT);
         return;
     }
@@ -101,8 +113,10 @@ void AppPidTest_Poll(uint32_t now, AppPidTestReason fault)
         if (s_status.step == final_step()) { AppPidTest_Stop(PID_TEST_REASON_COMPLETE); return; }
         ++s_status.step;
         s_entered = now;
-        command();
+        command((uint32_t)(now - s_status.started_ms));
     }
+    if (APP_PID_TEST_FREQUENCY && s_status.step == 1u)
+        command((uint32_t)(now - s_status.started_ms - APP_PID_TEST_FR_WARMUP_MS));
 }
 
 const AppPidTestStatus *AppPidTest_Status(void) { return &s_status; }
