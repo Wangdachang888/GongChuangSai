@@ -1,10 +1,28 @@
 # AI 维护变更日志
 
+
 ## 2026-11-22：修复 AB 四边沿 T 法低速测速归零
 
 - 四路编码器 A/B 两相均启用 EXTI 上升沿和下降沿时间戳，保留 TIM2/TIM3/TIM4/TIM5 的 TI12 硬件计数；每个 AB 边沿按 1 个有效计数换算，避免 CH1 单边沿在 6 mm/s 时约 380 ms 间隔而触发超时。
 - T 法无边沿超时从 120 ms 调整为 180 ms，覆盖约 6 mm/s 与 12 mm/s；超时直接清除速度 LPF，避免停车后残留旧速度。
 - 未修改 PID、前馈、死区、Kick、PWM、运动学或比赛状态机。主机合成测试 PASS；烧录和四轮实车 6/12 mm/s 验证 NOT_RUN。
+
+
+
+## 2026-11-22：修复 live-only PID_Test 的第二轮网页门控
+
+- 正式关闭停车自动上传时，固件终态发送普通 `#BTLOG,END`；网页现在把它和兼容的 `#BTLOG,PID_END` 都识别为实时流结束。
+- 将“实时流已结束”与“停车缓存上传完整”分开记录，避免没有 `PID_STATS` 时把第二轮测试永久拦截；RESET 的 `READY` 回复也会释放残留网页门控。
+- 增加 live-only `#BTLOG,END` 回归，重新生成 v3/v4 独立网页。比赛流程和固件控制未修改。
+- 验证：`node viewer/build.cjs`、`node viewer/test.cjs`、`tests/ulog/run.ps1`、`tests/race/run.ps1`、`git diff --check` PASS；Keil、烧录和 BT10 实车连续轮次仍为 NOT_RUN。
+
+## 2026-11-22：修复 PID_Test 连续轮次卡在 RESET/START 握手
+
+- `TEST_RESET` 增加独立停车安全观察；在 PID_Test 终态、取消、超时或故障后清理残留 Burst，并调用 `ULog_Rearm()` 重新打开已结束的实时日志会话。
+- UART2 发送遇到 `HAL_BUSY` 时保留未完成队列，不推进 `tail`，后续主循环重试；普通 `@PID START` 失败排队发送明确的 `PID_REJECTED` 原因。
+- 网页在发送前登记 PID 请求，严格按请求 ID接收回复；防止重复启动，超时/取消/迟到 ARM 会清理普通采集，`PID_END` 清除旧的待启动状态。
+- 新增二轮主机回归，覆盖第一轮结束后 RESET/START 再次收到 ARM；未改变比赛流程、TIM6、电机默认 PID、USART3 或底盘调度。
+- 验证：`node viewer/build.cjs`、`node viewer/test.cjs`、`tests/ulog/run.ps1 -Compiler D:\minGW\mingw64\bin\gcc.exe`、`tests/race/run.ps1 -Compiler D:\minGW\mingw64\bin\gcc.exe`、`git diff --check` PASS。Keil/BT10 实车连续测试 NOT_RUN。
 
 
 ## 2026-11-22：四轮 M/T 混合测速改造
@@ -32,6 +50,7 @@
 
 - 正式固件默认关闭 `ULOG_PID_PARKED_UPLOAD_ENABLE`。PID_Test 运行期间仍发送 200 Hz BT10 实时帧，网页持续归档；动作终止后直接发送 `#BTLOG,END`，不再等待最多 2000 条停车缓存。
 - 保留 `ULOG_PID_PARKED_UPLOAD_ENABLE=1` 的主机兼容构建，仅用于旧协议解码和缓存回归，不参与正式固件行为。
+- 手动停止实时采集时，网页等待 PID_Test 的 STOPPED 应答再释放下一轮门控；非运动状态下的普通 STOP 可立即结束网页实时会话，迟到帧仍可归档。
 - READY 状态仍要求日志和 PID 实时采集已设防，避免无采集时误启动；终态不再把已停止采集报告为运行期采集故障，允许直接 `TEST_RESET`。
 - 验证：`tests/ulog/run.ps1`、`tests/race/run.ps1`、`node viewer/build.cjs`、`node viewer/test.cjs`、`git diff --check` PASS。未烧录，BT10 连续多轮与实车验收 NOT_RUN。
 

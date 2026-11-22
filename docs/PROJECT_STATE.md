@@ -1,11 +1,30 @@
 # GongChuangSai 项目状态
 
+
 ## 39. AB 四边沿 T 法低速测速修复（2026-11-22）
 
 - `Control/Motor.c` 将 TIM2/TIM3/TIM4/TIM5 的编码器 A、B 两相均配置为 EXTI 双边沿时间戳；硬件 TI12 计数模式、方向定义和 `Motor_GetSpeed` 接口保持不变。
 - T 法每个 AB 边沿按 1 个 TI12 有效计数换算，覆盖约 6 mm/s（约 95 ms/边沿）和 12 mm/s（约 48 ms/边沿）；默认无边沿超时由 120 ms 调整为 180 ms，超时立即清除速度滤波状态并判零。
 - `Core/Src/stm32f4xx_it.c` 增加 PA0/PA1、PA15/PB3、PB4/PB5、PB6/PB7 的 EXTI 入口；未修改 PID、死区、Kick、比赛状态机、运动学或 PWM。
 - 主机 M/T 合成测试 PASS；四轮 6/12 mm/s 的编码器连续性、烧录和实车停车判零仍为 NOT_RUN，需在 PID_TEST 独立测试动作中验收。
+
+
+
+## 2026-11-22：修复 live-only PID_Test 结束帧与第二轮门控
+
+- 正式 `ULOG_PID_PARKED_UPLOAD_ENABLE=0` 时，PID_Test 结束发送的是普通 `#BTLOG,END`；网页同时处理 `#BTLOG,END` 和兼容的 `#BTLOG,PID_END`，不会再因没有停车缓存统计而把实时流留在未完成状态。
+- 网页将实时流结束和停车缓存上传完成拆开维护；RESET 收到 `READY` 后也释放上一轮残留门控，因此结束一轮后可按“准备下一轮 → 开始测试”进入下一轮。
+- 生产 live-only 路径的结束标志是整车 `#BTLOG,END`；`#BTLOG,PID_END` 仅保留旧缓存兼容。手动 STOP 在动作仍运行时等待 STOPPED，应答后再释放网页门控。
+- 只修改 viewer 状态处理和主机回归；比赛流程、TIM6、电机控制、USART3、默认 PID 与正式固件协议未修改。
+- 主机 `node viewer/build.cjs`、`node viewer/test.cjs`、`tests/ulog/run.ps1 -Compiler D:\minGW\mingw64\bin\gcc.exe`、`tests/race/run.ps1 -Compiler D:\minGW\mingw64\bin\gcc.exe`、`git diff --check` PASS。Keil、烧录、BT10 实车连续轮次和机械安全验收仍为 `NOT_RUN`。
+
+## 2026-11-22：修复 PID_Test 连续轮次握手与 UART 忙重试
+
+- `TEST_RESET` 使用独立的停车安全门；终态、取消、超时或故障后会清理残留 PID Burst，并重新打开已经结束的日志会话，避免第二轮 `@PID START` 因日志永久停止或旧采集残留而卡在 `PID_ARMED`。
+- UART2 的 `HAL_BUSY` 发送结果保留队列头尾并在后续主循环重试；`@PID START` 被拒绝时排队返回 `#BTLOG,PID_REJECTED,<reason>`，不再静默丢失握手结果。
+- 网页修复 BLE 回复竞态、请求 ID 过滤、重复启动保护、迟到 `PID_ARMED` 清理；取消/超时会发送普通 `@PID STOP` 清理采集，停止动作同时结束测试状态。
+- 新增主机二轮回归：`TEST_RESET → START → PID_ARMED → TEST` 完成一轮后再次 RESET/START；比赛流程、TIM6、电机默认 PID、USART3 和底盘调度未修改。
+- 主机 `node viewer/build.cjs`、`node viewer/test.cjs`、`tests/ulog/run.ps1 -Compiler D:\minGW\mingw64\bin\gcc.exe`、`tests/race/run.ps1 -Compiler D:\minGW\mingw64\bin\gcc.exe`、`git diff --check` PASS。Keil 编译、烧录、BT10 实车连续轮次和机械安全验收仍为 `NOT_RUN`。
 
 
 ## 35. 四轮 M/T 混合测速（2026-11-22）

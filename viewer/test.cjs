@@ -88,6 +88,14 @@ assert.equal(env.S.pidBurst.data.rows.length,2000);
 near(env.S.pidBurst.data.rows[0][0],10010);
 near(env.S.pidBurst.data.rows[1999][0],30000);
 assert.equal(vm.runInContext('pidStream.liveCount',env),6000);
+// Production PID_Test uses live-only streaming: no PID_BEGIN/PID_STATS parked
+// upload is emitted. PID_END must still release the next-round start gate,
+// while the parked-upload indicator remains incomplete.
+env.resetPidStream();
+env.receivePidLine('#BTLOG,PID_LIVE,1,'+[0,...Array(12).fill(1)].join(','));
+env.receivePidLine('#BTLOG,END');
+assert.equal(vm.runInContext('pidStream.complete',env),true);
+assert.equal(vm.runInContext('pidUpload.complete',env),false);
 const wireLines=[],wireDecoder=env.createPidWireDecoder(text=>wireLines.push(text));
 if(fs.existsSync('tmp/pid_wire_test.bin')){
   const wire=fs.readFileSync('tmp/pid_wire_test.bin');
