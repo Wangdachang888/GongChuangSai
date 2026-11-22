@@ -1,5 +1,12 @@
 # AI 维护变更日志
 
+## 2026-11-22：修复 PID 高频会话 ARM 握手被整车日志拥堵阻塞
+
+- PID 高频会话期间暂停同一 USART2 上低优先级的 43 列整车日志，保留 200 Hz 二进制 PID 实时帧，避免 230400 波特率下队列持续拥堵。
+- `PID_ARMED` 改为主循环可重试的握手帧；有效的 `@PID START` 不再因瞬时队列不足被静默丢弃。停止 PID 会话时清除待发送握手状态。
+- 未修改比赛状态机、TIM6 电机节拍、底盘目标或默认 PID。未烧录，BT10 实车连续测试仍需人工验收。
+- 验证：`tests/ulog/run.ps1 -Compiler D:\minGW\mingw64\bin\gcc.exe` PASS；`git diff --check` PASS。
+
 ## 2026-11-22：取消 PID_Test 停车自动上传并解除连续测试阻塞
 
 - 正式固件默认关闭 `ULOG_PID_PARKED_UPLOAD_ENABLE`。PID_Test 运行期间仍发送 200 Hz BT10 实时帧，网页持续归档；动作终止后直接发送 `#BTLOG,END`，不再等待最多 2000 条停车缓存。

@@ -1,5 +1,12 @@
 # GongChuangSai 项目状态
 
+## 2026-11-22：修复 PID_ARMED 握手在串口拥堵时丢失
+
+- PID_Test 高频会话一旦启动，暂停同一 USART2 上的普通 43 列整车日志，仅发送 200 Hz PID 实时帧，避免 230400 波特率队列拥堵阻塞连续测试。
+- `PID_ARMED` 由主循环重试发送，网页收到后才发送动作命令；有效启动请求不会因一次队列不足而永久卡在“等待 PID_ARMED”。
+- 比赛 Target、TIM6 1 ms 电机更新、10 ms 底盘调度、原有比赛日志和 PID 参数均未修改。未烧录、未完成 BT10 实车连续轮次验收（NOT_RUN）。
+- 主机 `tests/ulog/run.ps1` PASS，`git diff --check` PASS。
+
 ## 36. BT10 在线速度环控制配置（2026-11-22）
 
 - 速度环支持通过 BT10 在停车安全门控下在线修改 `period_ms`（1…20 ms 整数窗口）、`integral_max`、`output_max`、`deadzone` 和 `ff_gain`；这些参数进入四个 `Motor_t` 的 RAM 运行时字段，复位恢复默认宏值。

@@ -93,6 +93,7 @@ static volatile uint16_t s_pid_count, s_pid_sequence, s_pid_write_index;
 static volatile uint32_t s_pid_overwritten;
 static uint16_t s_pid_upload_index, s_pid_rt_sequence;
 static volatile uint8_t s_pid_active, s_pid_div;
+static uint8_t s_pid_arm_pending;
 static uint8_t s_pid_pending, s_pid_upload_started, s_pid_parked;
 static uint8_t s_pid_fault_reported;
 #if (ULOG_PID_PARKED_UPLOAD_ENABLE != 0)
@@ -290,18 +291,16 @@ void ULog_PidBurstStart(void)
         (uint32_t)(HAL_GetTick()-s_init_ms) < ULOG_STARTUP_WAIT_MS) {
         return;
     }
-    {
-        static const uint8_t armed[]="#BTLOG,PID_ARMED,storage_hz=100,realtime_hz=200,capacity=2000,cache=rolling\r\n";
-        if (!ulog_try_write(armed,sizeof(armed)-1u,1024u)) {
-            return;
-        }
-    }
     s_pid_count = 0u; s_pid_upload_index = 0u; s_pid_write_index = 0u;
     s_pid_overwritten = 0u;
     s_pid_sequence = 0u; s_pid_rt_sequence = 0u; s_pid_div = 0u;
     g_ulog_pid_burst_overrun = 0u; g_ulog_pid_realtime_dropped = 0u;
     g_ulog_pid_quantized_clipped = 0u;
     s_pid_fault_reported = 0u; s_pid_upload_started = 0u;
+    /* Queue pressure from the normal 43-column stream must not make a valid
+     * start request disappear.  The handshake is retried from the bounded
+     * main-loop poll after the live channel has been published. */
+    s_pid_arm_pending = 1u;
 #if (ULOG_PID_PARKED_UPLOAD_ENABLE != 0)
     s_pid_pending = 1u;
 #else
@@ -317,6 +316,7 @@ void ULog_PidBurstStop(void)
 {
 #if (ULOG_PID_BURST_ENABLE != 0)
     s_pid_active = 0u;
+    s_pid_arm_pending = 0u;
 #if (ULOG_PID_PARKED_UPLOAD_ENABLE == 0)
     s_pid_pending = 0u;
     s_pid_upload_started = 0u;
@@ -601,6 +601,10 @@ void ULog_PidBurstPoll(void)
     if (!s_inited || s_tx_failed) return;
     pid_commands(); /* Remains available after END; does not rearm recording. */
     if (!s_stream_enabled) return;
+    if (s_pid_arm_pending) {
+        static const uint8_t armed[]="#BTLOG,PID_ARMED,storage_hz=100,realtime_hz=200,capacity=2000,cache=rolling\r\n";
+        if (ulog_try_write(armed, sizeof(armed)-1u, 0u)) s_pid_arm_pending = 0u;
+    }
     if (s_param_snapshot_axis<7u && !s_param_reply_len) {
         ULogPidRequest request={0};request.axis=s_param_snapshot_axis++;
         pid_param_reply(&request,"PID_USED");
@@ -784,6 +788,12 @@ void ULog_Poll(const MecanumChassis_t *chassis)
     uint8_t finished;
 
     if (!ULog_IsRecording()) return;
+#if (ULOG_PID_BURST_ENABLE != 0)
+    /* During a PID session the 200 Hz binary stream is the diagnostic
+     * channel.  Do not let the lower-priority 43-column stream starve its
+     * handshake or saturate the 230400-baud link. */
+    if (s_pid_active) return;
+#endif
     finished = ulog_finished();
     if ((chassis == 0) ||
         (chassis->motor_lf == 0) || (chassis->motor_rf == 0) ||
