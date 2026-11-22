@@ -26,6 +26,7 @@
 | TIM6 1 ms 电机更新 | `NOT_RUN` | 主机只能静态检查回调链 |
 | 10 ms 麦轮位置 PID | `NOT_RUN` | 需编码器和 IMU 实车测试 |
 | 四轮方向与编码器方向 | `NOT_RUN` | 不得根据主机测试推断 |
+| AB 四边沿 T 法低速反馈（6/12 mm/s） | `NOT_RUN` | 已完成固件构建；需烧录后分别验证四轮连续反馈和停车 180 ms 内判零 |
 | ICM20948 初始化和姿态 | `NOT_RUN` | 需观察实际总线和零漂 |
 | USART3 PD8/PD9 与 OpenMV | `NOT_RUN` | 需真实 OpenMV 报文测试 |
 | V4/旧 `#SEQ` 协议兼容 | `NOT_RUN` | 主机协议测试为 PASS，实机仍未跑 |

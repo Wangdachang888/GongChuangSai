@@ -250,6 +250,20 @@ void EXTI0_IRQHandler(void)
     Motor_EncoderEdgeIrq(&motor_right_back);
   }
 }
+void EXTI1_IRQHandler(void)
+{
+  if (__HAL_GPIO_EXTI_GET_IT(GPIO_PIN_1) != RESET) {
+    __HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_1);
+    Motor_EncoderEdgeIrq(&motor_right_back);
+  }
+}
+void EXTI3_IRQHandler(void)
+{
+  if (__HAL_GPIO_EXTI_GET_IT(GPIO_PIN_3) != RESET) {
+    __HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_3);
+    Motor_EncoderEdgeIrq(&motor_left_front);
+  }
+}
 void EXTI4_IRQHandler(void)
 {
   if (__HAL_GPIO_EXTI_GET_IT(GPIO_PIN_4) != RESET) {
@@ -259,8 +273,16 @@ void EXTI4_IRQHandler(void)
 }
 void EXTI9_5_IRQHandler(void)
 {
+  if (__HAL_GPIO_EXTI_GET_IT(GPIO_PIN_5) != RESET) {
+    __HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_5);
+    Motor_EncoderEdgeIrq(&motor_right_front);
+  }
   if (__HAL_GPIO_EXTI_GET_IT(GPIO_PIN_6) != RESET) {
     __HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_6);
+    Motor_EncoderEdgeIrq(&motor_left_back);
+  }
+  if (__HAL_GPIO_EXTI_GET_IT(GPIO_PIN_7) != RESET) {
+    __HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_7);
     Motor_EncoderEdgeIrq(&motor_left_back);
   }
 }

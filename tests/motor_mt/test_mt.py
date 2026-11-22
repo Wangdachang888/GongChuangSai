@@ -3,7 +3,8 @@ This does not emulate STM32 registers or claim hardware validation.
 """
 from dataclasses import dataclass
 
-ENTER, EXIT, TIMEOUT = 2, 4, 0.120
+ENTER, EXIT, TIMEOUT = 2, 4, 0.180
+EDGE_COUNTS = 1.0
 
 @dataclass
 class Est:
@@ -25,7 +26,7 @@ class Est:
         if self.mode == "T" and self.last_edge is not None and self.prev_edge is not None:
             period = self.last_edge - self.prev_edge
             if period > 0 and now - self.last_edge <= TIMEOUT:
-                raw = 4.0 / period * self.direction
+                raw = EDGE_COUNTS / period * self.direction
             elif now - self.last_edge > TIMEOUT:
                 raw = 0.0
             else:
@@ -53,7 +54,7 @@ def test_mt_switch_and_continuity():
     assert e.update(0, 0.005) == 0
     assert e.mode == "T"
     assert e.update(1, 0.040, ((0.038, 1),)) == 200.0
-    assert e.update(1, 0.080, ((0.078, 1),)) == 100.0
+    assert e.update(1, 0.080, ((0.078, 1),)) == 1.0 / 0.040
     assert e.mode == "T"
     e.update(4, 0.085, ((0.083, 1),))
     assert e.mode == "M"
@@ -64,7 +65,7 @@ def test_direction_and_timeout():
     e.update(1, 0.040, ((0.020, -1),))
     e.update(1, 0.080, ((0.060, -1),))
     assert e.speed < 0
-    assert e.update(0, 0.200) == 0.0
+    assert e.update(0, 0.250) == 0.0
 
 def test_bad_timestamps_fall_back_to_m():
     e = Est()
@@ -72,9 +73,20 @@ def test_bad_timestamps_fall_back_to_m():
     # Repeated timestamp is rejected; M count remains the safe estimate.
     assert e.update(1, 0.015, ((0.020, 1),)) == 200.0
 
+def test_low_speed_period_and_prompt_stop():
+    e = Est()
+    # 6 mm/s at 40 mm radius is about 10.5 TI12 counts/s: one AB edge
+    # arrives about every 95 ms and must remain valid under the 180 ms timeout.
+    e.update(0, 0.005)
+    e.update(1, 0.100, ((0.095, 1),))
+    assert e.update(1, 0.195, ((0.190, 1),)) == 1.0 / 0.095
+    assert e.update(0, 0.376) == 0.0
+
+
 if __name__ == "__main__":
     test_counter_wraps()
     test_mt_switch_and_continuity()
     test_direction_and_timeout()
     test_bad_timestamps_fall_back_to_m()
+    test_low_speed_period_and_prompt_stop()
     print("PASS: synthetic M/T estimator checks (host-only; hardware NOT_RUN)")

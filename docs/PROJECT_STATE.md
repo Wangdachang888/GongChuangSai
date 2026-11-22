@@ -1,5 +1,12 @@
 # GongChuangSai 项目状态
 
+## 39. AB 四边沿 T 法低速测速修复（2026-11-22）
+
+- `Control/Motor.c` 将 TIM2/TIM3/TIM4/TIM5 的编码器 A、B 两相均配置为 EXTI 双边沿时间戳；硬件 TI12 计数模式、方向定义和 `Motor_GetSpeed` 接口保持不变。
+- T 法每个 AB 边沿按 1 个 TI12 有效计数换算，覆盖约 6 mm/s（约 95 ms/边沿）和 12 mm/s（约 48 ms/边沿）；默认无边沿超时由 120 ms 调整为 180 ms，超时立即清除速度滤波状态并判零。
+- `Core/Src/stm32f4xx_it.c` 增加 PA0/PA1、PA15/PB3、PB4/PB5、PB6/PB7 的 EXTI 入口；未修改 PID、死区、Kick、比赛状态机、运动学或 PWM。
+- 主机 M/T 合成测试 PASS；四轮 6/12 mm/s 的编码器连续性、烧录和实车停车判零仍为 NOT_RUN，需在 PID_TEST 独立测试动作中验收。
+
 
 ## 35. 四轮 M/T 混合测速（2026-11-22）
 

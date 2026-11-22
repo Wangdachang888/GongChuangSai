@@ -27,10 +27,10 @@
 #define MOTOR_MT_EXIT_COUNTS 4u
 #endif
 #ifndef MOTOR_MT_TIMEOUT_MS
-#define MOTOR_MT_TIMEOUT_MS 120u
+#define MOTOR_MT_TIMEOUT_MS 180u
 #endif
 #ifndef MOTOR_ENCODER_EDGE_COUNTS
-#define MOTOR_ENCODER_EDGE_COUNTS 4.0f /* TI12 counts per CH1 rising edge. */
+#define MOTOR_ENCODER_EDGE_COUNTS 1.0f /* One AB edge equals one TI12 count. */
 #endif
 
 static uint8_t s_dwt_ready;
@@ -49,31 +49,52 @@ static uint32_t motor_now_cycles(void)
     return DWT->CYCCNT;
 }
 
-static void motor_encoder_exti_init(TIM_HandleTypeDef *enc_tim)
+static void motor_encoder_exti_line_init(uint32_t line, uint32_t port_code)
 {
-    uint32_t line;
-    uint32_t exticr_index;
-    uint32_t exticr_shift;
-    uint32_t port_code;
-    IRQn_Type irqn;
+    uint32_t exticr_index = line / 4u;
+    uint32_t exticr_shift = (line % 4u) * 4u;
+    uint32_t mask = 1u << line;
 
-    __HAL_RCC_SYSCFG_CLK_ENABLE();
-    if (enc_tim->Instance == TIM2) { line=15u; port_code=0u; irqn=EXTI15_10_IRQn; }
-    else if (enc_tim->Instance == TIM3) { line=4u; port_code=1u; irqn=EXTI4_IRQn; }
-    else if (enc_tim->Instance == TIM4) { line=6u; port_code=1u; irqn=EXTI9_5_IRQn; }
-    else if (enc_tim->Instance == TIM5) { line=0u; port_code=0u; irqn=EXTI0_IRQn; }
-    else return;
-
-    exticr_index = line / 4u;
-    exticr_shift = (line % 4u) * 4u;
     SYSCFG->EXTICR[exticr_index] &= ~(0x0fu << exticr_shift);
     SYSCFG->EXTICR[exticr_index] |= port_code << exticr_shift;
-    EXTI->IMR |= (1u << line);
-    EXTI->RTSR |= (1u << line);
-    EXTI->FTSR &= ~(1u << line);
-    EXTI->PR = (1u << line);
-    HAL_NVIC_SetPriority(irqn, 5u, 0u);
-    HAL_NVIC_EnableIRQ(irqn);
+    EXTI->IMR |= mask;
+    /* Timestamp both transitions of both quadrature phases.  TIMx remains
+     * the hardware counter; EXTI is only a low-speed timestamp source. */
+    EXTI->RTSR |= mask;
+    EXTI->FTSR |= mask;
+    EXTI->PR = mask;
+}
+
+static void motor_encoder_exti_init(TIM_HandleTypeDef *enc_tim)
+{
+    __HAL_RCC_SYSCFG_CLK_ENABLE();
+    if (enc_tim->Instance == TIM2) {
+        motor_encoder_exti_line_init(15u, 0u); /* PA15: CH1 */
+        motor_encoder_exti_line_init(3u,  1u); /* PB3:  CH2 */
+        HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5u, 0u);
+        HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+        HAL_NVIC_SetPriority(EXTI3_IRQn, 5u, 0u);
+        HAL_NVIC_EnableIRQ(EXTI3_IRQn);
+    } else if (enc_tim->Instance == TIM3) {
+        motor_encoder_exti_line_init(4u, 1u); /* PB4: CH1 */
+        motor_encoder_exti_line_init(5u, 1u); /* PB5: CH2 */
+        HAL_NVIC_SetPriority(EXTI4_IRQn, 5u, 0u);
+        HAL_NVIC_EnableIRQ(EXTI4_IRQn);
+        HAL_NVIC_SetPriority(EXTI9_5_IRQn, 5u, 0u);
+        HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
+    } else if (enc_tim->Instance == TIM4) {
+        motor_encoder_exti_line_init(6u, 1u); /* PB6: CH1 */
+        motor_encoder_exti_line_init(7u, 1u); /* PB7: CH2 */
+        HAL_NVIC_SetPriority(EXTI9_5_IRQn, 5u, 0u);
+        HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
+    } else if (enc_tim->Instance == TIM5) {
+        motor_encoder_exti_line_init(0u, 0u); /* PA0: CH1 */
+        motor_encoder_exti_line_init(1u, 0u); /* PA1: CH2 */
+        HAL_NVIC_SetPriority(EXTI0_IRQn, 5u, 0u);
+        HAL_NVIC_EnableIRQ(EXTI0_IRQn);
+        HAL_NVIC_SetPriority(EXTI1_IRQn, 5u, 0u);
+        HAL_NVIC_EnableIRQ(EXTI1_IRQn);
+    }
 }
 
 void Motor_EncoderEdgeIrq(Motor_t *motor)
@@ -290,6 +311,8 @@ void Motor_Update(Motor_t *motor, float dt)
                   (float)motor->edge_direction * (float)motor->enc_dir;
         } else if (age_s > (float)MOTOR_MT_TIMEOUT_MS * 0.001f) {
             raw = 0.0f;
+            /* Do not let the LPF retain stale wheel motion after a stop. */
+            motor->speed_lpf = 0.0f;
         }
         /* A repeated/out-of-order timestamp never becomes a fake T estimate;
          * retain this window's M estimate until a valid edge period arrives. */
