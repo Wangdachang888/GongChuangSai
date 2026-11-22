@@ -75,6 +75,10 @@ static void stop_chassis_outputs(void)
 static uint32_t s_pid_revision;
 static uint32_t s_pid_idle_since;
 static uint8_t s_pid_idle_seen;
+#if APP_PID_TEST_ENABLE
+static uint32_t s_pid_reset_idle_since;
+static uint8_t s_pid_reset_idle_seen;
+#endif
 
 static uint8_t pid_edit_stationary(void)
 {
@@ -109,6 +113,33 @@ static void pid_edit_observe(void)
     if (!pid_edit_stationary()) s_pid_idle_seen=0u;
     else if (!s_pid_idle_seen) {s_pid_idle_seen=1u;s_pid_idle_since=HAL_GetTick();}
 }
+
+#if APP_PID_TEST_ENABLE
+static uint8_t pid_reset_stationary(void)
+{
+    Motor_t *motors[4] = {&motor_left_front, &motor_right_front,
+                         &motor_left_back, &motor_right_back};
+    unsigned i;
+    if (g_tune_mode || chassis.mode != 0u || chassis.vx_target != 0.0f ||
+        chassis.vy_target != 0.0f || chassis.omega_target != 0.0f) return 0u;
+    for (i=0u; i<4u; ++i) {
+        Motor_t *m=motors[i];
+        if (!isfinite(m->actual_speed) || fabsf(m->actual_speed)>=10.0f ||
+            m->target_cmd!=0.0f || m->target_speed!=0.0f || m->output!=0.0f)
+            return 0u;
+    }
+    return 1u;
+}
+
+static void pid_reset_observe(void)
+{
+    uint32_t now=HAL_GetTick();
+    if (!pid_reset_stationary()) s_pid_reset_idle_seen=0u;
+    else if (!s_pid_reset_idle_seen) {
+        s_pid_reset_idle_seen=1u; s_pid_reset_idle_since=now;
+    }
+}
+#endif
 
 const char *AppRuntime_PidAccess(const ULogPidRequest *request, ULogPidValues *values)
 {
@@ -360,9 +391,13 @@ static void pid_test_commands(uint32_t now, uint8_t ready, AppPidTestReason faul
         return;
     }
     if (request.command == ULOG_PID_TEST_RESET) {
-        ok = (fault == PID_TEST_REASON_NONE && app_imu_bias_ready() &&
-              s_pid_idle_seen && (uint32_t)(now - s_pid_idle_since) >= 500u &&
-              AppPidTest_Status()->state != PID_TEST_RUNNING) && AppPidTest_Rearm();
+        uint8_t safe = fault == PID_TEST_REASON_NONE && app_imu_bias_ready() &&
+              s_pid_reset_idle_seen && (uint32_t)(now - s_pid_reset_idle_since) >= 500u &&
+              AppPidTest_Status()->state != PID_TEST_RUNNING;
+        /* RESET is idempotent in initial IDLE and reopens the logger after a
+         * completed session. Otherwise ULog_Stop() stays latched forever. */
+        ok = safe && (AppPidTest_Status()->state == PID_TEST_IDLE || AppPidTest_Rearm()) &&
+             ULog_Rearm();
         status = AppPidTest_Status();
         ULog_ReplyPidTest(request.id, ok ? "READY" : "NOT_READY",
                           (uint8_t)status->state, (uint8_t)status->reason, status->action);
@@ -391,6 +426,7 @@ static void pid_test_poll(void)
     Motor_t *motors[4] = {&motor_left_front, &motor_right_front,
                          &motor_left_back, &motor_right_back};
     unsigned i;
+    pid_reset_observe();
     if (frames != s_pid_frames) { s_pid_frames = frames; s_pid_last_imu = now; }
     if (!app_imu_ok() || frames == 0u ||
         (uint32_t)(now - s_pid_last_imu) >= RACE_IMU_STALE_MS)

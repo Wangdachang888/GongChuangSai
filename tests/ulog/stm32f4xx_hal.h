@@ -1,6 +1,9 @@
 #ifndef ULOG_TEST_HAL_H
 #define ULOG_TEST_HAL_H
 #include "main.h"
+#ifndef HAL_BUSY
+#define HAL_BUSY 2
+#endif
 #include <stddef.h>
 int ulog_test_snprintf(char *buf, size_t size, const char *format, ...);
 #include "usart.h"

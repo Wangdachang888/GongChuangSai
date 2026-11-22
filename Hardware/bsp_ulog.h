@@ -142,12 +142,15 @@ uint8_t ULog_IsRecording(void); /* Stream enabled, NOT a card-close ACK */
 void ULog_Poll(const MecanumChassis_t *chassis);
 void ULog_SetAppSnapshot(const ULogAppSnapshot *snapshot);
 void ULog_Stop(void);            /* Stop UART stream only, NOT a TF file-close command */
+/* Re-open a stopped diagnostic stream for the next PID_Test session. */
+uint8_t ULog_Rearm(void);
 
 /* Explicit passive diagnostics. Motor scheduler remains 1ms; existing speed
  * PID updates every 5ms. Start is parked-only. Final fault/abort upload may
  * instead use terminal_outputs_stopped held for 500ms. START runs live and
  * rolling cache until STOP or overall END; STOP freezes the last 20s. */
-void ULog_PidBurstStart(void);
+/* Returns non-zero only when a new capture was actually armed. */
+uint8_t ULog_PidBurstStart(void);
 void ULog_PidBurstStop(void);
 uint8_t ULog_PidBurstActive(void);
 void ULog_PidBurstSetParked(uint8_t parked);

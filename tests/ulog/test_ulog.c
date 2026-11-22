@@ -172,7 +172,7 @@ int main(int argc, char **argv)
         ULogPidRequest req={0}; ULogPidValues val={0}; req.write=1; req.kp=2.5f;
         assert(!strcmp(AppRuntime_PidAccess(&req,&val),"NOT_PARKED_500MS"));
     }
-    if (!strcmp(scenario,"flow") || !strcmp(scenario,"bootheld")) {
+    if (!strcmp(scenario,"flow") || !strcmp(scenario,"bootheld") || !strcmp(scenario,"rerun")) {
         poll_step(expected);
         assert(AppPidTest_Status()->state == PID_TEST_DONE);
         assert(!cache_count); /* less than 500ms true parked */
@@ -222,6 +222,25 @@ int main(int argc, char **argv)
         ULogPidRequest req={0}; ULogPidValues val={0};
         assert(!strcmp(AppRuntime_PidAccess(&req,&val),"OK"));
         assert(val.editable == (AppPidTest_Status()->state==PID_TEST_DONE));
+    }
+    if (!strcmp(scenario,"rerun")) {
+        /* A terminal session closes the live stream.  The browser's RESET
+         * command must reopen it before the next START, and a stale capture
+         * must not make the second START silently disappear. */
+        capture_armed = 0u;
+        ULog_TestRx("@PID TEST_RESET 41\n");
+        poll_step(10);
+        assert(AppPidTest_Status()->state == PID_TEST_IDLE);
+        assert(ULog_IsRecording());
+        ULog_TestRx("@PID START\n");
+        poll_step(10);
+        assert(ULog_PidBurstActive() && capture_armed);
+        ULog_TestRx("@PID TEST 42 0\n");
+        poll_step(10);
+        assert(AppPidTest_Status()->state == PID_TEST_RUNNING);
+        ULog_TestRx("@PID TEST_STOP 43\n");
+        poll_step(10);
+        assert(AppPidTest_Status()->state == PID_TEST_CANCELLED);
     }
     key=0; poll_step(30); key=1; poll_step(30); key=0; poll_step(30);
     assert(AppPidTest_Status()->state != PID_TEST_RUNNING);
@@ -335,9 +354,11 @@ HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *uart, uint8_t *data, uin
 #if defined(ULOG_ASYNC_TEST)
 static uint8_t *pending_data;
 static uint16_t pending_len;
+static uint8_t tx_busy_once;
 HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *uart, uint8_t *data, uint16_t len)
 {
     (void)uart;
+    if (tx_busy_once) { tx_busy_once=0u; return HAL_BUSY; }
     assert(!pending_len);
     pending_data=data; pending_len=len;
     return HAL_OK;
@@ -488,6 +509,9 @@ int main(int argc, char **argv)
         capture=fopen("tmp/pid_params_async.bin","wb");assert(capture);
         ULog_SetPidHandler(async_params);
         for(int i=0;i<4;i++)ULog_WriteRaw((uint8_t *)fill,sizeof(fill));
+        /* The first retry after a completed transfer reports HAL_BUSY;
+         * the queued parameter reply must remain intact for the next poll. */
+        tx_busy_once=1u;
         ULog_TestRx("@PID SET 1 0 FL 2.5 1.6 0\n");for(int i=0;i<5;i++)ULog_PidBurstPoll();assert(param_sets==1);
         for(int i=0;i<40;i++) {ULog_PidBurstPoll();}
         assert(param_sets==1);

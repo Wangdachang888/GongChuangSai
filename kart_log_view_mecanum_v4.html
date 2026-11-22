@@ -779,24 +779,30 @@ function pidAnalysisContext(){
 const PID_HEADER='timestamp_ms,fl_target,fl_actual,fl_output,fr_target,fr_actual,fr_output,rl_target,rl_actual,rl_output,rr_target,rr_actual,rr_output';
 const pidStream={live:[],stored:[],liveCount:0,used:{},lastSeq:null,gaps:0,crc:0,expected:null,stats:'',lastDraw:0,complete:false};
 const pidUpload={active:false,received:0,expected:null,startedAt:0,lastAt:0,rate:0,eta:null,complete:false};
-const pidTest={nextId:1,action:0,runTimer:null,replyTimer:null,pendingCommand:'',state:'UNKNOWN',session:0,pendingRun:false};
+const pidTest={nextId:1,action:0,runTimer:null,replyTimer:null,pendingCommand:'',pendingId:0,state:'UNKNOWN',session:0,pendingRun:false,abortArm:false};
 function pidTestText(text){const el=$('pid-test-status-text');if(el)el.textContent=text;}
+function cancelPidTestPending(){pidTest.pendingRun=false;pidTest.abortArm=false;clearTimeout(pidTest.runTimer);clearTimeout(pidTest.replyTimer);pidTest.pendingCommand='';pidTest.pendingId=0;}
 async function pidTestCommand(command,action=0){
   if(!bt10.writeCharacteristic){pidTestText('请先点击“直接连接 BT10”；电脑日志源不能发送测试命令。');throw new Error('BT10 未直连');}
   const id=pidTest.nextId++;
-  await bt10WriteText(command==='RUN'?`@PID TEST ${id} ${action}\n`:`@PID TEST_${command} ${id}\n`);
-  clearTimeout(pidTest.replyTimer);pidTest.pendingCommand=command;
-  pidTest.replyTimer=setTimeout(()=>{if(pidTest.pendingCommand===command){pidTest.pendingCommand='';pidTestText(`${command} 已发送，但 2 秒内没有收到车辆应答。请检查固件版本、BT10 直连和 USART2 回传。`);}},2000);
+  clearTimeout(pidTest.replyTimer);pidTest.pendingCommand=command;pidTest.pendingId=id;
+  pidTest.replyTimer=setTimeout(()=>{if(pidTest.pendingCommand===command&&pidTest.pendingId===id){pidTest.pendingCommand='';pidTest.pendingId=0;pidTestText(`${command} 已发送，但 2 秒内没有收到车辆应答。请检查固件版本、BT10 直连和 USART2 回传。`);}},2000);
   pidTestText(`已发送 ${command}（请求 ${id}），等待车辆应答…`);
+  try{await bt10WriteText(command==='RUN'?`@PID TEST ${id} ${action}\n`:`@PID TEST_${command} ${id}\n`);}
+  catch(e){clearTimeout(pidTest.replyTimer);pidTest.pendingCommand='';pidTest.pendingId=0;throw e;}
   return id;
 }
-async function pidTestPrepare(){try{clearTimeout(pidTest.runTimer);await pidTestCommand('RESET');}catch(e){notify('准备下一轮失败：'+e.message,true);}}
-async function pidTestRun(){try{clearTimeout(pidTest.runTimer);const action=Number($('pid-test-action').value)||0;pidTest.action=action;pidTest.pendingRun=true;await bt10WriteText('@PID START\n');pidTestText('已请求高频采集，等待 PID_ARMED 后启动动作…');pidTest.runTimer=setTimeout(()=>{if(pidTest.pendingRun){pidTest.pendingRun=false;notify('等待 PID_ARMED 超时，请检查停车状态和上次上传是否完成。',true);}},3000);}catch(e){pidTest.pendingRun=false;notify('开始动作失败：'+e.message,true);}}
-async function pidTestStop(){try{await pidTestCommand('STOP');}catch(e){notify('停止动作失败：'+e.message,true);}}
+async function pidTestPrepare(){try{clearTimeout(pidTest.runTimer);pidTest.pendingRun=false;pidTest.abortArm=false;await pidTestCommand('RESET');}catch(e){notify('准备下一轮失败：'+e.message,true);}}
+async function pidTestRun(){try{
+  if(pidTest.pendingRun||pidTest.pendingCommand||pidOnline.busy){notify('已有 PID 测试命令在处理中，请等待车辆应答。',true);return false;}
+  if(pidStream.liveCount>0&&!pidStream.complete){notify('当前实时日志流仍在运行，请先点击“停止实时”并等待结束后再开始测试。',true);return false;}
+  clearTimeout(pidTest.runTimer);const action=Number($('pid-test-action').value)||0;pidTest.action=action;pidTest.abortArm=false;pidTest.pendingRun=true;pidTestText('已请求高频采集，等待 PID_ARMED 后启动动作…');pidTest.runTimer=setTimeout(()=>{if(pidTest.pendingRun){pidTest.pendingRun=false;pidTest.abortArm=true;notify('等待 PID_ARMED 超时，正在取消本次采集…',true);sendPidCommand('STOP').catch(()=>{});}},3000);await bt10WriteText('@PID START\n');return true;
+}catch(e){pidTest.pendingRun=false;pidTest.abortArm=false;clearTimeout(pidTest.runTimer);notify('开始动作失败：'+e.message,true);return false;}}
+async function pidTestStop(){try{const running=pidTest.state==='RUNNING'||pidTest.state==='STARTED';pidTest.pendingRun=false;clearTimeout(pidTest.runTimer);pidTest.abortArm=!running;if(running)await pidTestCommand('STOP');await sendPidCommand('STOP');}catch(e){notify('停止动作失败：'+e.message,true);}}
 async function pidTestStatus(){try{await pidTestCommand('STATUS');}catch(e){notify('读取测试状态失败：'+e.message,true);}}
 async function pidDeadzoneRun(){
   const sel=$('pid-test-action');
-  try{if(sel)sel.value='4';pidTest.action=4;await pidTestRun();pidTestText('已请求低速正反向死区测量；完成后网页将按四轮输出/实测自动估计正反向阈值。');}
+  try{if(sel)sel.value='4';pidTest.action=4;const started=await pidTestRun();if(started)pidTestText('已请求低速正反向死区测量；完成后网页将按四轮输出/实测自动估计正反向阈值。');}
   catch(e){notify('死区测量启动失败：'+e.message,true);}
 }
 function pidCrc(bytes){let crc=65535;for(const b of bytes){crc^=b<<8;for(let i=0;i<8;i++)crc=((crc&32768)?(crc<<1)^0x1021:crc<<1)&65535;}return crc;}
@@ -851,10 +857,36 @@ function estimateDeadzone(){
 }
 function encodePidUsed(p){return '#BTLOG,PID_USED,0,'+p.revision+','+p.axis+',READ,'+PID_VALUE_KEYS.map(k=>p[k]).join(',')+','+(p.editable?1:0)+'\n';}
 function pidCsv(){return Object.values(pidStream.used).map(encodePidUsed).join('')+PID_HEADER+'\n'+pidStream.stored.map(r=>r.join(',')).join('\n')+'\n'+(pidStream.stats?pidStream.stats+'\n':'');}
+function finishPidLive(force=false){
+  const active=pidStream.liveCount>0||pidTest.state==='ARMED'||pidTest.state==='STARTED'||pidTest.state==='RUNNING';
+  if(!force&&!active)return false;
+  pidTest.state='DONE';pidTest.pendingRun=false;pidTest.abortArm=false;
+  if(typeof clearTimeout==='function')clearTimeout(pidTest.runTimer);
+  pidTestText('实时测试已结束，可以点击“准备下一轮”；停车自动上传已停用。');
+  /* Live-only production sessions close with the ordinary logger END.  A
+   * parked-cache PID_END is optional, so completion must not depend on
+   * PID_STATS or stored rows. */
+  const parkedComplete=pidStream.expected!==null&&pidStream.expected===pidStream.stored.length;
+  pidStream.complete=true;pidUpload.active=false;pidUpload.complete=parkedComplete;
+  pidUpload.lastAt=performance.now();renderPidUpload();
+  if(pidStream.stored.length){loadPidBurst(pidCsv(),'停车上传_PID_100Hz.csv');estimateDeadzone();}
+  renderPidStream();return true;
+}
 function receivePidLine(line){
-  if(line.startsWith('#BTLOG,PID_ARMED')){resetPidStream();$('pid-live-status').textContent='已开始：持续 200 Hz 实时，网页持续归档；测试结束直接关闭实时流，不自动补传停车缓存。';if(pidTest.pendingRun){pidTest.pendingRun=false;clearTimeout(pidTest.runTimer);pidTestCommand('RUN',pidTest.action).catch(e=>notify('开始动作失败：'+e.message,true));}return true;}
-  if(line.startsWith('#BTLOG,PID_REJECTED')){pidTest.pendingRun=false;clearTimeout(pidTest.runTimer);const reason=line.split(',').slice(2).join(',').trim()||'busy_or_not_parked_or_warmup';$('pid-live-status').textContent='启动被拒绝：'+reason+'；请停车、等待开机至少 2 秒，并确认上一轮实时流已结束。';pidTestText('车辆未进入高频采集：'+reason+'。未发送动作，不会让车辆运动。');return true;}
-  if(line.startsWith('#BTLOG,PID_TEST,')){const f=line.trim().split(',');clearTimeout(pidTest.replyTimer);pidTest.pendingCommand='';pidTest.state=f[3]||'UNKNOWN';pidTestText(`车辆测试状态：${pidTest.state} · 状态码 ${f[4]||'—'} · 原因 ${f[5]||'—'} · 动作 ${f[6]||'—'}`);return true;}
+  if(line.startsWith('#BTLOG,PID_ARMED')){resetPidStream();pidTest.state='ARMED';$('pid-live-status').textContent='已开始：持续 200 Hz 实时，网页持续归档；测试结束直接关闭实时流，不自动补传停车缓存。';if(pidTest.pendingRun){pidTest.pendingRun=false;clearTimeout(pidTest.runTimer);pidTestCommand('RUN',pidTest.action).catch(e=>notify('开始动作失败：'+e.message,true));}else if(pidTest.abortArm){pidTest.abortArm=false;sendPidCommand('STOP').catch(()=>{});}return true;}
+  if(line.startsWith('#BTLOG,PID_REJECTED')){pidTest.state='REJECTED';pidTest.pendingRun=false;pidTest.abortArm=false;clearTimeout(pidTest.runTimer);const reason=line.split(',').slice(2).join(',').trim()||'busy_or_not_parked_or_warmup';$('pid-live-status').textContent='启动被拒绝：'+reason+'；请停车、等待开机至少 2 秒，并确认上一轮实时流已结束。';pidTestText('车辆未进入高频采集：'+reason+'。未发送动作，不会让车辆运动。');return true;}
+  if(line.startsWith('#BTLOG,PID_TEST,')){const f=line.trim().split(',');const replyId=Number(f[2]);
+    /* Replies carry the request id.  A late reply from a timed-out command
+     * must never overwrite the state of the newer command. */
+    if(!pidTest.pendingId||replyId!==pidTest.pendingId)return true;
+    clearTimeout(pidTest.replyTimer);pidTest.pendingCommand='';pidTest.pendingId=0;
+    if(f[3]==='REJECTED'||f[3]==='NOT_READY'){pidTest.pendingRun=false;clearTimeout(pidTest.runTimer);}
+    pidTest.state=f[3]||'UNKNOWN';
+    if(f[3]==='STOPPED'||f[3]==='NOT_RUNNING')finishPidLive();
+    /* RESET READY means the old live session is no longer open.  This also
+     * releases the browser gate when a terminal #BTLOG,END was lost. */
+    if(f[3]==='READY')pidStream.complete=true;
+    pidTestText(`车辆测试状态：${pidTest.state} · 状态码 ${f[4]||'—'} · 原因 ${f[5]||'—'} · 动作 ${f[6]||'—'}`);return true;}
   if(line.startsWith('#BTLOG,PID_BEGIN')){pidStream.stored=[];pidStream.complete=false;const announced=line.match(/count=(\d+)/);Object.assign(pidUpload,{active:true,received:0,expected:announced?Number(announced[1]):2000,startedAt:performance.now(),lastAt:performance.now(),rate:0,eta:null,complete:false});renderPidUpload();return true;}
   const live=line.startsWith('#BTLOG,PID_LIVE,'),stored=line.startsWith('#BTLOG,PID,');
   if(live||stored){
@@ -869,11 +901,12 @@ function receivePidLine(line){
   }
   if(line.startsWith('#BTLOG,PID_STATS,')){pidStream.stats=line;const m=line.match(/count=(\d+)/);pidStream.expected=m?Number(m[1]):null;pidUpload.expected=pidStream.expected;renderPidUpload();return true;}
   if(line==='#BTLOG,PID_END'){
-    pidTestText('实时测试已结束，可以点击“准备下一轮”；停车自动上传已停用。');
-    pidStream.complete=pidStream.expected!==null&&pidStream.expected===pidStream.stored.length;pidUpload.active=false;pidUpload.complete=pidStream.complete;pidUpload.lastAt=performance.now();renderPidUpload();
-    if(pidStream.stored.length){loadPidBurst(pidCsv(),'停车上传_PID_100Hz.csv');estimateDeadzone();}
-    renderPidStream();return true;
+    finishPidLive(true);return true;
   }
+  /* With parked upload disabled, ULog_Stop emits the ordinary END marker
+   * after the live burst.  Consume it for PID state while leaving the caller
+   * to finalize the general log archive. */
+  if(line==='#BTLOG,END')finishPidLive();
   return false;
 }
 function renderPidStream(){
@@ -891,7 +924,16 @@ function downloadPidStream(){notify('停车自动上传已停用，请使用“�
 async function sendPidCommand(command){
   if(command==='START'&&pidOnline.busy){notify('参数操作未结束，请等待读回确认后再开始采集。',true);return;}
   if(!bt10.writeCharacteristic){notify('请先直接连接 BT10；电脑日志源只接收数据。',true);return;}
-  try{await bt10WriteText('@PID '+command+'\n');$('pid-live-status').textContent='命令已发送，等待车辆确认；不会让车辆运动或修改 PID。';}catch(e){notify('PID 命令发送失败：'+e.message,true);}
+  /* A fresh manual realtime start supersedes a previous cancelled ARM wait. */
+  if(command==='START'&&!pidTest.pendingRun)pidTest.abortArm=false;
+  try{
+    await bt10WriteText('@PID '+command+'\n');
+    /* @PID STOP ends a live-only capture without emitting PID_END while the
+     * normal logger remains open.  Release the browser's next-round gate
+     * immediately after the write succeeds; late frames are still accepted. */
+    if(command==='STOP'&&pidTest.state!=='RUNNING')finishPidLive();
+    $('pid-live-status').textContent='命令已发送，等待车辆确认；不会让车辆运动或修改 PID。';
+  }catch(e){notify('PID 命令发送失败：'+e.message,true);}
 }
 function pidWireSelfTest(){
   if(bt10.device||realtime.socket){notify('请断开实时连接后运行模拟自测，避免混入实车数据。',true);return;}
@@ -1100,7 +1142,7 @@ async function fullSelfTest(){
   finally{button.disabled=false;}
 }
 async function connectBt10(){
-  if(bt10.device){ bt10.device.gatt?.disconnect(); bt10.device=null; bt10.characteristic=null; bt10.writeCharacteristic=null; $('bt-selftest').disabled=true; btStatus('未连接'); return; }
+  if(bt10.device){ cancelPidTestPending(); bt10.device.gatt?.disconnect(); bt10.device=null; bt10.characteristic=null; bt10.writeCharacteristic=null; $('bt-selftest').disabled=true; btStatus('未连接'); return; }
   if(!navigator.bluetooth){ btStatus('当前浏览器不支持 Web Bluetooth','error'); return; }
   try{
     btStatus('选择 BT10…');
@@ -1117,7 +1159,7 @@ async function connectBt10(){
     }
     bt10.device=device; bt10.characteristic=ch; bt10.writeCharacteristic=await service.getCharacteristic(BT10_WRITE); bt10.decoder=new TextDecoder(); bt10.wire=createPidWireDecoder(bt10DecodedText); resetPidStream(); bt10.ended=false;pidParamDisconnected(); resetRealtimeSession();
     ch.addEventListener('characteristicvaluechanged',bt10Notification); await ch.startNotifications();
-    device.addEventListener('gattserverdisconnected',()=>{if(bt10.device===device){bt10.device=null;bt10.characteristic=null;bt10.writeCharacteristic=null;$('bt-selftest').disabled=true;pidParamDisconnected();archiveFinish(false);btStatus('BT10 已断开，日志已保留','error');}});
+    device.addEventListener('gattserverdisconnected',()=>{if(bt10.device===device){cancelPidTestPending();bt10.device=null;bt10.characteristic=null;bt10.writeCharacteristic=null;$('bt-selftest').disabled=true;pidParamDisconnected();archiveFinish(false);btStatus('BT10 已断开，日志已保留','error');}});
     $('bt-selftest').disabled=false; btStatus('BT10 已连接，等待日志','connected'); notify('BT10 已连接，日志将实时显示并在 END 后自动下载。');readVehiclePid();
   }catch(e){ bt10.device=null; btStatus('BT10 连接失败：'+e.message,'error'); }
 }

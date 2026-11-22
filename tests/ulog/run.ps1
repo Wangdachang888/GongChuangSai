@@ -67,7 +67,7 @@ Path("tmp/runtime_pid_test.c").write_text(head+extra+constants+stop+block+inputs
         & $Compiler @common @testArgs tests/ulog/test_ulog.c App/app_pid_test.c Hardware/bsp_ulog.c tmp/runtime_pid_test.c -lm -o $binary
         if ($LASTEXITCODE) { throw "PID test compile failed: $profile" }
         $scenarios = @('unit')
-        if ($profile -eq 'forward') { $scenarios += @('flow','bootheld','cancel','watchdog','imu','feedback','capture','stale') }
+        if ($profile -eq 'forward') { $scenarios += @('flow','bootheld','cancel','watchdog','imu','feedback','capture','stale','rerun') }
         foreach ($scenario in $scenarios) {
             & (Join-Path $root $binary) $scenario
             if ($LASTEXITCODE) { throw "PID test failed: $profile $scenario" }

@@ -113,11 +113,32 @@ static char s_param_reply[384];
 static uint16_t s_param_reply_len;
 static char s_pid_test_reply[160];
 static uint16_t s_pid_test_reply_len;
+/* Raw START rejection is kept separate from PID_TEST replies because the
+ * browser listens for the legacy #BTLOG,PID_REJECTED line. */
+static char s_pid_line_reply[96];
+static uint16_t s_pid_line_reply_len;
 static uint8_t s_param_snapshot_axis=7u;
 static uint8_t s_rx_len, s_rx_bad;
 #endif
 
 static uint8_t ulog_try_write(const uint8_t *data, uint16_t len, uint16_t reserve);
+
+#if (ULOG_PID_BURST_ENABLE != 0)
+static void ulog_queue_pid_rejection(const char *reason);
+#endif
+
+#if (ULOG_PID_BURST_ENABLE != 0)
+static void ulog_queue_pid_rejection(const char *reason)
+{
+    int n;
+    if (s_pid_line_reply_len) return;
+    if (!reason) reason="busy";
+    n=snprintf(s_pid_line_reply,sizeof(s_pid_line_reply),
+               "#BTLOG,PID_REJECTED,%s\r\n",reason);
+    if (n>0 && (size_t)n<sizeof(s_pid_line_reply))
+        s_pid_line_reply_len=(uint16_t)n;
+}
+#endif
 
 void ULog_SetPidHandler(ULogPidHandler handler)
 {
@@ -211,6 +232,20 @@ static uint8_t ulog_try_write(const uint8_t *data, uint16_t len, uint16_t reserv
 #endif
 }
 
+#if (ULOG_PID_BURST_ENABLE != 0)
+#if !defined(ULOG_TEST) || defined(ULOG_ASYNC_TEST)
+/* A HAL_BUSY result is transient: keep the published queue head/tail intact
+ * and let the next bounded main-loop poll retry the transfer. */
+static void ulog_tx_kick(void)
+{
+    if (s_inited && !s_tx_failed && !s_tx_busy && s_tx_tail != s_tx_head)
+        ULog_TxCpltCallback();
+}
+#else
+static void ulog_tx_kick(void) {}
+#endif
+#endif
+
 void ULog_WriteRaw(const uint8_t *data, uint16_t len)
 {
     if (s_stream_enabled && data && len && !ulog_try_write(data, len, 0u) && !s_tx_failed)
@@ -251,9 +286,16 @@ void ULog_TxCpltCallback(void)
     if (rc != HAL_OK) {
         ULOG_CRITICAL_ENTER();
         s_tx_busy = 0u;
-        s_tx_tail = (uint16_t)((tail + count) % ULOG_TX_QUEUE_SIZE);
+        s_tx_inflight = 0u;
         ULOG_CRITICAL_EXIT();
-        g_ulog_tx_error_count++;
+        /* HAL_BUSY means the peripheral is still finishing another transfer;
+         * dropping this span loses PID_ARMED/RESET replies.  Leave s_tx_tail
+         * untouched so ulog_tx_kick() can retry it. */
+        if (rc == HAL_ERROR) {
+            s_tx_failed = 1u;
+            s_stream_enabled = 0u;
+            g_ulog_tx_error_count++;
+        }
     }
 #endif
 }
@@ -286,12 +328,12 @@ void ULog_Stop(void)
     s_stop_requested = 0u;
 }
 
-void ULog_PidBurstStart(void)
+uint8_t ULog_PidBurstStart(void)
 {
 #if (ULOG_PID_BURST_ENABLE != 0)
     if (!ULog_IsRecording() || !s_pid_parked || s_pid_active || s_pid_pending ||
         (uint32_t)(HAL_GetTick()-s_init_ms) < ULOG_STARTUP_WAIT_MS) {
-        return;
+        return 0u;
     }
     s_pid_count = 0u; s_pid_upload_index = 0u; s_pid_write_index = 0u;
     s_pid_overwritten = 0u;
@@ -311,6 +353,9 @@ void ULog_PidBurstStart(void)
     s_data_sent = 1u;
     s_param_snapshot_axis=s_pid_handler?0u:7u;
     s_pid_active = 1u; /* publish last */
+    return 1u;
+#else
+    return 0u;
 #endif
 }
 
@@ -509,6 +554,12 @@ static void pid_commands(void)
         if (ulog_try_write((uint8_t *)s_pid_test_reply,s_pid_test_reply_len,0u)) s_pid_test_reply_len=0u;
         else return;
     }
+#if (ULOG_PID_BURST_ENABLE != 0)
+    if (s_pid_line_reply_len) {
+        if (ulog_try_write((uint8_t *)s_pid_line_reply,s_pid_line_reply_len,0u)) s_pid_line_reply_len=0u;
+        else return;
+    }
+#endif
     while (s_rx_tail != s_rx_head && budget--) {
         ch=(char)s_rx_queue[s_rx_tail];s_rx_tail=(uint8_t)((s_rx_tail+1u)&127u);
         if (ch=='\r') continue;
@@ -516,8 +567,16 @@ static void pid_commands(void)
             s_rx_line[s_rx_len]=0;
             if (!s_rx_bad) {
                 if (!strcmp(s_rx_line,"@PID START")) {
-                    ULog_PidBurstStart();
-                    if (!s_pid_active) ULog_Printf("#BTLOG,PID_REJECTED,busy_or_not_parked_or_warmup\r\n");
+                    uint8_t was_active=s_pid_active;
+                    if (!ULog_PidBurstStart()) {
+                        if (was_active) ulog_queue_pid_rejection("active");
+                        else if (s_pid_pending) ulog_queue_pid_rejection("busy");
+                        else if (!ULog_IsRecording()) ulog_queue_pid_rejection("not_recording");
+                        else if (!s_pid_parked) ulog_queue_pid_rejection("not_parked");
+                        else if ((uint32_t)(HAL_GetTick()-s_init_ms) < ULOG_STARTUP_WAIT_MS)
+                            ulog_queue_pid_rejection("warmup");
+                        else ulog_queue_pid_rejection("busy");
+                    }
                 } else if (!strcmp(s_rx_line,"@PID STOP")) ULog_PidBurstStop();
                 else if (!strncmp(s_rx_line,"@PID TEST",9u)) {
                     char *tokens[5], *p; unsigned n=0u; uint32_t id=0u, action=0u;
@@ -562,6 +621,8 @@ static void pid_commands(void)
         s_param_reply_len=0u;
     if (s_pid_test_reply_len && ulog_try_write((uint8_t *)s_pid_test_reply,s_pid_test_reply_len,0u))
         s_pid_test_reply_len=0u;
+    if (s_pid_line_reply_len && ulog_try_write((uint8_t *)s_pid_line_reply,s_pid_line_reply_len,0u))
+        s_pid_line_reply_len=0u;
 }
 #ifdef ULOG_TEST
 void ULog_TestRx(const char *text)
@@ -607,6 +668,9 @@ void ULog_PidBurstPoll(void)
     uint32_t now=HAL_GetTick();
 #endif
     if (!s_inited || s_tx_failed) return;
+    /* Retry a transfer that previously returned HAL_BUSY without producing a
+     * second copy or dropping the pending queue span. */
+    ulog_tx_kick();
     pid_commands(); /* Remains available after END; does not rearm recording. */
     if (!s_stream_enabled) return;
     if (s_pid_arm_pending) {
@@ -695,6 +759,38 @@ uint8_t ULog_IsRecording(void)
     return s_inited && s_stream_enabled && !s_stop_requested;
 }
 
+uint8_t ULog_Rearm(void)
+{
+    static const uint8_t end_frame[] = "#BTLOG,END\r\n";
+    if (!s_inited || s_tx_failed) return 0u;
+#if (ULOG_PID_BURST_ENABLE != 0)
+    /* RESET also recovers an orphan capture after a late/missed PID_ARMED.
+     * Stop it before opening the next diagnostic session. */
+    if (s_pid_active || s_pid_arm_pending || s_pid_pending ||
+        s_pid_upload_started || s_param_snapshot_axis<7u) {
+        ULog_PidBurstStop();
+        s_pid_arm_pending=0u;
+        s_pid_pending=0u;
+        s_pid_upload_started=0u;
+        s_pid_upload_index=0u;
+        s_pid_fault_reported=0u;
+        s_param_snapshot_axis=7u;
+    }
+#endif
+    if (s_stop_requested && !s_end_sent) {
+        if (!ulog_try_write(end_frame, sizeof(end_frame)-1u, 0u)) return 0u;
+        s_end_sent = 1u;
+    }
+    s_stream_enabled = 1u;
+    s_end_sent = 0u;
+    s_data_sent = 0u;
+    s_stop_requested = 0u;
+    s_last_ms = HAL_GetTick();
+    s_odo = 0.0f;
+    s_have_last = 0u;
+    return ULog_IsRecording();
+}
+
 void ULog_Printf(const char *s)
 {
     if (s == 0) {
@@ -757,6 +853,7 @@ void ULog_Init(void)
     s_pid_count=0u; s_pid_active=0u; s_pid_pending=0u;
     s_pid_test_pending=0u;
     s_pid_test_reply_len=0u;
+    s_pid_line_reply_len=0u;
 #if !defined(ULOG_TEST)
     (void)HAL_UART_Receive_IT(&s_huart2,&s_rx_byte,1u);
 #endif
@@ -796,6 +893,10 @@ void ULog_Poll(const MecanumChassis_t *chassis)
     uint8_t phase;
     uint8_t finished;
 
+    /* Retry a queued PID frame even after the stream has been stopped. */
+#if (ULOG_PID_BURST_ENABLE != 0)
+    ulog_tx_kick();
+#endif
     if (!ULog_IsRecording()) return;
 #if (ULOG_PID_BURST_ENABLE != 0)
     /* During a PID session the 200 Hz binary stream is the diagnostic
@@ -955,12 +1056,13 @@ void ULog_SetPidHandler(ULogPidHandler handler) { (void)handler; }
 void ULog_Poll(const MecanumChassis_t *chassis) { (void)chassis; }
 void ULog_SetAppSnapshot(const ULogAppSnapshot *snapshot) { (void)snapshot; }
 void ULog_Stop(void) {}
+uint8_t ULog_Rearm(void) { return 0u; }
 uint8_t ULog_IsRecording(void) { return 0u; }
 void ULog_WriteRaw(const uint8_t *data, uint16_t len) { (void)data; (void)len; }
 void ULog_Printf(const char *s) { (void)s; }
 UART_HandleTypeDef *ULog_GetHandle(void) { return 0; }
 void ULog_TxCpltCallback(void) {}
-void ULog_PidBurstStart(void) {}
+uint8_t ULog_PidBurstStart(void) { return 0u; }
 void ULog_PidBurstStop(void) {}
 uint8_t ULog_PidBurstActive(void) { return 0u; }
 void ULog_PidBurstSampleIsr(const ULogPidSample *sample) { (void)sample; }
