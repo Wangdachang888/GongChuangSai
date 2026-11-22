@@ -94,8 +94,11 @@ static volatile uint32_t s_pid_overwritten;
 static uint16_t s_pid_upload_index, s_pid_rt_sequence;
 static volatile uint8_t s_pid_active, s_pid_div;
 static uint8_t s_pid_pending, s_pid_upload_started, s_pid_parked;
-static uint8_t s_pid_fault_reported, s_pid_was_parked;
+static uint8_t s_pid_fault_reported;
+#if (ULOG_PID_PARKED_UPLOAD_ENABLE != 0)
+static uint8_t s_pid_was_parked;
 static uint32_t s_pid_parked_since;
+#endif
 #if !defined(ULOG_TEST)
 static uint8_t s_rx_byte;
 #endif
@@ -256,10 +259,16 @@ void ULog_Stop(void)
 {
     if (!s_stream_enabled) return;
 #if (ULOG_PID_BURST_ENABLE != 0)
-    if (!s_tx_failed && (s_pid_active || s_pid_pending)) {
+    if (!s_tx_failed && (s_pid_active ||
+#if (ULOG_PID_PARKED_UPLOAD_ENABLE != 0)
+                         s_pid_pending
+#else
+                         0u
+#endif
+                         )) {
         ULog_PidBurstStop();
         s_stop_requested = 1u;
-        return; /* defer END until frozen records have been uploaded */
+        return; /* defer END until capture is frozen and queued replies finish */
     }
 #endif
     if (s_data_sent && !s_tx_failed && !s_end_sent) {
@@ -292,7 +301,12 @@ void ULog_PidBurstStart(void)
     s_pid_sequence = 0u; s_pid_rt_sequence = 0u; s_pid_div = 0u;
     g_ulog_pid_burst_overrun = 0u; g_ulog_pid_realtime_dropped = 0u;
     g_ulog_pid_quantized_clipped = 0u;
-    s_pid_fault_reported = 0u; s_pid_upload_started = 0u; s_pid_pending = 1u;
+    s_pid_fault_reported = 0u; s_pid_upload_started = 0u;
+#if (ULOG_PID_PARKED_UPLOAD_ENABLE != 0)
+    s_pid_pending = 1u;
+#else
+    s_pid_pending = 0u;
+#endif
     s_data_sent = 1u;
     s_param_snapshot_axis=s_pid_handler?0u:7u;
     s_pid_active = 1u; /* publish last */
@@ -303,6 +317,10 @@ void ULog_PidBurstStop(void)
 {
 #if (ULOG_PID_BURST_ENABLE != 0)
     s_pid_active = 0u;
+#if (ULOG_PID_PARKED_UPLOAD_ENABLE == 0)
+    s_pid_pending = 0u;
+    s_pid_upload_started = 0u;
+#endif
 #endif
 }
 
@@ -574,10 +592,11 @@ void ULog_PidBurstPoll(void)
 #if (ULOG_PID_BURST_ENABLE != 0)
     PidPacked p;
     uint16_t seq;
-    uint8_t upload_ready;
-    uint32_t now=HAL_GetTick();
 #if !defined(ULOG_TEST)
     uint32_t irq_state;
+#endif
+#if (ULOG_PID_PARKED_UPLOAD_ENABLE != 0)
+    uint32_t now=HAL_GetTick();
 #endif
     if (!s_inited || s_tx_failed) return;
     pid_commands(); /* Remains available after END; does not rearm recording. */
@@ -586,14 +605,23 @@ void ULog_PidBurstPoll(void)
         ULogPidRequest request={0};request.axis=s_param_snapshot_axis++;
         pid_param_reply(&request,"PID_USED");
     }
-    /* Final-upload fallback cannot arm a capture or bypass the ordinary
+#if (ULOG_PID_PARKED_UPLOAD_ENABLE != 0)
+    uint8_t upload_ready;
+    /* Optional final upload cannot arm a capture or bypass the ordinary
      * parked gate while recording is still running. */
     upload_ready = s_pid_parked ||
                    (s_stop_requested && s_app_snapshot.finished &&
                     s_app_snapshot.terminal_outputs_stopped);
     if (!upload_ready) s_pid_was_parked=0u;
     else if (!s_pid_was_parked) { s_pid_was_parked=1u; s_pid_parked_since=now; }
-    if ((s_pid_active || s_pid_pending) && !s_pid_upload_started) {
+#endif
+    if (s_pid_active ||
+#if (ULOG_PID_PARKED_UPLOAD_ENABLE != 0)
+        s_pid_pending
+#else
+        0u
+#endif
+        ) {
         ULOG_CRITICAL_ENTER();
         p=s_pid_latest; seq=s_pid_sequence;
         ULOG_CRITICAL_EXIT();
@@ -604,6 +632,7 @@ void ULog_PidBurstPoll(void)
             if (!pid_send(&p,1u,seq)) g_ulog_pid_realtime_dropped++;
         }
     }
+#if (ULOG_PID_PARKED_UPLOAD_ENABLE != 0)
     if (!s_pid_active && s_pid_pending && upload_ready && s_pid_was_parked &&
                (uint32_t)(now-s_pid_parked_since)>=500u) {
         if (!s_pid_upload_started) {
@@ -636,9 +665,14 @@ void ULog_PidBurstPoll(void)
         }
     }
 #endif
+#endif
     if (s_stop_requested) {
 #if (ULOG_PID_BURST_ENABLE != 0)
+#if (ULOG_PID_PARKED_UPLOAD_ENABLE != 0)
         if (s_pid_pending || s_param_snapshot_axis<7u || s_param_reply_len) return;
+#else
+        if (s_param_snapshot_axis<7u || s_param_reply_len) return;
+#endif
 #endif
         ULog_Stop();
     }

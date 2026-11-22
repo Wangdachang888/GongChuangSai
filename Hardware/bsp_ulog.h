@@ -39,6 +39,13 @@ extern "C" {
 #define ULOG_PID_BURST_CAPACITY 2000u /* Rolling last 20s at 100Hz; live has no 20s limit. */
 #endif
 
+/* Parking-cache upload is optional diagnostics.  Keep it off in the normal
+ * PID_Test firmware so a finished motion is not blocked by up to 2000 UART
+ * frames; the browser already archives the continuous live stream. */
+#ifndef ULOG_PID_PARKED_UPLOAD_ENABLE
+#define ULOG_PID_PARKED_UPLOAD_ENABLE 0
+#endif
+
 /* BT10 must be configured to this same UART rate. */
 #ifndef ULOG_BAUD_RATE
 #define ULOG_BAUD_RATE 230400u

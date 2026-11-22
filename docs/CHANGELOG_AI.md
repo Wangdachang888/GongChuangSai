@@ -1,5 +1,12 @@
 # AI 维护变更日志
 
+## 2026-11-22：取消 PID_Test 停车自动上传并解除连续测试阻塞
+
+- 正式固件默认关闭 `ULOG_PID_PARKED_UPLOAD_ENABLE`。PID_Test 运行期间仍发送 200 Hz BT10 实时帧，网页持续归档；动作终止后直接发送 `#BTLOG,END`，不再等待最多 2000 条停车缓存。
+- 保留 `ULOG_PID_PARKED_UPLOAD_ENABLE=1` 的主机兼容构建，仅用于旧协议解码和缓存回归，不参与正式固件行为。
+- READY 状态仍要求日志和 PID 实时采集已设防，避免无采集时误启动；终态不再把已停止采集报告为运行期采集故障，允许直接 `TEST_RESET`。
+- 验证：`tests/ulog/run.ps1`、`tests/race/run.ps1`、`node viewer/build.cjs`、`node viewer/test.cjs`、`git diff --check` PASS。未烧录，BT10 连续多轮与实车验收 NOT_RUN。
+
 ## 2026-11-22：增加 BT10 在线速度环控制配置写入
 
 - `Motor_t` 保留默认宏值作为初始化，并增加运行时速度环周期窗口、积分限幅、输出限幅、死区补偿和前馈增益；TIM6 1 ms 电机更新与底盘 10 ms 调度不变。

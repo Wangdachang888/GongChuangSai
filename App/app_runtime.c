@@ -401,19 +401,25 @@ static void pid_test_poll(void)
             fault = PID_TEST_REASON_FEEDBACK;
     }
     if (!chassis.enable || g_tune_mode) fault = PID_TEST_REASON_CONFIG;
-    if (!ULog_IsRecording() || !ULog_PidBurstActive()) fault = PID_TEST_REASON_CAPTURE;
+    /* Capture is required only while the motion is running.  After a test
+     * terminates, the live stream is already archived by the browser and the
+     * optional parking upload may be disabled; that must not block TEST_RESET. */
+    if (AppPidTest_Status()->state == PID_TEST_RUNNING &&
+        (!ULog_IsRecording() || !ULog_PidBurstActive())) fault = PID_TEST_REASON_CAPTURE;
     if (s_pid_cutoff) fault = PID_TEST_REASON_LOOP;
     ready = fault == PID_TEST_REASON_NONE && app_imu_bias_ready() &&
         (uint32_t)(now - s_pid_boot) >= RACE_WARMUP_MS &&
         AppPidTest_Status()->state == PID_TEST_IDLE && pid_edit_stationary() &&
-        s_pid_idle_seen && (uint32_t)(now - s_pid_idle_since) >= 500u;
+        s_pid_idle_seen && (uint32_t)(now - s_pid_idle_since) >= 500u &&
+        ULog_IsRecording() && ULog_PidBurstActive();
     pid_test_commands(now, ready, fault);
     /* A command may have selected an action or rearmed the state. Re-evaluate
      * the physical start path below; no command ever runs from the IRQ. */
     ready = fault == PID_TEST_REASON_NONE && app_imu_bias_ready() &&
         (uint32_t)(now - s_pid_boot) >= RACE_WARMUP_MS &&
         AppPidTest_Status()->state == PID_TEST_IDLE && pid_edit_stationary() &&
-        s_pid_idle_seen && (uint32_t)(now - s_pid_idle_since) >= 500u;
+        s_pid_idle_seen && (uint32_t)(now - s_pid_idle_since) >= 500u &&
+        ULog_IsRecording() && ULog_PidBurstActive();
     event = RaceInput_Poll(&s_pid_key, now,
         AppPidTest_Status()->state == PID_TEST_RUNNING, ready);
     if ((event & RACE_INPUT_PRESS) && AppPidTest_Status()->state == PID_TEST_RUNNING)

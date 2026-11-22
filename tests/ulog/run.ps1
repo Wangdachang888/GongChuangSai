@@ -11,7 +11,13 @@ if ([string]::IsNullOrWhiteSpace($Compiler) -or
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 Push-Location $root
 try {
+    # PID_Test uses the production default: the browser archives the live
+    # stream, so a terminal test must not wait for a parked cache upload.
     $common = @('-DULOG_TEST', '-std=c99', '-Wall', '-Wextra', '-Werror', '-Itests/ulog', '-Itests/race/stubs', '-IConfig', '-IControl', '-IApp', '-IHardware', '-include', 'tests/race/stubs/board.h')
+    # Keep a separate opt-in build for the legacy parked-cache protocol. This
+    # protects the decoder and compatibility path without making it the
+    # production behavior.
+    $parkedCommon = @('-DULOG_TEST', '-DULOG_PID_PARKED_UPLOAD_ENABLE=1', '-std=c99', '-Wall', '-Wextra', '-Werror', '-Itests/ulog', '-Itests/race/stubs', '-IConfig', '-IControl', '-IApp', '-IHardware', '-include', 'tests/race/stubs/board.h')
     # Compile the exact parameter access block and actual Motor constants.
 @'
 from pathlib import Path
@@ -78,14 +84,14 @@ Path("tmp/runtime_pid_test.c").write_text(head+extra+constants+stop+block+inputs
     Write-Output 'PASS PID build-mode conflicts rejected at compile time'
     foreach ($mode in @(0, 3)) {
         $binary = "tmp/test_ulog_$mode.exe"
-        & $Compiler @common "-DAPP_RUN_MODE=$mode" -Dsnprintf=ulog_test_snprintf tests/ulog/test_ulog.c Hardware/bsp_ulog.c App/race_task_plan.c tmp/runtime_pid_access.c -lm -o $binary
+        & $Compiler @parkedCommon "-DAPP_RUN_MODE=$mode" -Dsnprintf=ulog_test_snprintf tests/ulog/test_ulog.c Hardware/bsp_ulog.c App/race_task_plan.c tmp/runtime_pid_access.c -lm -o $binary
         if ($LASTEXITCODE) { throw 'Logger compile failed' }
         foreach ($case in @('normal','early','abort','timeout','tx_error','format_error','nonfinite','manual','null','init_error','burst_short','burst_live','burst_deferred','burst_fault','burst_abort','burst_continuous','params')) {
             & (Join-Path $root $binary) $case
             if ($LASTEXITCODE) { throw "Logger test failed: $mode $case" }
         }
     }
-    & $Compiler @common -DULOG_ASYNC_TEST -Dsnprintf=ulog_test_snprintf tests/ulog/test_ulog.c Hardware/bsp_ulog.c App/race_task_plan.c tmp/runtime_pid_access.c -lm -o tmp/test_ulog_async.exe
+    & $Compiler @parkedCommon -DULOG_ASYNC_TEST -Dsnprintf=ulog_test_snprintf tests/ulog/test_ulog.c Hardware/bsp_ulog.c App/race_task_plan.c tmp/runtime_pid_access.c -lm -o tmp/test_ulog_async.exe
     if ($LASTEXITCODE) { throw 'Async logger compile failed' }
     & (Join-Path $root 'tmp/test_ulog_async.exe') async
     if ($LASTEXITCODE) { throw 'Async logger backpressure failed' }
