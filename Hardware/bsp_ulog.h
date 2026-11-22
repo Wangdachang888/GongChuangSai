@@ -39,6 +39,13 @@ extern "C" {
 #define ULOG_PID_BURST_CAPACITY 2000u /* Rolling last 20s at 100Hz; live has no 20s limit. */
 #endif
 
+/* Parking-cache upload is optional diagnostics.  Keep it off in the normal
+ * PID_Test firmware so a finished motion is not blocked by up to 2000 UART
+ * frames; the browser already archives the continuous live stream. */
+#ifndef ULOG_PID_PARKED_UPLOAD_ENABLE
+#define ULOG_PID_PARKED_UPLOAD_ENABLE 0
+#endif
+
 /* BT10 must be configured to this same UART rate. */
 #ifndef ULOG_BAUD_RATE
 #define ULOG_BAUD_RATE 230400u
@@ -96,6 +103,7 @@ typedef struct {
     uint32_t id, revision;
     uint8_t write, axis;
     float kp, ki, kd;
+    float period_ms, integral_max, output_max, deadzone, ff_gain;
 } ULogPidRequest;
 typedef struct {
     uint32_t revision;
@@ -106,6 +114,24 @@ typedef struct {
 } ULogPidValues;
 typedef const char *(*ULogPidHandler)(const ULogPidRequest *, ULogPidValues *);
 void ULog_SetPidHandler(ULogPidHandler handler);
+
+/* PID_Test control is parsed in the logger main-loop and consumed by the
+ * application main-loop.  The UART ISR only queues bytes. */
+typedef enum {
+    ULOG_PID_TEST_NONE = 0,
+    ULOG_PID_TEST_RUN = 1,
+    ULOG_PID_TEST_STOP = 2,
+    ULOG_PID_TEST_RESET = 3,
+    ULOG_PID_TEST_STATUS = 4
+} ULogPidTestCommand;
+typedef struct {
+    uint32_t id;
+    uint8_t command;
+    uint8_t action;
+} ULogPidTestRequest;
+uint8_t ULog_TakePidTestRequest(ULogPidTestRequest *request);
+void ULog_ReplyPidTest(uint32_t id, const char *status, uint8_t state,
+                       uint8_t reason, uint8_t action);
 #ifdef ULOG_TEST
 void ULog_TestRx(const char *text);
 #endif

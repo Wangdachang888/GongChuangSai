@@ -2,6 +2,7 @@
 #include "board.h"
 #include "app_pid_test.h"
 #include "app_runtime.h"
+#include "bsp_ulog.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,7 +49,12 @@ HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *u, uint8_t *d, uint16_t 
         if (strstr(line, "PID_ARMED")) capture_armed = 1;
         if (strstr(line, "PID_USED")) used_count++;
         if (strstr(line, "PID_END")) cache_end = 1;
-        if (strstr(line, "#BTLOG,END")) { assert(cache_end); end_count++; }
+        if (strstr(line, "#BTLOG,END")) {
+#if ULOG_PID_PARKED_UPLOAD_ENABLE != 0
+            assert(cache_end);
+#endif
+            end_count++;
+        }
     }
     return HAL_OK;
 }
@@ -192,12 +198,25 @@ int main(int argc, char **argv)
         key=1; poll_step(30); key=0; poll_step(30); /* cancel for terminal test */
         assert(AppPidTest_Status()->state == PID_TEST_CANCELLED);
         motor_left_front.actual_speed=100; poll_step(600);
-        assert(!cache_count && !end_count); motor_left_front.actual_speed=0;
+#if ULOG_PID_PARKED_UPLOAD_ENABLE != 0
+        assert(!cache_count && !end_count);
+#else
+        /* No parked transfer remains to gate END; a terminal cancellation
+         * can close the live stream immediately even if feedback is stale. */
+        assert(cache_count == 0u && end_count == 1u);
+#endif
+        motor_left_front.actual_speed=0;
     } else assert(0);
     assert(AppPidTest_Status()->state != PID_TEST_RUNNING);
     poll_step(600);
     for (unsigned i=0; i<2200; ++i) ULog_PidBurstPoll();
+#if ULOG_PID_PARKED_UPLOAD_ENABLE != 0
     assert(cache_count && cache_count<=2000 && cache_end && end_count==1);
+#else
+    /* The production path archives the continuous live stream in the
+     * browser and must finish without a parked-cache transfer. */
+    assert(cache_count == 0u && !cache_end && end_count == 1u);
+#endif
     assert(used_count==7 && live_count && !ULog_IsRecording());
     {
         ULogPidRequest req={0}; ULogPidValues val={0};
@@ -394,6 +413,9 @@ int main(int argc, char **argv)
         ULog_Stop();assert(!ULog_IsRecording());
         command("@PID GET 18 FL\n");assert(strstr(last,"PID_PARAM,18,2,FL,READ"));assert(!ULog_IsRecording());
         command("@PID SET 19 2 FL 2.8 1.5 0\n");assert(m[0]->kp==2.8f);assert(strstr(last,"PID_PARAM,19,3,FL,SET"));assert(!ULog_IsRecording());
+        command("@PID CONFIG 20 3 FL 5 700 900 120 0.4\n");assert(strstr(last,"PID_PARAM,20,4,FL,SET,"));assert(m[0]->speed_window_ms==5 && m[0]->integral_max==700 && m[0]->output_max==900 && m[0]->deadzone==120 && m[0]->ff_gain==0.4f);
+        command("@PID CONFIG 21 4 FL 0 700 900 120 0.4\n");assert(strstr(last,"PID_ERROR,21,RANGE"));
+        command("@PID CONFIG 22 4 X 5 700 900 120 0.4\n");assert(strstr(last,"PID_ERROR,22,AXIS"));
         /* Exercise each remaining controller and check atomic IRQ restoration. */
         { const char *names[7]={"FL","FR","RL","RR","X","Y","TH"};
           for(unsigned axis=1;axis<6;axis++){

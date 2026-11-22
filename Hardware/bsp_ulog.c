@@ -93,9 +93,13 @@ static volatile uint16_t s_pid_count, s_pid_sequence, s_pid_write_index;
 static volatile uint32_t s_pid_overwritten;
 static uint16_t s_pid_upload_index, s_pid_rt_sequence;
 static volatile uint8_t s_pid_active, s_pid_div;
+static uint8_t s_pid_arm_pending;
 static uint8_t s_pid_pending, s_pid_upload_started, s_pid_parked;
-static uint8_t s_pid_fault_reported, s_pid_was_parked;
+static uint8_t s_pid_fault_reported;
+#if (ULOG_PID_PARKED_UPLOAD_ENABLE != 0)
+static uint8_t s_pid_was_parked;
 static uint32_t s_pid_parked_since;
+#endif
 #if !defined(ULOG_TEST)
 static uint8_t s_rx_byte;
 #endif
@@ -103,11 +107,17 @@ static volatile uint8_t s_rx_head, s_rx_tail, s_rx_overflow;
 static uint8_t s_rx_queue[128];
 static char s_rx_line[96];
 static ULogPidHandler s_pid_handler;
+static volatile uint8_t s_pid_test_pending;
+static ULogPidTestRequest s_pid_test_request;
 static char s_param_reply[384];
 static uint16_t s_param_reply_len;
+static char s_pid_test_reply[160];
+static uint16_t s_pid_test_reply_len;
 static uint8_t s_param_snapshot_axis=7u;
 static uint8_t s_rx_len, s_rx_bad;
 #endif
+
+static uint8_t ulog_try_write(const uint8_t *data, uint16_t len, uint16_t reserve);
 
 void ULog_SetPidHandler(ULogPidHandler handler)
 {
@@ -115,6 +125,38 @@ void ULog_SetPidHandler(ULogPidHandler handler)
     s_pid_handler=handler;
 #else
     (void)handler;
+#endif
+}
+
+uint8_t ULog_TakePidTestRequest(ULogPidTestRequest *request)
+{
+#if (ULOG_PID_BURST_ENABLE != 0)
+    if (!request || !s_pid_test_pending) return 0u;
+    *request = s_pid_test_request;
+    s_pid_test_pending = 0u;
+    return 1u;
+#else
+    (void)request;
+    return 0u;
+#endif
+}
+
+void ULog_ReplyPidTest(uint32_t id, const char *status, uint8_t state,
+                       uint8_t reason, uint8_t action)
+{
+#if (ULOG_PID_BURST_ENABLE != 0)
+    int n;
+    if (!status) status = "ERROR";
+    /* Keep the reply until it is accepted by the UART queue.  A direct
+     * best-effort write loses RESET/STARTED replies whenever the ordinary
+     * logger has temporarily filled the 230400-baud queue. */
+    if (s_pid_test_reply_len) return;
+    n = snprintf(s_pid_test_reply, sizeof(s_pid_test_reply), "#BTLOG,PID_TEST,%lu,%s,%u,%u,%u\r\n",
+                 (unsigned long)id, status, (unsigned)state,
+                 (unsigned)reason, (unsigned)action);
+    if (n > 0 && (size_t)n < sizeof(s_pid_test_reply)) s_pid_test_reply_len=(uint16_t)n;
+#else
+    (void)id; (void)status; (void)state; (void)reason; (void)action;
 #endif
 }
 
@@ -220,10 +262,16 @@ void ULog_Stop(void)
 {
     if (!s_stream_enabled) return;
 #if (ULOG_PID_BURST_ENABLE != 0)
-    if (!s_tx_failed && (s_pid_active || s_pid_pending)) {
+    if (!s_tx_failed && (s_pid_active ||
+#if (ULOG_PID_PARKED_UPLOAD_ENABLE != 0)
+                         s_pid_pending
+#else
+                         0u
+#endif
+                         )) {
         ULog_PidBurstStop();
         s_stop_requested = 1u;
-        return; /* defer END until frozen records have been uploaded */
+        return; /* defer END until capture is frozen and queued replies finish */
     }
 #endif
     if (s_data_sent && !s_tx_failed && !s_end_sent) {
@@ -242,17 +290,24 @@ void ULog_PidBurstStart(void)
 {
 #if (ULOG_PID_BURST_ENABLE != 0)
     if (!ULog_IsRecording() || !s_pid_parked || s_pid_active || s_pid_pending ||
-        (uint32_t)(HAL_GetTick()-s_init_ms) < ULOG_STARTUP_WAIT_MS) return;
-    {
-        static const uint8_t armed[]="#BTLOG,PID_ARMED,storage_hz=100,realtime_hz=200,capacity=2000,cache=rolling\r\n";
-        if (!ulog_try_write(armed,sizeof(armed)-1u,1024u)) return;
+        (uint32_t)(HAL_GetTick()-s_init_ms) < ULOG_STARTUP_WAIT_MS) {
+        return;
     }
     s_pid_count = 0u; s_pid_upload_index = 0u; s_pid_write_index = 0u;
     s_pid_overwritten = 0u;
     s_pid_sequence = 0u; s_pid_rt_sequence = 0u; s_pid_div = 0u;
     g_ulog_pid_burst_overrun = 0u; g_ulog_pid_realtime_dropped = 0u;
     g_ulog_pid_quantized_clipped = 0u;
-    s_pid_fault_reported = 0u; s_pid_upload_started = 0u; s_pid_pending = 1u;
+    s_pid_fault_reported = 0u; s_pid_upload_started = 0u;
+    /* Queue pressure from the normal 43-column stream must not make a valid
+     * start request disappear.  The handshake is retried from the bounded
+     * main-loop poll after the live channel has been published. */
+    s_pid_arm_pending = 1u;
+#if (ULOG_PID_PARKED_UPLOAD_ENABLE != 0)
+    s_pid_pending = 1u;
+#else
+    s_pid_pending = 0u;
+#endif
     s_data_sent = 1u;
     s_param_snapshot_axis=s_pid_handler?0u:7u;
     s_pid_active = 1u; /* publish last */
@@ -263,6 +318,11 @@ void ULog_PidBurstStop(void)
 {
 #if (ULOG_PID_BURST_ENABLE != 0)
     s_pid_active = 0u;
+    s_pid_arm_pending = 0u;
+#if (ULOG_PID_PARKED_UPLOAD_ENABLE == 0)
+    s_pid_pending = 0u;
+    s_pid_upload_started = 0u;
+#endif
 #endif
 }
 
@@ -396,10 +456,10 @@ static uint8_t pid_parse_u32(const char *s, uint32_t *v)
 
 static void pid_param_command(void)
 {
-    char *tokens[9], *p; unsigned n=0u,i; ULogPidRequest r={0};
-    for (p=strtok(s_rx_line," ");p && n<9u;p=strtok(0," ")) tokens[n++]=p;
+    char *tokens[11], *p; unsigned n=0u,i; ULogPidRequest r={0};
+    for (p=strtok(s_rx_line," ");p && n<11u;p=strtok(0," ")) tokens[n++]=p;
     if (n>=3u) (void)pid_parse_u32(tokens[2],&r.id);
-    if (p || (n!=4u && n!=8u) || strcmp(tokens[0],"@PID") ||
+    if (p || (n!=4u && n!=8u && n!=10u) || strcmp(tokens[0],"@PID") ||
         !pid_parse_u32(tokens[2],&r.id) || !r.id) goto malformed;
     if (n==4u && !strcmp(tokens[1],"GET")) {
         for (i=0u;i<7u && strcmp(tokens[3],s_param_axes[i]);++i) {}
@@ -412,6 +472,18 @@ static void pid_param_command(void)
             errno=0; value=strtof(tokens[5u+j],&end);
             if (errno || end==tokens[5u+j] || *end || !isfinite(value)) goto malformed;
             if (j==0u) r.kp=value; else if (j==1u) r.ki=value; else r.kd=value;
+        }
+    } else if (n==10u && !strcmp(tokens[1],"CONFIG")) {
+        r.write=2u;
+        if (!pid_parse_u32(tokens[3],&r.revision)) goto malformed;
+        for (i=0u;i<7u && strcmp(tokens[4],s_param_axes[i]);++i) {}
+        for (unsigned j=0u;j<5u;++j) {
+            char *end; float value;
+            errno=0; value=strtof(tokens[5u+j],&end);
+            if (errno || end==tokens[5u+j] || *end || !isfinite(value)) goto malformed;
+            if (j==0u) r.period_ms=value; else if (j==1u) r.integral_max=value;
+            else if (j==2u) r.output_max=value; else if (j==3u) r.deadzone=value;
+            else r.ff_gain=value;
         }
     } else goto malformed;
     if (i>=7u) goto malformed;
@@ -433,6 +505,10 @@ static void pid_commands(void)
         if (ulog_try_write((uint8_t *)s_param_reply,s_param_reply_len,0u)) s_param_reply_len=0u;
         else return;
     }
+    if (s_pid_test_reply_len) {
+        if (ulog_try_write((uint8_t *)s_pid_test_reply,s_pid_test_reply_len,0u)) s_pid_test_reply_len=0u;
+        else return;
+    }
     while (s_rx_tail != s_rx_head && budget--) {
         ch=(char)s_rx_queue[s_rx_tail];s_rx_tail=(uint8_t)((s_rx_tail+1u)&127u);
         if (ch=='\r') continue;
@@ -443,6 +519,38 @@ static void pid_commands(void)
                     ULog_PidBurstStart();
                     if (!s_pid_active) ULog_Printf("#BTLOG,PID_REJECTED,busy_or_not_parked_or_warmup\r\n");
                 } else if (!strcmp(s_rx_line,"@PID STOP")) ULog_PidBurstStop();
+                else if (!strncmp(s_rx_line,"@PID TEST",9u)) {
+                    char *tokens[5], *p; unsigned n=0u; uint32_t id=0u, action=0u;
+                    for (p=strtok(s_rx_line," ");p && n<5u;p=strtok(0," ")) tokens[n++]=p;
+                    if ((n==4u && !strcmp(tokens[1],"TEST")) ||
+                        (n==3u && (!strcmp(tokens[1],"TEST_STOP") ||
+                                   !strcmp(tokens[1],"TEST_RESET") ||
+                                   !strcmp(tokens[1],"TEST_STATUS")))) {
+                        if (!pid_parse_u32(tokens[2],&id) || !id ||
+                            (n==4u && !pid_parse_u32(tokens[3],&action)) ||
+                            action > 255u) {
+                            ULog_ReplyPidTest(id,"MALFORMED",0u,0u,0u);
+                        }
+#if APP_PID_TEST_ENABLE
+                        else if (s_pid_test_pending) {
+                            ULog_ReplyPidTest(id,"BUSY",0u,0u,0u);
+                        } else {
+                            s_pid_test_request.id=id;
+                            s_pid_test_request.action=(uint8_t)action;
+                            s_pid_test_request.command = n==4u ? ULOG_PID_TEST_RUN :
+                                (!strcmp(tokens[1],"TEST_STOP") ? ULOG_PID_TEST_STOP :
+                                 (!strcmp(tokens[1],"TEST_RESET") ? ULOG_PID_TEST_RESET : ULOG_PID_TEST_STATUS));
+                            s_pid_test_pending=1u;
+                        }
+#else
+                        else {
+                            ULog_ReplyPidTest(id,"UNSUPPORTED",0u,0u,0u);
+                        }
+#endif
+                    } else {
+                        ULog_ReplyPidTest(id,"MALFORMED",0u,0u,0u);
+                    }
+                }
                 else if (!strncmp(s_rx_line,"@PID ",5u)) pid_param_command();
             }
             s_rx_len=0u;s_rx_bad=0u;
@@ -452,6 +560,8 @@ static void pid_commands(void)
     }
     if (s_param_reply_len && ulog_try_write((uint8_t *)s_param_reply,s_param_reply_len,0u))
         s_param_reply_len=0u;
+    if (s_pid_test_reply_len && ulog_try_write((uint8_t *)s_pid_test_reply,s_pid_test_reply_len,0u))
+        s_pid_test_reply_len=0u;
 }
 #ifdef ULOG_TEST
 void ULog_TestRx(const char *text)
@@ -490,26 +600,40 @@ void ULog_PidBurstPoll(void)
 #if (ULOG_PID_BURST_ENABLE != 0)
     PidPacked p;
     uint16_t seq;
-    uint8_t upload_ready;
-    uint32_t now=HAL_GetTick();
 #if !defined(ULOG_TEST)
     uint32_t irq_state;
+#endif
+#if (ULOG_PID_PARKED_UPLOAD_ENABLE != 0)
+    uint32_t now=HAL_GetTick();
 #endif
     if (!s_inited || s_tx_failed) return;
     pid_commands(); /* Remains available after END; does not rearm recording. */
     if (!s_stream_enabled) return;
+    if (s_pid_arm_pending) {
+        static const uint8_t armed[]="#BTLOG,PID_ARMED,storage_hz=100,realtime_hz=200,capacity=2000,cache=rolling\r\n";
+        if (ulog_try_write(armed, sizeof(armed)-1u, 0u)) s_pid_arm_pending = 0u;
+    }
     if (s_param_snapshot_axis<7u && !s_param_reply_len) {
         ULogPidRequest request={0};request.axis=s_param_snapshot_axis++;
         pid_param_reply(&request,"PID_USED");
     }
-    /* Final-upload fallback cannot arm a capture or bypass the ordinary
+#if (ULOG_PID_PARKED_UPLOAD_ENABLE != 0)
+    uint8_t upload_ready;
+    /* Optional final upload cannot arm a capture or bypass the ordinary
      * parked gate while recording is still running. */
     upload_ready = s_pid_parked ||
                    (s_stop_requested && s_app_snapshot.finished &&
                     s_app_snapshot.terminal_outputs_stopped);
     if (!upload_ready) s_pid_was_parked=0u;
     else if (!s_pid_was_parked) { s_pid_was_parked=1u; s_pid_parked_since=now; }
-    if ((s_pid_active || s_pid_pending) && !s_pid_upload_started) {
+#endif
+    if (s_pid_active ||
+#if (ULOG_PID_PARKED_UPLOAD_ENABLE != 0)
+        s_pid_pending
+#else
+        0u
+#endif
+        ) {
         ULOG_CRITICAL_ENTER();
         p=s_pid_latest; seq=s_pid_sequence;
         ULOG_CRITICAL_EXIT();
@@ -520,6 +644,7 @@ void ULog_PidBurstPoll(void)
             if (!pid_send(&p,1u,seq)) g_ulog_pid_realtime_dropped++;
         }
     }
+#if (ULOG_PID_PARKED_UPLOAD_ENABLE != 0)
     if (!s_pid_active && s_pid_pending && upload_ready && s_pid_was_parked &&
                (uint32_t)(now-s_pid_parked_since)>=500u) {
         if (!s_pid_upload_started) {
@@ -552,9 +677,14 @@ void ULog_PidBurstPoll(void)
         }
     }
 #endif
+#endif
     if (s_stop_requested) {
 #if (ULOG_PID_BURST_ENABLE != 0)
+#if (ULOG_PID_PARKED_UPLOAD_ENABLE != 0)
         if (s_pid_pending || s_param_snapshot_axis<7u || s_param_reply_len) return;
+#else
+        if (s_param_snapshot_axis<7u || s_param_reply_len) return;
+#endif
 #endif
         ULog_Stop();
     }
@@ -625,6 +755,8 @@ void ULog_Init(void)
     s_tx_busy = 0u;
 #if (ULOG_PID_BURST_ENABLE != 0)
     s_pid_count=0u; s_pid_active=0u; s_pid_pending=0u;
+    s_pid_test_pending=0u;
+    s_pid_test_reply_len=0u;
 #if !defined(ULOG_TEST)
     (void)HAL_UART_Receive_IT(&s_huart2,&s_rx_byte,1u);
 #endif
@@ -665,6 +797,12 @@ void ULog_Poll(const MecanumChassis_t *chassis)
     uint8_t finished;
 
     if (!ULog_IsRecording()) return;
+#if (ULOG_PID_BURST_ENABLE != 0)
+    /* During a PID session the 200 Hz binary stream is the diagnostic
+     * channel.  Do not let the lower-priority 43-column stream starve its
+     * handshake or saturate the 230400-baud link. */
+    if (s_pid_active) return;
+#endif
     finished = ulog_finished();
     if ((chassis == 0) ||
         (chassis->motor_lf == 0) || (chassis->motor_rf == 0) ||
@@ -828,6 +966,10 @@ uint8_t ULog_PidBurstActive(void) { return 0u; }
 void ULog_PidBurstSampleIsr(const ULogPidSample *sample) { (void)sample; }
 void ULog_PidBurstPoll(void) {}
 void ULog_PidBurstSetParked(uint8_t parked) { (void)parked; }
+uint8_t ULog_TakePidTestRequest(ULogPidTestRequest *request) { (void)request; return 0u; }
+void ULog_ReplyPidTest(uint32_t id, const char *status, uint8_t state,
+                       uint8_t reason, uint8_t action)
+{ (void)id; (void)status; (void)state; (void)reason; (void)action; }
 void ULog_RxCpltCallback(void) {}
 void ULog_ErrorCallback(void) {}
 volatile uint32_t g_ulog_pid_burst_overrun;

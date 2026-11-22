@@ -11,7 +11,13 @@ if ([string]::IsNullOrWhiteSpace($Compiler) -or
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 Push-Location $root
 try {
+    # PID_Test uses the production default: the browser archives the live
+    # stream, so a terminal test must not wait for a parked cache upload.
     $common = @('-DULOG_TEST', '-std=c99', '-Wall', '-Wextra', '-Werror', '-Itests/ulog', '-Itests/race/stubs', '-IConfig', '-IControl', '-IApp', '-IHardware', '-include', 'tests/race/stubs/board.h')
+    # Keep a separate opt-in build for the legacy parked-cache protocol. This
+    # protects the decoder and compatibility path without making it the
+    # production behavior.
+    $parkedCommon = @('-DULOG_TEST', '-DULOG_PID_PARKED_UPLOAD_ENABLE=1', '-std=c99', '-Wall', '-Wextra', '-Werror', '-Itests/ulog', '-Itests/race/stubs', '-IConfig', '-IControl', '-IApp', '-IHardware', '-include', 'tests/race/stubs/board.h')
     # Compile the exact parameter access block and actual Motor constants.
 @'
 from pathlib import Path
@@ -51,8 +57,8 @@ Path("tmp/runtime_pid_test.c").write_text(head+extra+constants+stop+block+inputs
         if ($profile -eq 'reverse') { $testArgs += '-DAPP_PID_TEST_DIRECTION=-1' }
         if ($profile -eq 'lateralreverse') { $testArgs += @('-DAPP_PID_TEST_AXIS=1','-DAPP_PID_TEST_DIRECTION=-1') }
         if ($profile -eq 'custom') { $testArgs += @('-DAPP_PID_TEST_LOW_MPS=0.02f','-DAPP_PID_TEST_MID_MPS=0.035f','-DAPP_PID_TEST_HIGH_MPS=0.06f') }
-        if ($profile -eq 'creep') { $testArgs += @('-DAPP_PID_TEST_CREEP=1','-DAPP_PID_TEST_SPEED_MPS=0.006f') }
-        if ($profile -eq 'creep012') { $testArgs += @('-DAPP_PID_TEST_CREEP=1','-DAPP_PID_TEST_SPEED_MPS=0.012f') }
+        if ($profile -eq 'creep') { $testArgs += @('-DAPP_PID_TEST_CREEP=1','-DAPP_PID_TEST_FREQUENCY=0','-DAPP_PID_TEST_SPEED_MPS=0.006f') }
+        if ($profile -eq 'creep012') { $testArgs += @('-DAPP_PID_TEST_CREEP=1','-DAPP_PID_TEST_FREQUENCY=0','-DAPP_PID_TEST_SPEED_MPS=0.012f') }
         if ($profile -eq 'badorder') { $testArgs += @('-DAPP_PID_TEST_INVALID','-DAPP_PID_TEST_MID_MPS=0.01f') }
         if ($profile -eq 'badnan') { $testArgs += @('-DAPP_PID_TEST_INVALID','-DAPP_PID_TEST_LOW_MPS=NAN') }
         if ($profile -eq 'badlimit') { $testArgs += @('-DAPP_PID_TEST_INVALID','-DAPP_PID_TEST_HIGH_MPS=0.3f') }
@@ -78,14 +84,14 @@ Path("tmp/runtime_pid_test.c").write_text(head+extra+constants+stop+block+inputs
     Write-Output 'PASS PID build-mode conflicts rejected at compile time'
     foreach ($mode in @(0, 3)) {
         $binary = "tmp/test_ulog_$mode.exe"
-        & $Compiler @common "-DAPP_RUN_MODE=$mode" -Dsnprintf=ulog_test_snprintf tests/ulog/test_ulog.c Hardware/bsp_ulog.c App/race_task_plan.c tmp/runtime_pid_access.c -lm -o $binary
+        & $Compiler @parkedCommon "-DAPP_RUN_MODE=$mode" -Dsnprintf=ulog_test_snprintf tests/ulog/test_ulog.c Hardware/bsp_ulog.c App/race_task_plan.c tmp/runtime_pid_access.c -lm -o $binary
         if ($LASTEXITCODE) { throw 'Logger compile failed' }
         foreach ($case in @('normal','early','abort','timeout','tx_error','format_error','nonfinite','manual','null','init_error','burst_short','burst_live','burst_deferred','burst_fault','burst_abort','burst_continuous','params')) {
             & (Join-Path $root $binary) $case
             if ($LASTEXITCODE) { throw "Logger test failed: $mode $case" }
         }
     }
-    & $Compiler @common -DULOG_ASYNC_TEST -Dsnprintf=ulog_test_snprintf tests/ulog/test_ulog.c Hardware/bsp_ulog.c App/race_task_plan.c tmp/runtime_pid_access.c -lm -o tmp/test_ulog_async.exe
+    & $Compiler @parkedCommon -DULOG_ASYNC_TEST -Dsnprintf=ulog_test_snprintf tests/ulog/test_ulog.c Hardware/bsp_ulog.c App/race_task_plan.c tmp/runtime_pid_access.c -lm -o tmp/test_ulog_async.exe
     if ($LASTEXITCODE) { throw 'Async logger compile failed' }
     & (Join-Path $root 'tmp/test_ulog_async.exe') async
     if ($LASTEXITCODE) { throw 'Async logger backpressure failed' }

@@ -118,11 +118,21 @@ const char *AppRuntime_PidAccess(const ULogPidRequest *request, ULogPidValues *v
     const MotorControlInfo *info=Motor_GetControlInfo();
     uint32_t irq_state;
     uint8_t axis=request->axis;
+    const uint8_t config_write = request->write == 2u;
     if (axis >= 7u) return "AXIS";
-    if (request->write && (!isfinite(request->kp) || !isfinite(request->ki) ||
+    if (config_write && axis >= 4u) return "AXIS";
+    if (request->write == 1u && (!isfinite(request->kp) || !isfinite(request->ki) ||
         !isfinite(request->kd) || request->kp < 0.0f || request->ki < 0.0f ||
         request->kd < 0.0f || request->kp > (axis<4u?10.0f:20.0f) ||
         request->ki > (axis<4u?8.0f:5.0f) || request->kd > 3.0f)) return "RANGE";
+    if (config_write && (!isfinite(request->period_ms) || !isfinite(request->integral_max) ||
+        !isfinite(request->output_max) || !isfinite(request->deadzone) ||
+        !isfinite(request->ff_gain) || request->period_ms < 1.0f ||
+        request->period_ms > 20.0f || request->period_ms != floorf(request->period_ms) ||
+        request->integral_max < 0.0f || request->output_max < 1.0f ||
+        request->output_max > 1000.0f || request->integral_max > request->output_max ||
+        request->deadzone < 0.0f || request->deadzone > 500.0f ||
+        request->ff_gain < 0.0f || request->ff_gain > 5.0f)) return "RANGE";
     irq_state=__get_PRIMASK(); __disable_irq();
     if (request->write) {
         if (request->revision != s_pid_revision) {
@@ -134,10 +144,24 @@ const char *AppRuntime_PidAccess(const ULogPidRequest *request, ULogPidValues *v
         }
         if (axis<4u) {
             Motor_t *m=motors[axis];
-            m->kp=request->kp;m->ki=request->ki;m->kd=request->kd;
-            m->integral=0.0f;m->err=0.0f;m->err_last=0.0f;
-            /* Outputs are already zero; clear residual controller memory only. */
-            m->output_last=0.0f;m->kick=0.0f;
+            if (config_write) {
+                m->speed_window_ms=(uint16_t)request->period_ms;
+                m->integral_max=request->integral_max;
+                m->output_max=request->output_max;
+                m->deadzone=request->deadzone;
+                m->ff_gain=request->ff_gain;
+                if (m->integral > m->integral_max) m->integral=m->integral_max;
+                if (m->output > m->output_max) m->output=m->output_max;
+                if (m->output < -m->output_max) m->output=-m->output_max;
+                m->acc_cnt=0;m->acc_ms=0u;m->speed_lpf=0.0f;
+                m->integral=0.0f;m->err=0.0f;m->err_last=0.0f;
+                m->output_last=0.0f;m->kick=0.0f;
+            } else {
+                m->kp=request->kp;m->ki=request->ki;m->kd=request->kd;
+                m->integral=0.0f;m->err=0.0f;m->err_last=0.0f;
+                /* Outputs are already zero; clear residual controller memory only. */
+                m->output_last=0.0f;m->kick=0.0f;
+            }
         } else {
             PosPID_t *p=positions[axis-4u];
             p->kp=request->kp;p->ki=request->ki;p->kd=request->kd;
@@ -149,19 +173,26 @@ const char *AppRuntime_PidAccess(const ULogPidRequest *request, ULogPidValues *v
         Motor_t *m=motors[axis];
         values->kp=m->kp;values->ki=m->ki;values->kd=m->kd;
         values->integral_max=m->integral_max;values->output_max=m->output_max;
+        /* Host fixtures may not call Motor_Init; use the same defaults until
+         * the runtime configuration has been initialized. */
+        if (m->speed_window_ms == 0u) {
+            values->period_ms=info->period_ms; values->ff_gain=info->ff_gain;
+            values->deadzone=info->deadzone; values->ff_min_speed=info->ff_min_speed;
+        } else {
+            values->period_ms=(float)m->speed_window_ms; values->ff_gain=m->ff_gain;
+            values->deadzone=m->deadzone; values->ff_min_speed=m->ff_min_speed;
+        }
     } else {
         PosPID_t *p=positions[axis-4u];
         values->kp=p->kp;values->ki=p->ki;values->kd=p->kd;
         values->integral_max=p->integral_max;values->output_max=p->output_max;
+        values->period_ms=10.0f;values->ff_gain=0.0f;values->deadzone=0.0f;
+        values->ff_min_speed=0.0f;
     }
     values->revision=s_pid_revision;
     values->editable=pid_edit_stationary() && s_pid_idle_seen &&
         (uint32_t)(HAL_GetTick()-s_pid_idle_since)>=500u;
     __set_PRIMASK(irq_state);
-    values->period_ms=axis<4u?info->period_ms:10.0f;
-    values->ff_gain=axis<4u?info->ff_gain:0.0f;
-    values->deadzone=axis<4u?info->deadzone:0.0f;
-    values->ff_min_speed=axis<4u?info->ff_min_speed:0.0f;
     values->ramp=axis<4u?info->ramp:0.0f;
     values->slew=axis<4u?info->slew:0.0f;
     values->lpf=axis<4u?info->lpf:0.0f;
@@ -292,6 +323,64 @@ static RaceInput s_pid_key;
 static uint32_t s_pid_boot, s_pid_frames, s_pid_last_imu;
 static volatile uint32_t s_pid_last_poll;
 static volatile uint8_t s_pid_guard_active, s_pid_cutoff;
+static uint8_t s_pid_capture_closed;
+
+static const char *pid_test_state_name(AppPidTestState state)
+{
+    switch (state) {
+    case PID_TEST_IDLE: return "READY";
+    case PID_TEST_RUNNING: return "RUNNING";
+    case PID_TEST_DONE: return "DONE";
+    case PID_TEST_CANCELLED: return "CANCELLED";
+    case PID_TEST_TIMEOUT: return "TIMEOUT";
+    default: return "FAULT";
+    }
+}
+
+static void pid_test_commands(uint32_t now, uint8_t ready, AppPidTestReason fault)
+{
+    ULogPidTestRequest request;
+    const AppPidTestStatus *status;
+    uint8_t ok = 0u;
+    if (!ULog_TakePidTestRequest(&request)) return;
+    status = AppPidTest_Status();
+    if (request.command == ULOG_PID_TEST_STATUS) {
+        ULog_ReplyPidTest(request.id, pid_test_state_name(status->state),
+                          (uint8_t)status->state, (uint8_t)status->reason, status->action);
+        return;
+    }
+    if (request.command == ULOG_PID_TEST_STOP) {
+        if (status->state == PID_TEST_RUNNING) {
+            AppPidTest_Stop(PID_TEST_REASON_MANUAL);
+            ok = 1u;
+        }
+        status = AppPidTest_Status();
+        ULog_ReplyPidTest(request.id, ok ? "STOPPED" : "NOT_RUNNING",
+                          (uint8_t)status->state, (uint8_t)status->reason, status->action);
+        return;
+    }
+    if (request.command == ULOG_PID_TEST_RESET) {
+        ok = (fault == PID_TEST_REASON_NONE && app_imu_bias_ready() &&
+              s_pid_idle_seen && (uint32_t)(now - s_pid_idle_since) >= 500u &&
+              AppPidTest_Status()->state != PID_TEST_RUNNING) && AppPidTest_Rearm();
+        status = AppPidTest_Status();
+        ULog_ReplyPidTest(request.id, ok ? "READY" : "NOT_READY",
+                          (uint8_t)status->state, (uint8_t)status->reason, status->action);
+        return;
+    }
+    if (request.command == ULOG_PID_TEST_RUN) {
+        if (!ready || !ULog_PidBurstActive() || !AppPidTest_SelectAction(request.action)) {
+            ULog_ReplyPidTest(request.id, "REJECTED", (uint8_t)status->state,
+                              (uint8_t)status->reason, status->action);
+            return;
+        }
+        ok = AppPidTest_Start(now);
+        if (ok) s_pid_capture_closed = 0u;
+        status = AppPidTest_Status();
+        ULog_ReplyPidTest(request.id, ok ? "STARTED" : "REJECTED",
+                          (uint8_t)status->state, (uint8_t)status->reason, status->action);
+    }
+}
 
 static void pid_test_poll(void)
 {
@@ -312,12 +401,25 @@ static void pid_test_poll(void)
             fault = PID_TEST_REASON_FEEDBACK;
     }
     if (!chassis.enable || g_tune_mode) fault = PID_TEST_REASON_CONFIG;
-    if (!ULog_IsRecording() || !ULog_PidBurstActive()) fault = PID_TEST_REASON_CAPTURE;
+    /* Capture is required only while the motion is running.  After a test
+     * terminates, the live stream is already archived by the browser and the
+     * optional parking upload may be disabled; that must not block TEST_RESET. */
+    if (AppPidTest_Status()->state == PID_TEST_RUNNING &&
+        (!ULog_IsRecording() || !ULog_PidBurstActive())) fault = PID_TEST_REASON_CAPTURE;
     if (s_pid_cutoff) fault = PID_TEST_REASON_LOOP;
     ready = fault == PID_TEST_REASON_NONE && app_imu_bias_ready() &&
         (uint32_t)(now - s_pid_boot) >= RACE_WARMUP_MS &&
         AppPidTest_Status()->state == PID_TEST_IDLE && pid_edit_stationary() &&
-        s_pid_idle_seen && (uint32_t)(now - s_pid_idle_since) >= 500u;
+        s_pid_idle_seen && (uint32_t)(now - s_pid_idle_since) >= 500u &&
+        ULog_IsRecording() && ULog_PidBurstActive();
+    pid_test_commands(now, ready, fault);
+    /* A command may have selected an action or rearmed the state. Re-evaluate
+     * the physical start path below; no command ever runs from the IRQ. */
+    ready = fault == PID_TEST_REASON_NONE && app_imu_bias_ready() &&
+        (uint32_t)(now - s_pid_boot) >= RACE_WARMUP_MS &&
+        AppPidTest_Status()->state == PID_TEST_IDLE && pid_edit_stationary() &&
+        s_pid_idle_seen && (uint32_t)(now - s_pid_idle_since) >= 500u &&
+        ULog_IsRecording() && ULog_PidBurstActive();
     event = RaceInput_Poll(&s_pid_key, now,
         AppPidTest_Status()->state == PID_TEST_RUNNING, ready);
     if ((event & RACE_INPUT_PRESS) && AppPidTest_Status()->state == PID_TEST_RUNNING)
@@ -325,6 +427,12 @@ static void pid_test_poll(void)
     /* Recheck readiness at release: an earlier valid press is not a lease. */
     if ((event & RACE_INPUT_SHORT_RELEASE) && ready) (void)AppPidTest_Start(now);
     AppPidTest_Poll(now, fault);
+    if (AppPidTest_Status()->state != PID_TEST_IDLE &&
+        AppPidTest_Status()->state != PID_TEST_RUNNING &&
+        !s_pid_capture_closed && ULog_PidBurstActive()) {
+        ULog_PidBurstStop();
+        s_pid_capture_closed = 1u;
+    }
     irq = __get_PRIMASK(); __disable_irq();
     if (s_pid_cutoff) AppPidTest_Stop(PID_TEST_REASON_LOOP);
     s_pid_guard_active = AppPidTest_Status()->state == PID_TEST_RUNNING;

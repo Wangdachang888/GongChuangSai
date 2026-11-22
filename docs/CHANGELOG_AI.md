@@ -1,11 +1,41 @@
 # AI 维护变更日志
 
+
 ## 2026-11-22：四轮 M/T 混合测速改造
 
 - 保留 TIM2/TIM3/TIM4/TIM5 的 TI12 编码器模式；使用编码器 CH1 的 EXTI 上升沿配合 Cortex-M4 DWT `CYCCNT` 记录高精度边沿时间，ISR 不做浮点运算。
 - 在 `Motor_Update` 增加可配置 M/T 滞回：默认 5 ms 窗口 `<=2` 计数进入 T 法、`>=4` 计数回到 M 法，边沿超时 120 ms 判零，异常周期回退 M 法；修正 16 位/32 位计数器跨界差分。
 - 未修改 PID、前馈、死区、输出限幅、目标斜坡、PWM、编码器方向、底盘运动学或比赛状态机。
 - 新增主机合成测试 `tests/motor_mt/test_mt.py`；Race/ULog 回归与 Keil ArmCC Rebuild 均通过。实机测速质量、EXTI 边沿完整性和阈值标定仍需人工验证。
+
+
+## 2026-11-22：修复 PID_TEST 回复在日志拥堵时丢失
+
+- `PID_TEST` 的 `READY`、`NOT_READY`、`STARTED`、`STOPPED` 和 `STATUS` 回复改为可靠排队，UART 队列暂满时保留并重试，不再静默丢包。
+- 网页对 RESET/STOP/STATUS 回复增加 2 秒超时提示；超时会明确指出没有收到车辆应答，不再显示无限等待。
+- 验证：`node viewer/build.cjs`、`node viewer/test.cjs`、`tests/ulog/run.ps1 -Compiler D:\minGW\mingw64\bin\gcc.exe`、`git diff --check` PASS。未烧录，BT10 实车验证 NOT_RUN。
+
+## 2026-11-22：修复 PID 高频会话 ARM 握手被整车日志拥堵阻塞
+
+- PID 高频会话期间暂停同一 USART2 上低优先级的 43 列整车日志，保留 200 Hz 二进制 PID 实时帧，避免 230400 波特率下队列持续拥堵。
+- `PID_ARMED` 改为主循环可重试的握手帧；有效的 `@PID START` 不再因瞬时队列不足被静默丢弃。停止 PID 会话时清除待发送握手状态。
+- 未修改比赛状态机、TIM6 电机节拍、底盘目标或默认 PID。未烧录，BT10 实车连续测试仍需人工验收。
+- 验证：`tests/ulog/run.ps1 -Compiler D:\minGW\mingw64\bin\gcc.exe` PASS；`git diff --check` PASS。
+
+## 2026-11-22：取消 PID_Test 停车自动上传并解除连续测试阻塞
+
+- 正式固件默认关闭 `ULOG_PID_PARKED_UPLOAD_ENABLE`。PID_Test 运行期间仍发送 200 Hz BT10 实时帧，网页持续归档；动作终止后直接发送 `#BTLOG,END`，不再等待最多 2000 条停车缓存。
+- 保留 `ULOG_PID_PARKED_UPLOAD_ENABLE=1` 的主机兼容构建，仅用于旧协议解码和缓存回归，不参与正式固件行为。
+- READY 状态仍要求日志和 PID 实时采集已设防，避免无采集时误启动；终态不再把已停止采集报告为运行期采集故障，允许直接 `TEST_RESET`。
+- 验证：`tests/ulog/run.ps1`、`tests/race/run.ps1`、`node viewer/build.cjs`、`node viewer/test.cjs`、`git diff --check` PASS。未烧录，BT10 连续多轮与实车验收 NOT_RUN。
+
+## 2026-11-22：增加 BT10 在线速度环控制配置写入
+
+- `Motor_t` 保留默认宏值作为初始化，并增加运行时速度环周期窗口、积分限幅、输出限幅、死区补偿和前馈增益；TIM6 1 ms 电机更新与底盘 10 ms 调度不变。
+- 新增兼容命令 `@PID CONFIG <id> <revision> <axis> <period_ms> <integral_max> <output_max> <deadzone> <ff_gain>`。只允许 FL/FR/RL/RR 速度环，周期限制 1…20 ms 且为整数，输出/积分/死区/前馈均做范围校验；停车、零输出、低速连续 500 ms 和版本校验沿用原门控，参数只写 RAM。
+- 网页 PID 页增加单轮控制配置和四轮统一配置的一键写入，并对每轮读回、版本和最终值复核；旧 `@PID SET/GET` 保持兼容，位置环仍只写 Kp/Ki/Kd。
+- 主机验证：`tests/ulog/run.ps1`、`tests/race/run.ps1`、`node viewer/build.cjs`、`node viewer/test.cjs`、`git diff --check` PASS；UV4 命令返回 0，PID_Test 输出已更新。BT10 实机写入、参数效果和比赛机械验收 NOT_RUN。
+
 
 ## 2026-11-22：增加伯德图专用独立测试动作
 
@@ -364,3 +394,12 @@
 - 原race_config.h、uvprojx、pid_burst_demo.csv哈希不变且不提交；未新增正式文件/目录。
   NOT_RUN：实车、真实代理升级/付费DeepSeek请求、跨物理试验效果、最坏中断时序；Keil未重跑。
   多轮统计不确定性、位置环自动建模和新参数效果连续学习尚需数据，未标为已完成。
+# 2026-11-22
+
+- `feat(pid-test): add BT10 controlled multi-action sessions`：新增 BT10 主循环测试命令、请求 ID 应答、五种预定动作、终态自动关闭高频流和无需 MCU 复位的安全 rearm；比赛模式和既有日志/PID协议保持隔离。
+- PID 页面新增动作选择、准备/开始/停止/状态按钮，并在 `PID_ARMED` 后启动动作、`PID_END` 后提示下一轮。
+- 验证：`tests/ulog/run.ps1` PASS；`tests/race/run.ps1` PASS；`node viewer/build.cjs`、`node viewer/test.cjs`、`git diff --check` PASS。Keil、BT10 实机和机械验收 NOT_RUN。
+# 2026-11-22
+
+- PID 网页增加在线四轮死区测量入口，复用安全的低速正反向诊断动作；上传完成后生成正/反向阈值估计并可逐轮填入现有死区补偿字段，未自动写车。
+- PID 停车缓存上传增加帧数、百分比、速率、已用时间、ETA 和完成状态可视化；保持单缓存一致性，下一轮仍在 `PID_END` 后准备。

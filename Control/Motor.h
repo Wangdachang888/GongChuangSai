@@ -53,6 +53,11 @@ typedef struct {
     uint16_t edge_count_snapshot;
     uint32_t edge_seen_sequence;
     uint8_t mt_mode;
+    /* Runtime speed-loop configuration; defaults are initialized in Motor_Init. */
+    uint16_t speed_window_ms;
+    float ff_gain;
+    float deadzone;
+    float ff_min_speed;
 } Motor_t;
 
 /* º¯ÊıÉùÃ÷ */
