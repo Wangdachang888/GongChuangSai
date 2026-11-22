@@ -12,6 +12,8 @@
 #define OLED_DATA 1U
 typedef struct { float output, target_speed, actual_speed, target_cmd;
     float kp,ki,kd,integral_max,output_max,integral,err,err_last,output_last,kick;
+    int acc_cnt; unsigned short acc_ms; float speed_lpf;
+    unsigned short speed_window_ms; float ff_gain,deadzone,ff_min_speed;
 } Motor_t;
 typedef struct {float kp,ki,kd,integral_max,output_max,integral,err,err_last,output;} PosPID_t;
 typedef struct {float period_ms,ff_gain,deadzone,ff_min_speed,ramp,slew,lpf,kick_step,kick_max,stuck_ratio;} MotorControlInfo;

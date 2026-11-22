@@ -96,6 +96,7 @@ typedef struct {
     uint32_t id, revision;
     uint8_t write, axis;
     float kp, ki, kd;
+    float period_ms, integral_max, output_max, deadzone, ff_gain;
 } ULogPidRequest;
 typedef struct {
     uint32_t revision;
@@ -106,6 +107,24 @@ typedef struct {
 } ULogPidValues;
 typedef const char *(*ULogPidHandler)(const ULogPidRequest *, ULogPidValues *);
 void ULog_SetPidHandler(ULogPidHandler handler);
+
+/* PID_Test control is parsed in the logger main-loop and consumed by the
+ * application main-loop.  The UART ISR only queues bytes. */
+typedef enum {
+    ULOG_PID_TEST_NONE = 0,
+    ULOG_PID_TEST_RUN = 1,
+    ULOG_PID_TEST_STOP = 2,
+    ULOG_PID_TEST_RESET = 3,
+    ULOG_PID_TEST_STATUS = 4
+} ULogPidTestCommand;
+typedef struct {
+    uint32_t id;
+    uint8_t command;
+    uint8_t action;
+} ULogPidTestRequest;
+uint8_t ULog_TakePidTestRequest(ULogPidTestRequest *request);
+void ULog_ReplyPidTest(uint32_t id, const char *status, uint8_t state,
+                       uint8_t reason, uint8_t action);
 #ifdef ULOG_TEST
 void ULog_TestRx(const char *text);
 #endif

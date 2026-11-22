@@ -51,8 +51,8 @@ Path("tmp/runtime_pid_test.c").write_text(head+extra+constants+stop+block+inputs
         if ($profile -eq 'reverse') { $testArgs += '-DAPP_PID_TEST_DIRECTION=-1' }
         if ($profile -eq 'lateralreverse') { $testArgs += @('-DAPP_PID_TEST_AXIS=1','-DAPP_PID_TEST_DIRECTION=-1') }
         if ($profile -eq 'custom') { $testArgs += @('-DAPP_PID_TEST_LOW_MPS=0.02f','-DAPP_PID_TEST_MID_MPS=0.035f','-DAPP_PID_TEST_HIGH_MPS=0.06f') }
-        if ($profile -eq 'creep') { $testArgs += @('-DAPP_PID_TEST_CREEP=1','-DAPP_PID_TEST_SPEED_MPS=0.006f') }
-        if ($profile -eq 'creep012') { $testArgs += @('-DAPP_PID_TEST_CREEP=1','-DAPP_PID_TEST_SPEED_MPS=0.012f') }
+        if ($profile -eq 'creep') { $testArgs += @('-DAPP_PID_TEST_CREEP=1','-DAPP_PID_TEST_FREQUENCY=0','-DAPP_PID_TEST_SPEED_MPS=0.006f') }
+        if ($profile -eq 'creep012') { $testArgs += @('-DAPP_PID_TEST_CREEP=1','-DAPP_PID_TEST_FREQUENCY=0','-DAPP_PID_TEST_SPEED_MPS=0.012f') }
         if ($profile -eq 'badorder') { $testArgs += @('-DAPP_PID_TEST_INVALID','-DAPP_PID_TEST_MID_MPS=0.01f') }
         if ($profile -eq 'badnan') { $testArgs += @('-DAPP_PID_TEST_INVALID','-DAPP_PID_TEST_LOW_MPS=NAN') }
         if ($profile -eq 'badlimit') { $testArgs += @('-DAPP_PID_TEST_INVALID','-DAPP_PID_TEST_HIGH_MPS=0.3f') }
@@ -68,8 +68,12 @@ Path("tmp/runtime_pid_test.c").write_text(head+extra+constants+stop+block+inputs
         }
     }
     foreach ($conflict in @(@('-DAPP_PID_TEST_ENABLE=1'),@('-DAPP_RUN_MODE=4'),@('-DAPP_PID_TEST_ENABLE=1','-DAPP_RUN_MODE=0'),@('-DAPP_PID_TEST_ENABLE=1','-DAPP_RUN_MODE=4','-DMOTOR_TUNE=1'))) {
+        $savedErrorAction = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
         & $Compiler -E -x c @conflict Config/app_mode.h -o tmp/pid_conflict.i 2>$null
-        if ($LASTEXITCODE -eq 0) { throw 'Conflicting chassis writers were not rejected' }
+        $conflictExit = $LASTEXITCODE
+        $ErrorActionPreference = $savedErrorAction
+        if ($conflictExit -eq 0) { throw 'Conflicting chassis writers were not rejected' }
     }
     Write-Output 'PASS PID build-mode conflicts rejected at compile time'
     foreach ($mode in @(0, 3)) {

@@ -1,5 +1,12 @@
 # AI 维护变更日志
 
+## 2026-11-22：增加 BT10 在线速度环控制配置写入
+
+- `Motor_t` 保留默认宏值作为初始化，并增加运行时速度环周期窗口、积分限幅、输出限幅、死区补偿和前馈增益；TIM6 1 ms 电机更新与底盘 10 ms 调度不变。
+- 新增兼容命令 `@PID CONFIG <id> <revision> <axis> <period_ms> <integral_max> <output_max> <deadzone> <ff_gain>`。只允许 FL/FR/RL/RR 速度环，周期限制 1…20 ms 且为整数，输出/积分/死区/前馈均做范围校验；停车、零输出、低速连续 500 ms 和版本校验沿用原门控，参数只写 RAM。
+- 网页 PID 页增加单轮控制配置和四轮统一配置的一键写入，并对每轮读回、版本和最终值复核；旧 `@PID SET/GET` 保持兼容，位置环仍只写 Kp/Ki/Kd。
+- 主机验证：`tests/ulog/run.ps1`、`tests/race/run.ps1`、`node viewer/build.cjs`、`node viewer/test.cjs`、`git diff --check` PASS；UV4 命令返回 0，PID_Test 输出已更新。BT10 实机写入、参数效果和比赛机械验收 NOT_RUN。
+
 ## 2026-11-22：增加伯德图专用独立测试动作
 
 - PID_Test 新增可选 `APP_PID_TEST_FREQUENCY=1`：固定正向工作点叠加四个与 1024 点/5 ms
@@ -357,3 +364,12 @@
 - 原race_config.h、uvprojx、pid_burst_demo.csv哈希不变且不提交；未新增正式文件/目录。
   NOT_RUN：实车、真实代理升级/付费DeepSeek请求、跨物理试验效果、最坏中断时序；Keil未重跑。
   多轮统计不确定性、位置环自动建模和新参数效果连续学习尚需数据，未标为已完成。
+# 2026-11-22
+
+- `feat(pid-test): add BT10 controlled multi-action sessions`：新增 BT10 主循环测试命令、请求 ID 应答、五种预定动作、终态自动关闭高频流和无需 MCU 复位的安全 rearm；比赛模式和既有日志/PID协议保持隔离。
+- PID 页面新增动作选择、准备/开始/停止/状态按钮，并在 `PID_ARMED` 后启动动作、`PID_END` 后提示下一轮。
+- 验证：`tests/ulog/run.ps1` PASS；`tests/race/run.ps1` PASS；`node viewer/build.cjs`、`node viewer/test.cjs`、`git diff --check` PASS。Keil、BT10 实机和机械验收 NOT_RUN。
+# 2026-11-22
+
+- PID 网页增加在线四轮死区测量入口，复用安全的低速正反向诊断动作；上传完成后生成正/反向阈值估计并可逐轮填入现有死区补偿字段，未自动写车。
+- PID 停车缓存上传增加帧数、百分比、速率、已用时间、ETA 和完成状态可视化；保持单缓存一致性，下一轮仍在 `PID_END` 后准备。

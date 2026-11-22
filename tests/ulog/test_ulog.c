@@ -394,6 +394,9 @@ int main(int argc, char **argv)
         ULog_Stop();assert(!ULog_IsRecording());
         command("@PID GET 18 FL\n");assert(strstr(last,"PID_PARAM,18,2,FL,READ"));assert(!ULog_IsRecording());
         command("@PID SET 19 2 FL 2.8 1.5 0\n");assert(m[0]->kp==2.8f);assert(strstr(last,"PID_PARAM,19,3,FL,SET"));assert(!ULog_IsRecording());
+        command("@PID CONFIG 20 3 FL 5 700 900 120 0.4\n");assert(strstr(last,"PID_PARAM,20,4,FL,SET,"));assert(m[0]->speed_window_ms==5 && m[0]->integral_max==700 && m[0]->output_max==900 && m[0]->deadzone==120 && m[0]->ff_gain==0.4f);
+        command("@PID CONFIG 21 4 FL 0 700 900 120 0.4\n");assert(strstr(last,"PID_ERROR,21,RANGE"));
+        command("@PID CONFIG 22 4 X 5 700 900 120 0.4\n");assert(strstr(last,"PID_ERROR,22,AXIS"));
         /* Exercise each remaining controller and check atomic IRQ restoration. */
         { const char *names[7]={"FL","FR","RL","RR","X","Y","TH"};
           for(unsigned axis=1;axis<6;axis++){

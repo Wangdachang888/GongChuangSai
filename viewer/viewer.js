@@ -551,22 +551,22 @@ function pidParamDisconnected(){
   pidOnline.pending=null;pidOnline.current={};pidOnline.revision=null;renderPidParams();
 }
 function renderPidParams(){
-  $('pid-param-table').innerHTML='<table><thead><tr><th>车辆当前通道</th><th>Kp</th><th>Ki</th><th>Kd</th><th>周期 ms</th><th>积分限幅</th><th>输出限幅</th><th>版本</th><th>可写</th></tr></thead><tbody>'+PID_AXES.map(axis=>{const p=pidOnline.current[axis];return '<tr><td>'+axis+'</td>'+(['kp','ki','kd','periodMs','integralMax','outputMax','revision'].map(k=>'<td>'+(p?String(p[k]):'未读取')+'</td>').join(''))+'<td>'+(p&&p.revision===pidOnline.revision?(p.editable?'固件最终检查':'否'):'待读取')+'</td></tr>';}).join('')+'</tbody></table>';
+  $('pid-param-table').innerHTML='<table><thead><tr><th>车辆当前通道</th><th>Kp</th><th>Ki</th><th>Kd</th><th>周期 ms</th><th>积分限幅</th><th>输出限幅</th><th>死区补偿</th><th>前馈增益</th><th>版本</th><th>可写</th></tr></thead><tbody>'+PID_AXES.map(axis=>{const p=pidOnline.current[axis];return '<tr><td>'+axis+'</td>'+(['kp','ki','kd','periodMs','integralMax','outputMax','deadzone','ffGain','revision'].map(k=>'<td>'+(p?String(p[k]):'未读取')+'</td>').join(''))+'<td>'+(p&&p.revision===pidOnline.revision?(p.editable?'固件最终检查':'否'):'待读取')+'</td></tr>';}).join('')+'</tbody></table>';
   const selected=pidOnline.current[$('pid-param-axis').value];
   $('pid-param-context').textContent=selected?'当前只读配置：周期 '+selected.periodMs+' ms；前馈增益 '+selected.ffGain+'，死区 '+selected.deadzone+'，前馈速度阈值 '+selected.ffMinSpeed+'，目标斜坡 '+selected.ramp+'，输出变化限幅 '+selected.slew+'，测速低通 '+selected.lpf+'，kick '+selected.kickStep+'/'+selected.kickMax+'。':'';
   $('pid-param-write').disabled=pidOnline.busy;$('pid-param-read').disabled=pidOnline.busy;
-  for(const id of ['pid-param-axis','pid-param-kp','pid-param-ki','pid-param-kd','pid-param-rollback','pid-param-restore','pid-motors-fill','pid-motors-current','pid-motors-saved','pid-motors-previous','pid-motors-write',...['kp','ki','kd'].map(k=>'pid-motors-'+k),...PID_MOTOR_AXES.flatMap(axis=>['kp','ki','kd'].map(k=>'pid-motor-'+axis+'-'+k))])$(id).disabled=pidOnline.busy;
+  for(const id of ['pid-param-axis','pid-param-kp','pid-param-ki','pid-param-kd','pid-param-period','pid-param-integral-max','pid-param-output-max','pid-param-deadzone','pid-param-ff-gain','pid-param-rollback','pid-param-restore','pid-motors-fill','pid-motors-current','pid-motors-saved','pid-motors-previous','pid-motors-write',...['kp','ki','kd','period','integral-max','output-max','deadzone','ff-gain'].map(k=>'pid-motors-'+k),...PID_MOTOR_AXES.flatMap(axis=>['kp','ki','kd'].map(k=>'pid-motor-'+axis+'-'+k))])$(id).disabled=pidOnline.busy;
 }
-function fillPidParamForm(p){if(!p)return;for(const k of ['kp','ki','kd'])$('pid-param-'+k).value=String(p[k]);}
+function fillPidParamForm(p){if(!p)return;for(const k of ['kp','ki','kd'])$('pid-param-'+k).value=String(p[k]); if(PID_AXES.indexOf(p.axis)<4){ for(const [id,k] of [['pid-param-period','periodMs'],['pid-param-integral-max','integralMax'],['pid-param-output-max','outputMax'],['pid-param-deadzone','deadzone'],['pid-param-ff-gain','ffGain']]) if($(id)) $(id).value=String(p[k]); }}
 function selectPidParamAxis(){const axis=$('pid-param-axis').value;fillPidParamForm(pidOnline.current[axis]);renderPidParams();if(S.pidBurst)renderPidBurst();}
 function pidExchange(operation,axis,values,revision){
   if(!bt10.device?.gatt?.connected||!bt10.writeCharacteristic)return Promise.reject(new Error('请先直接连接 BT10。'));
   if(pidOnline.pending)return Promise.reject(new Error('上一条参数命令尚未结束。'));
   const id=++pidOnline.nextId;
   return new Promise((resolve,reject)=>{
-    const pending={id,axis,operation:operation==='GET'?'READ':operation,resolve,reject,timer:setTimeout(()=>{if(pidOnline.pending!==pending)return;pidOnline.pending=null;pidOnline.current={};renderPidParams();reject(new Error('等待固件应答超时；不会自动重发写入，请重新读取确认实际值。'));},5000)};
+    const pending={id,axis,operation:operation==='GET'?'READ':(operation==='CONFIG'?'SET':operation),resolve,reject,timer:setTimeout(()=>{if(pidOnline.pending!==pending)return;pidOnline.pending=null;pidOnline.current={};renderPidParams();reject(new Error('等待固件应答超时；不会自动重发写入，请重新读取确认实际值。'));},5000)};
     pidOnline.pending=pending;
-    const command='@PID '+operation+' '+id+' '+(operation==='SET'?revision+' ':'')+axis+(operation==='SET'?' '+['kp','ki','kd'].map(k=>Number(values[k]).toPrecision(8)).join(' '):'')+'\n';
+    const command='@PID '+operation+' '+id+' '+(operation==='SET'||operation==='CONFIG'?revision+' ':'')+axis+(operation==='SET'?' '+['kp','ki','kd'].map(k=>Number(values[k]).toPrecision(8)).join(' '):(operation==='CONFIG'?' '+['periodMs','integralMax','outputMax','deadzone','ffGain'].map(k=>Number(values[k]).toPrecision(8)).join(' '):''))+'\n';
     bt10WriteText(command).catch(e=>{if(pidOnline.pending!==pending)return;clearTimeout(pending.timer);pidOnline.pending=null;reject(e);});
   });
 }
@@ -595,6 +595,37 @@ function writeVehiclePid(){return withPidOnlineWork(async()=>{
   pidOnline.previous[axis]=before;pidOnline.saved[axis]={kp:verified.kp,ki:verified.ki,kd:verified.kd};savePidPreset();fillPidParamForm(verified);
   $('pid-param-status').textContent=axis+' 已写入并读回确认：Kp '+verified.kp+' / Ki '+verified.ki+' / Kd '+verified.kd+'，版本 '+verified.revision+'。仅当前 RAM 生效；其他通道不变。';
   return verified;
+});}
+function onlineConfigFromForm(prefix='pid-param-'){
+  const ids=[['periodMs','period'],['integralMax','integral-max'],['outputMax','output-max'],['deadzone','deadzone'],['ffGain','ff-gain']];
+  return Object.fromEntries(ids.map(([k,id])=>[k,Number($(prefix+id)?.value)]));
+}
+function validateOnlineConfig(axis,p){
+  return PID_AXES.indexOf(axis)<4 && Number.isInteger(p.periodMs) && p.periodMs>=1 && p.periodMs<=20 &&
+    [p.integralMax,p.outputMax,p.deadzone,p.ffGain].every(Number.isFinite) && p.integralMax>=0 &&
+    p.outputMax>=1 && p.outputMax<=1000 && p.integralMax<=p.outputMax && p.deadzone>=0 && p.deadzone<=500 && p.ffGain>=0 && p.ffGain<=5;
+}
+function pidConfigMatch(a,b){return ['periodMs','integralMax','outputMax','deadzone','ffGain'].every(k=>Math.abs(Number(a[k])-Number(b[k]))<=Math.max(1e-6,Math.abs(Number(b[k]))*2e-5));}
+function writeVehicleConfig(){return withPidOnlineWork(async()=>{
+  const axis=$('pid-param-axis').value,p=onlineConfigFromForm();
+  if(!validateOnlineConfig(axis,p))throw new Error('速度环配置无效：周期 1…20 ms 整数，积分≤输出≤1000，死区 0…500，前馈 0…5。');
+  const before=await pidExchange('GET',axis);if(!before.editable)throw new Error('车辆尚不允许写入；请停止采集并停车至少 500 ms。');
+  const applied=await pidExchange('CONFIG',axis,p,before.revision),verified=await pidExchange('GET',axis);
+  if(applied.revision!==verified.revision||!pidConfigMatch(verified,p))throw new Error('控制配置读回值或版本不匹配。');
+  pidOnline.previous[axis]={...pidOnline.previous[axis],...before};pidOnline.saved[axis]={...pidOnline.saved[axis],...p};savePidPreset();fillPidParamForm(verified);
+  $('pid-param-status').textContent=axis+' 控制配置已写入并读回确认：周期 '+verified.periodMs+' ms / 积分 '+verified.integralMax+' / 输出 '+verified.outputMax+' / 死区 '+verified.deadzone+' / 前馈 '+verified.ffGain+'，版本 '+verified.revision+'。';
+  return verified;
+});}
+function readConfigForms(){return onlineConfigFromForm('pid-motors-');}
+function fillConfigForms(p){if(!p)return;for(const [k,id] of [['periodMs','period'],['integralMax','integral-max'],['outputMax','output-max'],['deadzone','deadzone'],['ffGain','ff-gain']])if($('pid-motors-'+id))$('pid-motors-'+id).value=String(p[k]);}
+function fillAllMotorConfig(){const p=readConfigForms();if(!validateOnlineConfig('FL',p))return notify('统一配置无效，请检查周期、限幅、死区和前馈范围。',true);$('pid-param-status').textContent='统一控制配置已填入，尚未写入；点击一键写入四轮控制配置。';}
+function writeMotorConfigs(){return withPidOnlineWork(async()=>{
+  const p=readConfigForms();if(!validateOnlineConfig('FL',p))throw new Error('统一控制配置无效。');
+  const before={};let revision=null;
+  for(const axis of PID_MOTOR_AXES){const q=await pidExchange('GET',axis);before[axis]=q;if(!q.editable)throw new Error(axis+' 不允许写入，请停车至少 500 ms。');if(revision!==null&&q.revision!==revision)throw new Error('预检期间参数版本变化，请重新读取。');revision=q.revision;}
+  const done=[];
+  for(const axis of PID_MOTOR_AXES){const applied=await pidExchange('CONFIG',axis,p,revision),verified=await pidExchange('GET',axis);if(!pidConfigMatch(verified,p)||verified.revision!==applied.revision)throw new Error(axis+' 控制配置读回失败。');revision=verified.revision;done.push(axis);pidOnline.previous[axis]={...pidOnline.previous[axis],...before[axis]};pidOnline.saved[axis]={...pidOnline.saved[axis],...p};}
+  savePidPreset();fillConfigForms(p);$('pid-param-status').textContent='四轮控制配置已全部写入并读回确认，版本 '+revision+'；仅 RAM 生效。';return pidOnline.current;
 });}
 function loadPidPreset(previous=false){const axis=$('pid-param-axis').value,p=(previous?pidOnline.previous:pidOnline.saved)[axis];if(!p)return notify('该通道没有'+(previous?'可回滚':'本机保存')+'的参数。',true);fillPidParamForm(p);$('pid-param-status').textContent='已将 '+axis+' 的'+(previous?'上一组':'本机保存')+'参数填入，点击“停车写入并读回确认”后才生效。';}
 function pidMotorStatus(axis,text){$('pid-motor-'+axis+'-status').textContent=text;}
@@ -671,6 +702,25 @@ function pidAnalysisContext(){
 
 const PID_HEADER='timestamp_ms,fl_target,fl_actual,fl_output,fr_target,fr_actual,fr_output,rl_target,rl_actual,rl_output,rr_target,rr_actual,rr_output';
 const pidStream={live:[],stored:[],liveCount:0,used:{},lastSeq:null,gaps:0,crc:0,expected:null,stats:'',lastDraw:0,complete:false};
+const pidUpload={active:false,received:0,expected:null,startedAt:0,lastAt:0,rate:0,eta:null,complete:false};
+const pidTest={nextId:1,action:0,runTimer:null,state:'UNKNOWN',session:0,pendingRun:false};
+function pidTestText(text){const el=$('pid-test-status-text');if(el)el.textContent=text;}
+async function pidTestCommand(command,action=0){
+  if(!bt10.writeCharacteristic){pidTestText('请先点击“直接连接 BT10”；电脑日志源不能发送测试命令。');throw new Error('BT10 未直连');}
+  const id=pidTest.nextId++;
+  await bt10WriteText(command==='RUN'?`@PID TEST ${id} ${action}\n`:`@PID TEST_${command} ${id}\n`);
+  pidTestText(`已发送 ${command}（请求 ${id}），等待车辆应答…`);
+  return id;
+}
+async function pidTestPrepare(){try{clearTimeout(pidTest.runTimer);await pidTestCommand('RESET');}catch(e){notify('准备下一轮失败：'+e.message,true);}}
+async function pidTestRun(){try{clearTimeout(pidTest.runTimer);const action=Number($('pid-test-action').value)||0;pidTest.action=action;pidTest.pendingRun=true;await bt10WriteText('@PID START\n');pidTestText('已请求高频采集，等待 PID_ARMED 后启动动作…');pidTest.runTimer=setTimeout(()=>{if(pidTest.pendingRun){pidTest.pendingRun=false;notify('等待 PID_ARMED 超时，请检查停车状态和上次上传是否完成。',true);}},3000);}catch(e){pidTest.pendingRun=false;notify('开始动作失败：'+e.message,true);}}
+async function pidTestStop(){try{await pidTestCommand('STOP');}catch(e){notify('停止动作失败：'+e.message,true);}}
+async function pidTestStatus(){try{await pidTestCommand('STATUS');}catch(e){notify('读取测试状态失败：'+e.message,true);}}
+async function pidDeadzoneRun(){
+  const sel=$('pid-test-action');
+  try{if(sel)sel.value='4';pidTest.action=4;await pidTestRun();pidTestText('已请求低速正反向死区测量；完成后网页将按四轮输出/实测自动估计正反向阈值。');}
+  catch(e){notify('死区测量启动失败：'+e.message,true);}
+}
 function pidCrc(bytes){let crc=65535;for(const b of bytes){crc^=b<<8;for(let i=0;i<8;i++)crc=((crc&32768)?(crc<<1)^0x1021:crc<<1)&65535;}return crc;}
 function createPidWireDecoder(onText){
   let pending=[],resync=false;
@@ -696,13 +746,38 @@ function createPidWireDecoder(onText){
     }
   },reset(){pending=[];resync=false;}};
 }
-function resetPidStream(){Object.assign(pidStream,{live:[],stored:[],liveCount:0,used:{},lastSeq:null,gaps:0,crc:0,expected:null,stats:'',lastDraw:0,complete:false});}
+function resetPidStream(){Object.assign(pidStream,{live:[],stored:[],liveCount:0,used:{},lastSeq:null,gaps:0,crc:0,expected:null,stats:'',lastDraw:0,complete:false});Object.assign(pidUpload,{active:false,received:0,expected:null,startedAt:0,lastAt:0,rate:0,eta:null,complete:false});renderPidUpload();}
+function renderPidUpload(){
+  const bar=$('pid-upload-progress'),text=$('pid-upload-text');if(!bar||!text)return;
+  const n=pidUpload.received,total=pidUpload.expected,ratio=total>0?Math.min(1,n/total):0;bar.value=ratio;
+  if(!pidUpload.active&&!pidUpload.complete){text.textContent='停车上传尚未开始';return;}
+  const elapsed=pidUpload.startedAt?Math.max(.001,(pidUpload.lastAt||performance.now())-pidUpload.startedAt)/1000:0;
+  const rate=pidUpload.rate|| (elapsed>0?n/elapsed:0),eta=total&&rate>0?Math.max(0,(total-n)/rate):null;
+  const pct=total?`${(ratio*100).toFixed(1)}%`:`${n} 帧`;
+  text.textContent=pidUpload.complete?`停车上传完成：${n}/${total??'未知'} 帧（${pct}） · 平均 ${rate.toFixed(1)} 帧/s`:`停车上传中：${n}/${total??'待统计'} 帧（${pct}） · ${rate.toFixed(1)} 帧/s · 已用 ${elapsed.toFixed(1)} s · 预计剩余 ${eta===null?'计算中':eta.toFixed(1)+' s'}`;
+}
+function estimateDeadzone(){
+  const out=$('pid-deadzone-result'),rows=pidStream.stored;if(!out||rows.length<20)return;
+  const result=WHEELS.map((wheel,wi)=>{
+    const t=1+wi*3,a=t+1,u=t+2,answer={wheel:wheel.toUpperCase(),positive:null,negative:null,positiveN:0,negativeN:0};
+    for(const sign of [1,-1]){
+      const candidates=rows.filter(r=>sign*r[t]>0&&Math.abs(r[a])>=Math.max(1,Math.abs(r[t])*.05)&&sign*r[a]>0).map(r=>Math.abs(r[u])).filter(finite).sort((x,y)=>x-y);
+      const key=sign>0?'positive':'negative';answer[key]=candidates.length?candidates[Math.floor(Math.min(candidates.length-1,Math.max(0,candidates.length*.2)))]:null;answer[key+'N']=candidates.length;
+    }
+    return answer;
+  });
+  const usable=result.filter(x=>x.positive!==null||x.negative!==null);
+  if(!usable.length){out.textContent='死区测量未得到有效启动样本：请确认动作4已完整运行、编码器有反馈且未持续饱和。';return;}
+  out.innerHTML='<b>死区测量结果（估计）</b><p class="note">以目标与实际同向且实际速度超过目标 5% 的首批样本估计输出阈值；这是诊断值，不是自动写入值。正/负方向不对称时应分别保留。</p><table><thead><tr><th>轮</th><th>正向阈值</th><th>反向阈值</th><th>有效样本</th><th>操作</th></tr></thead><tbody>'+result.map(x=>`<tr><td>${x.wheel}</td><td>${x.positive===null?'—':x.positive.toFixed(1)}</td><td>${x.negative===null?'—':x.negative.toFixed(1)}</td><td>${x.positiveN}/${x.negativeN}</td><td>${x.positive===null&&x.negative===null?'—':`<button data-dz-axis="${x.wheel}">填入该轮</button>`}</td></tr>`).join('')+'</tbody></table>';
+  out.querySelectorAll('[data-dz-axis]').forEach(btn=>btn.onclick=()=>{const x=result.find(v=>v.wheel===btn.dataset.dzAxis);const vals=[x?.positive,x?.negative].filter(v=>finite(v));if(!vals.length)return;$('pid-param-axis').value=btn.dataset.dzAxis;$('pid-param-deadzone').value=Math.max(...vals).toFixed(1);$('pid-param-status').textContent=`已填入 ${btn.dataset.dzAxis} 死区补偿估计值（取正反向较大值）；尚未写入，请停车核对后写入。`;});
+}
 function encodePidUsed(p){return '#BTLOG,PID_USED,0,'+p.revision+','+p.axis+',READ,'+PID_VALUE_KEYS.map(k=>p[k]).join(',')+','+(p.editable?1:0)+'\n';}
 function pidCsv(){return Object.values(pidStream.used).map(encodePidUsed).join('')+PID_HEADER+'\n'+pidStream.stored.map(r=>r.join(',')).join('\n')+'\n'+(pidStream.stats?pidStream.stats+'\n':'');}
 function receivePidLine(line){
-  if(line.startsWith('#BTLOG,PID_ARMED')){resetPidStream();$('pid-live-status').textContent='已开始：持续 200 Hz 实时；100 Hz 循环保留最近 20 秒。手动停止或整车日志结束后冻结缓存。';return true;}
+  if(line.startsWith('#BTLOG,PID_ARMED')){resetPidStream();$('pid-live-status').textContent='已开始：持续 200 Hz 实时；100 Hz 循环保留最近 20 秒。手动停止或整车日志结束后冻结缓存。';if(pidTest.pendingRun){pidTest.pendingRun=false;clearTimeout(pidTest.runTimer);pidTestCommand('RUN',pidTest.action).catch(e=>notify('开始动作失败：'+e.message,true));}return true;}
   if(line.startsWith('#BTLOG,PID_REJECTED')){$('pid-live-status').textContent='启动被拒绝：请停车、等待开机至少 2 秒，并等待上次上传完成。';return true;}
-  if(line.startsWith('#BTLOG,PID_BEGIN')){pidStream.stored=[];pidStream.complete=false;return true;}
+  if(line.startsWith('#BTLOG,PID_TEST,')){const f=line.trim().split(',');pidTest.state=f[3]||'UNKNOWN';pidTestText(`车辆测试状态：${pidTest.state} · 状态码 ${f[4]||'—'} · 原因 ${f[5]||'—'} · 动作 ${f[6]||'—'}`);return true;}
+  if(line.startsWith('#BTLOG,PID_BEGIN')){pidStream.stored=[];pidStream.complete=false;const announced=line.match(/count=(\d+)/);Object.assign(pidUpload,{active:true,received:0,expected:announced?Number(announced[1]):2000,startedAt:performance.now(),lastAt:performance.now(),rate:0,eta:null,complete:false});renderPidUpload();return true;}
   const live=line.startsWith('#BTLOG,PID_LIVE,'),stored=line.startsWith('#BTLOG,PID,');
   if(live||stored){
     const a=line.split(',').slice(2).map(Number);let row=a;
@@ -710,20 +785,22 @@ function receivePidLine(line){
     if(row.length!==13||!row.every(finite))return true;
     if(live)pidStream.liveCount++;
     const dest=live?pidStream.live:pidStream.stored;dest.push(row);if(dest.length>(live?4000:2000))dest.shift();
+    if(stored){pidUpload.active=true;pidUpload.received++;pidUpload.lastAt=performance.now();const elapsed=Math.max(.001,(pidUpload.lastAt-pidUpload.startedAt)/1000);pidUpload.rate=pidUpload.received/elapsed;pidUpload.eta=pidUpload.expected&&pidUpload.rate>0?(pidUpload.expected-pidUpload.received)/pidUpload.rate:null;renderPidUpload();}
     const now=performance.now();if(now-pidStream.lastDraw>=100){pidStream.lastDraw=now;renderPidStream();}
     return true;
   }
-  if(line.startsWith('#BTLOG,PID_STATS,')){pidStream.stats=line;const m=line.match(/count=(\d+)/);pidStream.expected=m?Number(m[1]):null;return true;}
+  if(line.startsWith('#BTLOG,PID_STATS,')){pidStream.stats=line;const m=line.match(/count=(\d+)/);pidStream.expected=m?Number(m[1]):null;pidUpload.expected=pidStream.expected;renderPidUpload();return true;}
   if(line==='#BTLOG,PID_END'){
-    pidStream.complete=pidStream.expected!==null&&pidStream.expected===pidStream.stored.length;
-    if(pidStream.stored.length)loadPidBurst(pidCsv(),'停车上传_PID_100Hz.csv');
+    pidTestText('停车上传完成，可以点击“准备下一轮”；无需复位 MCU。');
+    pidStream.complete=pidStream.expected!==null&&pidStream.expected===pidStream.stored.length;pidUpload.active=false;pidUpload.complete=pidStream.complete;pidUpload.lastAt=performance.now();renderPidUpload();
+    if(pidStream.stored.length){loadPidBurst(pidCsv(),'停车上传_PID_100Hz.csv');estimateDeadzone();}
     renderPidStream();return true;
   }
   return false;
 }
 function renderPidStream(){
   const stored=pidStream.stored,rows=stored.length?stored:pidStream.live,wheel=$('pid-live-wheel').value||'fl',wi=WHEELS.indexOf(wheel),base=1+Math.max(0,wi)*3;
-  $('pid-live-status').textContent='实时累计 '+pidStream.liveCount+' 帧（图表保留 '+pidStream.live.length+' 帧，完整实收在仓库） · 实时缺口 '+pidStream.gaps+' · CRC 错误 '+pidStream.crc+' · 停车上传 '+stored.length+'/2000 帧 / 应收 '+pidStream.expected+' · '+(pidStream.complete?'上传完成':'采集/等待上传，断线时可能不完整')+' · '+pidStream.stats;
+  $('pid-live-status').textContent='实时累计 '+pidStream.liveCount+' 帧（图表保留 '+pidStream.live.length+' 帧，完整实收在仓库） · 实时缺口 '+pidStream.gaps+' · CRC 错误 '+pidStream.crc+' · '+(pidStream.complete?'停车上传完成':'停车上传进行中/尚未开始')+' · '+pidStream.stats;
   for(const [id,cols,colors,title] of [['pid-live-speed',[base,base+1],['#fbbf24','#38bdf8'],'目标速度（黄） / 实测速度（蓝），pulse/s'],['pid-live-output',[base+2],['#c084fc'],'实际控制输出（含前馈、PID、kick 与限幅）']]){
     const ctx=canvasContext(id);if(!ctx)continue;const {g,w,h}=ctx;
     g.fillStyle='#a9bfd4';g.font='12px sans-serif';g.fillText(title,12,18);if(rows.length<2)continue;
@@ -1396,6 +1473,7 @@ function init() {
   $('pid-axis').onchange=()=>{calculatePid();drawPid();};$('pid-apply').onclick=()=>{calculatePid();drawPid();};
   $('pid-param-read').onclick=()=>readVehiclePid();
   $('pid-param-write').onclick=()=>writeVehiclePid();
+  $('pid-param-config-write').onclick=()=>writeVehicleConfig();
   $('pid-param-axis').onchange=selectPidParamAxis;
   $('pid-param-rollback').onclick=()=>loadPidPreset(true);
   $('pid-param-restore').onclick=()=>loadPidPreset(false);
@@ -1404,11 +1482,18 @@ function init() {
   $('pid-motors-saved').onclick=()=>loadMotorPidForms('saved');
   $('pid-motors-previous').onclick=()=>loadMotorPidForms('previous');
   $('pid-motors-write').onclick=writeMotorPids;
+  $('pid-motors-config-fill').onclick=fillAllMotorConfig;
+  $('pid-motors-config-write').onclick=writeMotorConfigs;
   for(const axis of PID_MOTOR_AXES)for(const k of ['kp','ki','kd'])$('pid-motor-'+axis+'-'+k).oninput=()=>pidMotorStatus(axis,'待写入（编辑值）');
   try{const saved=JSON.parse(localStorage.getItem('mecanum-pid-presets-v1')||'{}');pidOnline.saved=Object.fromEntries(Object.entries(saved).filter(([axis,p])=>p&&validateOnlinePid(axis,p)));}catch(_){}
   renderPidParams();
   $('pid-live-start').onclick=()=>sendPidCommand('START');
   $('pid-live-stop').onclick=()=>sendPidCommand('STOP');
+  $('pid-test-prepare').onclick=pidTestPrepare;
+  $('pid-test-run').onclick=pidTestRun;
+  $('pid-deadzone-run').onclick=pidDeadzoneRun;
+  $('pid-test-stop').onclick=pidTestStop;
+  $('pid-test-status').onclick=pidTestStatus;
   $('pid-live-test').onclick=pidWireSelfTest;
   $('pid-live-download').onclick=downloadPidStream;
   $('pid-live-download-live').onclick=()=>downloadPidLive();

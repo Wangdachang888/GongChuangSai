@@ -1,5 +1,27 @@
 # GongChuangSai 项目状态
 
+## 36. BT10 在线速度环控制配置（2026-11-22）
+
+- 速度环支持通过 BT10 在停车安全门控下在线修改 `period_ms`（1…20 ms 整数窗口）、`integral_max`、`output_max`、`deadzone` 和 `ff_gain`；这些参数进入四个 `Motor_t` 的 RAM 运行时字段，复位恢复默认宏值。
+- `@PID CONFIG` 是完整原子配置请求；网页先 GET 当前版本，再逐轮 CONFIG、GET 读回并做最终版本复核。旧 `@PID SET/GET` 与 PID_USED 字段格式保持兼容。位置环没有伪造同类配置能力。
+- 周期只改变已有 1 ms 电机更新内的速度采样窗口，不改变 TIM6 中断频率、10 ms 底盘调度、UART 资源或比赛状态机；写入时清除速度累计窗口、kick 和输出历史，避免新旧周期混用。
+- `tests/ulog/run.ps1`、`tests/race/run.ps1`、`node viewer/build.cjs`、`node viewer/test.cjs`、`git diff --check` PASS；UV4 命令返回 0。未烧录，BT10 实机写入、边界效果、失电恢复和比赛验收 NOT_RUN。
+
+## 37. 死区测量与停车上传可视化（2026-11-22）
+
+- PID 页面新增“在线测量四轮死区”，复用 PID_Test 动作 4 的低速正反向诊断；停车上传完成后按目标/实测同向且实测超过目标 5% 的首批样本估计每轮正、反向输出阈值。结果只填入网页现有单轮死区输入框，仍需人工确认后执行停车写入，不自动修改车辆。
+- 停车上传增加进度条和文字状态：已收帧/应收帧、百分比、平均帧率、已用时间、预计剩余时间和完成状态；缺少 `PID_STATS` 或 `PID_END` 时明确显示未完成。
+- 当前单缓存仍要求 `PID_END` 后再 `TEST_RESET`，未改变比赛流程和缓存一致性；真正并行采集/上传需要后续双缓存或会话化设计。主机网页回归 PASS，BT10 实机死区测量、写入和多轮验收 NOT_RUN。
+
+## 35. BT10 网页一键 PID_Test 流程（2026-11-22）
+
+- `PID_Test` 增加 BT10 主循环命令：`@PID TEST <id> <action>`、`TEST_STOP`、`TEST_RESET`、`TEST_STATUS`。
+  UART 中断只排队，`AppRuntime` 在原有 IMU、停车、日志设防和故障门控下消费请求；比赛 Target 不响应这些动作。
+- 内置动作编号：0 伯德图多正弦、1 三档阶跃、2 低速正反向、3 中高速阶跃、4 低速停滞诊断。复用同一 `AppPidTest` 状态机，不新增底盘/PID执行层。
+- 测试进入终态后自动停止 PID Burst，继续走既有停车上传；`TEST_RESET` 在终态、零目标/零输出、低轮速且连续停车 500 ms 后重新装载，不复位 MCU、不改 PID、不自动写参数。
+- 网页 PID 页新增动作选择、准备下一轮、开始、停止、状态按钮，并自动发送 `@PID START` 后再发送动作命令；收到 `PID_END` 后提示可开始下一轮。网页日志源仍为只读，必须直连 BT10。
+- 主机验证：`tests/ulog/run.ps1`、`tests/race/run.ps1`、`node viewer/build.cjs`、`node viewer/test.cjs`、`git diff --check` PASS。Keil 编译、蓝牙实车启动/停止/多轮上传和机械安全验收 NOT_RUN。
+
 ## 34. 频域测试动作（2026-11-22）
 
 - `AppPidTest` 增加编译期开关 `APP_PID_TEST_FREQUENCY=1`，PID_Test 默认开启且与低速 creep

@@ -131,7 +131,11 @@ void Motor_Init(Motor_t *motor,
     motor->speed_lpf = 0.0f;
 
     motor->output_max = PID_OUTPUT_MAX;
-    motor->integral_max = PID_OUTPUT_MAX * 0.8f;   /* 积分可承担较大负载 */
+    motor->integral_max = PID_OUTPUT_MAX * 0.8f;
+    motor->speed_window_ms = MOTOR_SPEED_WIN_MS;
+    motor->ff_gain = MOTOR_FF_GAIN;
+    motor->deadzone = MOTOR_DZ_OUT;
+    motor->ff_min_speed = MOTOR_FF_MIN_SPD;   /* 积分可承担较大负载 */
 
     /* 启动 PWM */
     HAL_TIM_PWM_Start(pwm_tim1, pwm_ch1);
@@ -175,7 +179,7 @@ void Motor_Update(Motor_t *motor, float dt)
     motor->acc_cnt += delta;
     motor->acc_ms = (uint16_t)(motor->acc_ms + (uint16_t)(dt * 1000.0f + 0.5f));
 
-    if (motor->acc_ms < MOTOR_SPEED_WIN_MS) {
+    if (motor->acc_ms < motor->speed_window_ms) {
         return;                     /* 窗口未满，保持上次 PWM */
     }
 
@@ -216,10 +220,10 @@ void Motor_Update(Motor_t *motor, float dt)
 
         /* 前馈 + 死区补偿（死区随速度渐变，避免低速阈值处突跳） */
         ff = 0.0f;
-        if (motor->target_speed > MOTOR_FF_MIN_SPD) {
-            ff = motor->target_speed * MOTOR_FF_GAIN + MOTOR_DZ_OUT;
-        } else if (motor->target_speed < -MOTOR_FF_MIN_SPD) {
-            ff = motor->target_speed * MOTOR_FF_GAIN - MOTOR_DZ_OUT;
+        if (motor->target_speed > motor->ff_min_speed) {
+            ff = motor->target_speed * motor->ff_gain + motor->deadzone;
+        } else if (motor->target_speed < -motor->ff_min_speed) {
+            ff = motor->target_speed * motor->ff_gain - motor->deadzone;
         }
 
         pre = ff + p_out + d_out;
@@ -242,9 +246,9 @@ void Motor_Update(Motor_t *motor, float dt)
     {
         float sgn = 0.0f;
 
-        if (motor->target_speed > MOTOR_FF_MIN_SPD) {
+        if (motor->target_speed > motor->ff_min_speed) {
             sgn = 1.0f;
-        } else if (motor->target_speed < -MOTOR_FF_MIN_SPD) {
+        } else if (motor->target_speed < -motor->ff_min_speed) {
             sgn = -1.0f;
         }
 

@@ -682,32 +682,166 @@
                   <IncludeLibraryModules></IncludeLibraryModules>
                   <ComprImg>1</ComprImg>
                 </CommonProperty>
+                <FileArmAds>
+                  <Cads>
+                    <interw>2</interw>
+                    <Optim>0</Optim>
+                    <oTime>2</oTime>
+                    <SplitLS>2</SplitLS>
+                    <OneElfS>2</OneElfS>
+                    <Strict>2</Strict>
+                    <EnumInt>2</EnumInt>
+                    <PlainCh>2</PlainCh>
+                    <Ropi>2</Ropi>
+                    <Rwpi>2</Rwpi>
+                    <wLevel>0</wLevel>
+                    <uThumb>2</uThumb>
+                    <uSurpInc>2</uSurpInc>
+                    <uC99>2</uC99>
+                    <uGnu>2</uGnu>
+                    <useXO>2</useXO>
+                    <v6Lang>0</v6Lang>
+                    <v6LangP>0</v6LangP>
+                    <vShortEn>2</vShortEn>
+                    <vShortWch>2</vShortWch>
+                    <v6Lto>2</v6Lto>
+                    <v6WtE>2</v6WtE>
+                    <v6Rtti>2</v6Rtti>
+                    <VariousControls>
+                      <MiscControls></MiscControls>
+                      <Define></Define>
+                      <Undefine></Undefine>
+                      <IncludePath></IncludePath>
+                    </VariousControls>
+                  </Cads>
+                </FileArmAds>
               </FileOption>
             </File>
-            <File><FileName>app_runtime.c</FileName><FileType>1</FileType><FilePath>..\App\app_runtime.c</FilePath></File>
-            <File><FileName>app_runtime.h</FileName><FileType>5</FileType><FilePath>..\App\app_runtime.h</FilePath></File>
-            <File><FileName>app_race.c</FileName><FileType>1</FileType><FilePath>..\App\app_race.c</FilePath></File>
-            <File><FileName>app_race.h</FileName><FileType>5</FileType><FilePath>..\App\app_race.h</FilePath></File>
-            <File><FileName>race_fsm.c</FileName><FileType>1</FileType><FilePath>..\App\race_fsm.c</FilePath></File>
-            <File><FileName>race_fsm.h</FileName><FileType>5</FileType><FilePath>..\App\race_fsm.h</FilePath></File>
-            <File><FileName>race_task_plan.c</FileName><FileType>1</FileType><FilePath>..\App\race_task_plan.c</FilePath></File>
-            <File><FileName>race_task_plan.h</FileName><FileType>5</FileType><FilePath>..\App\race_task_plan.h</FilePath></File>
-            <File><FileName>race_ui.c</FileName><FileType>1</FileType><FilePath>..\App\race_ui.c</FilePath></File>
-            <File><FileName>race_ui.h</FileName><FileType>5</FileType><FilePath>..\App\race_ui.h</FilePath></File>
-            <File><FileName>app_ring_align.c</FileName><FileType>1</FileType><FilePath>..\App\app_ring_align.c</FilePath></File>
-            <File><FileName>app_ring_align.h</FileName><FileType>5</FileType><FilePath>..\App\app_ring_align.h</FilePath></File>
-            <File><FileName>app_pick_fsm.c</FileName><FileType>1</FileType><FilePath>..\App\app_pick_fsm.c</FilePath></File>
-            <File><FileName>app_pick_fsm.h</FileName><FileType>5</FileType><FilePath>..\App\app_pick_fsm.h</FilePath></File>
-            <File><FileName>app_pick_motion.c</FileName><FileType>1</FileType><FilePath>..\App\app_pick_motion.c</FilePath></File>
-            <File><FileName>app_pick_motion.h</FileName><FileType>5</FileType><FilePath>..\App\app_pick_motion.h</FilePath></File>
-            <File><FileName>app_servo_key.c</FileName><FileType>1</FileType><FilePath>..\App\app_servo_key.c</FilePath></File>
-            <File><FileName>app_servo_key.h</FileName><FileType>5</FileType><FilePath>..\App\app_servo_key.h</FilePath></File>
-            <File><FileName>app_square.c</FileName><FileType>1</FileType><FilePath>..\App\app_square.c</FilePath></File>
-            <File><FileName>app_square.h</FileName><FileType>5</FileType><FilePath>..\App\app_square.h</FilePath></File>
-            <File><FileName>app_stepper_openloop.c</FileName><FileType>1</FileType><FilePath>..\App\app_stepper_openloop.c</FilePath></File>
-            <File><FileName>app_stepper_openloop.h</FileName><FileType>5</FileType><FilePath>..\App\app_stepper_openloop.h</FilePath></File>
-            <File><FileName>display_nav.c</FileName><FileType>1</FileType><FilePath>..\App\display_nav.c</FilePath></File>
-            <File><FileName>display_nav.h</FileName><FileType>5</FileType><FilePath>..\App\display_nav.h</FilePath></File>
+            <File>
+              <FileName>app_runtime.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\app_runtime.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_runtime.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\App\app_runtime.h</FilePath>
+            </File>
+            <File>
+              <FileName>app_race.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\app_race.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_race.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\App\app_race.h</FilePath>
+            </File>
+            <File>
+              <FileName>race_fsm.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\race_fsm.c</FilePath>
+            </File>
+            <File>
+              <FileName>race_fsm.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\App\race_fsm.h</FilePath>
+            </File>
+            <File>
+              <FileName>race_task_plan.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\race_task_plan.c</FilePath>
+            </File>
+            <File>
+              <FileName>race_task_plan.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\App\race_task_plan.h</FilePath>
+            </File>
+            <File>
+              <FileName>race_ui.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\race_ui.c</FilePath>
+            </File>
+            <File>
+              <FileName>race_ui.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\App\race_ui.h</FilePath>
+            </File>
+            <File>
+              <FileName>app_ring_align.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\app_ring_align.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_ring_align.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\App\app_ring_align.h</FilePath>
+            </File>
+            <File>
+              <FileName>app_pick_fsm.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\app_pick_fsm.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_pick_fsm.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\App\app_pick_fsm.h</FilePath>
+            </File>
+            <File>
+              <FileName>app_pick_motion.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\app_pick_motion.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_pick_motion.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\App\app_pick_motion.h</FilePath>
+            </File>
+            <File>
+              <FileName>app_servo_key.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\app_servo_key.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_servo_key.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\App\app_servo_key.h</FilePath>
+            </File>
+            <File>
+              <FileName>app_square.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\app_square.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_square.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\App\app_square.h</FilePath>
+            </File>
+            <File>
+              <FileName>app_stepper_openloop.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\app_stepper_openloop.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_stepper_openloop.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\App\app_stepper_openloop.h</FilePath>
+            </File>
+            <File>
+              <FileName>display_nav.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\display_nav.c</FilePath>
+            </File>
+            <File>
+              <FileName>display_nav.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\App\display_nav.h</FilePath>
+            </File>
+            <File>
+              <FileName>app_pid_test.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\App\app_pid_test.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -976,7 +1110,7 @@
             <DriverSelection>4101</DriverSelection>
           </Flash1>
           <bUseTDR>1</bUseTDR>
-          <Flash2>BIN\UL2V8M.DLL</Flash2>
+          <Flash2>BIN\UL2CM3.DLL</Flash2>
           <Flash3></Flash3>
           <Flash4></Flash4>
           <pFcarmOut></pFcarmOut>
@@ -1500,8 +1634,11 @@
         <Group>
           <GroupName>App</GroupName>
           <Files>
-            <File><FileName>app_pid_test.c</FileName><FileType>1</FileType><FilePath>..\App\app_pid_test.c</FilePath></File>
-            <File><FileName>app_pid_test.h</FileName><FileType>5</FileType><FilePath>..\App\app_pid_test.h</FilePath></File>
+            <File>
+              <FileName>app_pid_test.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\app_pid_test.c</FilePath>
+            </File>
             <File>
               <FileName>app_runtime.c</FileName>
               <FileType>1</FileType>
@@ -1621,6 +1758,11 @@
               <FileName>display_nav.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\App\display_nav.h</FilePath>
+            </File>
+            <File>
+              <FileName>app_pid_test.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\App\app_pid_test.h</FilePath>
             </File>
           </Files>
         </Group>
@@ -1756,6 +1898,75 @@
         </Group>
         <Group>
           <GroupName>::CMSIS</GroupName>
+          <GroupOption>
+            <CommonProperty>
+              <UseCPPCompiler>0</UseCPPCompiler>
+              <RVCTCodeConst>0</RVCTCodeConst>
+              <RVCTZI>0</RVCTZI>
+              <RVCTOtherData>0</RVCTOtherData>
+              <ModuleSelection>0</ModuleSelection>
+              <IncludeInBuild>0</IncludeInBuild>
+              <AlwaysBuild>2</AlwaysBuild>
+              <GenerateAssemblyFile>2</GenerateAssemblyFile>
+              <AssembleAssemblyFile>2</AssembleAssemblyFile>
+              <PublicsOnly>2</PublicsOnly>
+              <StopOnExitCode>11</StopOnExitCode>
+              <CustomArgument></CustomArgument>
+              <IncludeLibraryModules></IncludeLibraryModules>
+              <ComprImg>1</ComprImg>
+            </CommonProperty>
+            <GroupArmAds>
+              <Cads>
+                <interw>2</interw>
+                <Optim>0</Optim>
+                <oTime>2</oTime>
+                <SplitLS>2</SplitLS>
+                <OneElfS>2</OneElfS>
+                <Strict>2</Strict>
+                <EnumInt>2</EnumInt>
+                <PlainCh>2</PlainCh>
+                <Ropi>2</Ropi>
+                <Rwpi>2</Rwpi>
+                <wLevel>0</wLevel>
+                <uThumb>2</uThumb>
+                <uSurpInc>2</uSurpInc>
+                <uC99>2</uC99>
+                <uGnu>2</uGnu>
+                <useXO>2</useXO>
+                <v6Lang>0</v6Lang>
+                <v6LangP>0</v6LangP>
+                <vShortEn>2</vShortEn>
+                <vShortWch>2</vShortWch>
+                <v6Lto>2</v6Lto>
+                <v6WtE>2</v6WtE>
+                <v6Rtti>2</v6Rtti>
+                <VariousControls>
+                  <MiscControls></MiscControls>
+                  <Define></Define>
+                  <Undefine></Undefine>
+                  <IncludePath></IncludePath>
+                </VariousControls>
+              </Cads>
+              <Aads>
+                <interw>2</interw>
+                <Ropi>2</Ropi>
+                <Rwpi>2</Rwpi>
+                <thumb>2</thumb>
+                <SplitLS>2</SplitLS>
+                <SwStkChk>2</SwStkChk>
+                <NoWarn>2</NoWarn>
+                <uSurpInc>2</uSurpInc>
+                <useXO>2</useXO>
+                <ClangAsOpt>0</ClangAsOpt>
+                <VariousControls>
+                  <MiscControls></MiscControls>
+                  <Define></Define>
+                  <Undefine></Undefine>
+                  <IncludePath></IncludePath>
+                </VariousControls>
+              </Aads>
+            </GroupArmAds>
+          </GroupOption>
         </Group>
       </Groups>
     </Target>

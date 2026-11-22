@@ -14,10 +14,18 @@ typedef enum {
     PID_TEST_REASON_TIMEOUT, PID_TEST_REASON_IMU, PID_TEST_REASON_LOOP,
     PID_TEST_REASON_FEEDBACK, PID_TEST_REASON_CONFIG, PID_TEST_REASON_CAPTURE
 } AppPidTestReason;
+typedef enum {
+    PID_TEST_ACTION_BODE = 0,
+    PID_TEST_ACTION_STEP = 1,
+    PID_TEST_ACTION_CREEP = 2,
+    PID_TEST_ACTION_SPEED = 3,
+    PID_TEST_ACTION_STALL = 4
+} AppPidTestAction;
 typedef struct {
     AppPidTestState state;
     AppPidTestReason reason;
     uint8_t step, axis;
+    uint8_t action;
     float speed_mps;
     uint32_t started_ms;
 } AppPidTestStatus;
@@ -26,6 +34,8 @@ typedef struct {
  * All calls main-loop-only. Fault is explicit, not inferred from low wheel speed. */
 void AppPidTest_Init(MecanumChassis_t *chassis);
 uint8_t AppPidTest_Start(uint32_t now);
+uint8_t AppPidTest_SelectAction(uint8_t action);
+uint8_t AppPidTest_Rearm(void);
 void AppPidTest_Poll(uint32_t now, AppPidTestReason fault);
 void AppPidTest_Stop(AppPidTestReason reason);
 const AppPidTestStatus *AppPidTest_Status(void);

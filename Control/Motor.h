@@ -45,6 +45,11 @@ typedef struct {
     uint16_t acc_ms;           /* 窗口已累计时间 */
     float    speed_lpf;        /* 低通后的实测速度 */
     float output_max;
+    /* Runtime speed-loop configuration; defaults are initialized in Motor_Init. */
+    uint16_t speed_window_ms;
+    float ff_gain;
+    float deadzone;
+    float ff_min_speed;
 } Motor_t;
 
 /* 函数声明 */

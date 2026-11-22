@@ -40,3 +40,4 @@
 
 .pid-online{margin:14px 0;padding:14px;background:#101f30;border:1px solid #3d6b91;border-radius:8px}.pid-online input{width:105px}.pid-param-table{overflow:auto}.pid-param-table table{width:100%;margin:10px 0}.pid-param-table th,.pid-param-table td{padding:5px 10px;text-align:right;white-space:nowrap}.pid-param-table th:first-child,.pid-param-table td:first-child{text-align:left}.pid-online .toolbar{flex-wrap:wrap}.pid-candidate button{margin-top:8px}
 .pid-motors{margin:16px 0;padding:12px;border:1px solid #426b87;border-radius:8px;background:#132a3b}.pid-motors h4{margin:0 0 10px;color:#bfe8ff}.pid-motors td:last-child{color:var(--amber);text-align:left}.pid-online input:disabled{opacity:.6}
+.pid-upload-progress{display:flex;align-items:center;gap:10px;margin:8px 0;color:#b9cbe0}.pid-upload-progress progress{flex:1;height:12px;accent-color:#38bdf8}.pid-upload-progress span{min-width:32em;font-variant-numeric:tabular-nums}
