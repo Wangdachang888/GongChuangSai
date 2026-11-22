@@ -1,5 +1,14 @@
 # GongChuangSai 项目状态
 
+## 35. 四轮 M/T 混合测速（2026-11-22）
+
+- `Control/Motor.c/.h` 保留 TIM2/TIM3/TIM4/TIM5 TI12 编码器接口，在各 CH1 引脚增加 EXTI 上升沿时间戳；ISR 只记录 DWT `CYCCNT`、方向和序号，测速换算仍在 `Motor_Update`。
+- 低速采用 T 法、高速采用 M 法，默认进入/退出阈值为 5 ms 窗口绝对计数 `<=2` / `>=4`，无有效边沿或超过 120 ms 超时判零；异常时间戳回退当前 M 估计。阈值与超时可通过宏覆盖，尚未实车标定。
+- `Encoder_ReadDelta` 按 TIM2/TIM5 32 位、TIM3/TIM4 16 位分别做有符号回绕差分；未改 PID、前馈、死区、输出限幅、运动学、比赛状态机或编码器方向。
+- 新增 `tests/motor_mt/test_mt.py` 合成测试，覆盖正反向、16/32 位回绕、切换滞回、异常时间戳与停脉冲超时；结果 PASS 仅代表主机算法检查，实机 NOT_RUN。
+- `tests/ulog/run.ps1` 固定其旧三档 PID 序列测试使用 `APP_PID_TEST_FREQUENCY=0`，并修正 PowerShell 预处理冲突检查的错误流处理，使现有 ULog 回归在当前频域默认配置下可执行。
+- `tests/race/run.ps1` PASS；`tests/ulog/run.ps1` PASS；Keil ArmCC 5.06 Rebuild PASS（0 error/0 warning）。未烧录、未执行编码器边沿/低速实车验证。
+
 ## 34. 频域测试动作（2026-11-22）
 
 - `AppPidTest` 增加编译期开关 `APP_PID_TEST_FREQUENCY=1`，PID_Test 默认开启且与低速 creep

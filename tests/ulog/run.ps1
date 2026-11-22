@@ -46,7 +46,7 @@ Path("tmp/runtime_pid_test.c").write_text(head+extra+constants+stop+block+inputs
 '@ | python -
     if ($LASTEXITCODE) { throw 'Runtime PID fixture extraction failed' }
     foreach ($profile in @('forward','lateral','reverse','lateralreverse','custom','badorder','badnan','badlimit','badzero','creep','creep012')) {
-        $testArgs = @('-DAPP_PID_TEST_ENABLE=1','-DAPP_RUN_MODE=4','-DAPP_PID_TEST_HOST')
+        $testArgs = @('-DAPP_PID_TEST_ENABLE=1','-DAPP_RUN_MODE=4','-DAPP_PID_TEST_HOST','-DAPP_PID_TEST_FREQUENCY=0')
         if ($profile -eq 'lateral') { $testArgs += '-DAPP_PID_TEST_AXIS=1' }
         if ($profile -eq 'reverse') { $testArgs += '-DAPP_PID_TEST_DIRECTION=-1' }
         if ($profile -eq 'lateralreverse') { $testArgs += @('-DAPP_PID_TEST_AXIS=1','-DAPP_PID_TEST_DIRECTION=-1') }
@@ -68,8 +68,12 @@ Path("tmp/runtime_pid_test.c").write_text(head+extra+constants+stop+block+inputs
         }
     }
     foreach ($conflict in @(@('-DAPP_PID_TEST_ENABLE=1'),@('-DAPP_RUN_MODE=4'),@('-DAPP_PID_TEST_ENABLE=1','-DAPP_RUN_MODE=0'),@('-DAPP_PID_TEST_ENABLE=1','-DAPP_RUN_MODE=4','-DMOTOR_TUNE=1'))) {
+        $savedErrorAction = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
         & $Compiler -E -x c @conflict Config/app_mode.h -o tmp/pid_conflict.i 2>$null
-        if ($LASTEXITCODE -eq 0) { throw 'Conflicting chassis writers were not rejected' }
+        $conflictExit = $LASTEXITCODE
+        $ErrorActionPreference = $savedErrorAction
+        if ($conflictExit -eq 0) { throw 'Conflicting chassis writers were not rejected' }
     }
     Write-Output 'PASS PID build-mode conflicts rejected at compile time'
     foreach ($mode in @(0, 3)) {

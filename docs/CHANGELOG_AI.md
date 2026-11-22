@@ -1,5 +1,12 @@
 # AI 维护变更日志
 
+## 2026-11-22：四轮 M/T 混合测速改造
+
+- 保留 TIM2/TIM3/TIM4/TIM5 的 TI12 编码器模式；使用编码器 CH1 的 EXTI 上升沿配合 Cortex-M4 DWT `CYCCNT` 记录高精度边沿时间，ISR 不做浮点运算。
+- 在 `Motor_Update` 增加可配置 M/T 滞回：默认 5 ms 窗口 `<=2` 计数进入 T 法、`>=4` 计数回到 M 法，边沿超时 120 ms 判零，异常周期回退 M 法；修正 16 位/32 位计数器跨界差分。
+- 未修改 PID、前馈、死区、输出限幅、目标斜坡、PWM、编码器方向、底盘运动学或比赛状态机。
+- 新增主机合成测试 `tests/motor_mt/test_mt.py`；Race/ULog 回归与 Keil ArmCC Rebuild 均通过。实机测速质量、EXTI 边沿完整性和阈值标定仍需人工验证。
+
 ## 2026-11-22：增加伯德图专用独立测试动作
 
 - PID_Test 新增可选 `APP_PID_TEST_FREQUENCY=1`：固定正向工作点叠加四个与 1024 点/5 ms

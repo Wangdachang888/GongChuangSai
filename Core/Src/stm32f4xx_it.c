@@ -24,6 +24,7 @@
 /* USER CODE BEGIN Includes */
 #include "bsp_stepper.h"
 #include "bsp_ulog.h"
+#include "Motor.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -59,6 +60,10 @@
 /* External variables --------------------------------------------------------*/
 extern TIM_HandleTypeDef htim6;
 extern UART_HandleTypeDef huart3;
+extern Motor_t motor_left_front;
+extern Motor_t motor_right_front;
+extern Motor_t motor_left_back;
+extern Motor_t motor_right_back;
 /* USER CODE BEGIN EV */
 
 /* USER CODE END EV */
@@ -235,6 +240,36 @@ void TIM6_DAC_IRQHandler(void)
   /* USER CODE BEGIN TIM6_DAC_IRQn 1 */
 
   /* USER CODE END TIM6_DAC_IRQn 1 */
+}
+
+/* Encoder CH1 edge timestamps for M/T. Timer encoder mode is unchanged. */
+void EXTI0_IRQHandler(void)
+{
+  if (__HAL_GPIO_EXTI_GET_IT(GPIO_PIN_0) != RESET) {
+    __HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_0);
+    Motor_EncoderEdgeIrq(&motor_right_back);
+  }
+}
+void EXTI4_IRQHandler(void)
+{
+  if (__HAL_GPIO_EXTI_GET_IT(GPIO_PIN_4) != RESET) {
+    __HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_4);
+    Motor_EncoderEdgeIrq(&motor_right_front);
+  }
+}
+void EXTI9_5_IRQHandler(void)
+{
+  if (__HAL_GPIO_EXTI_GET_IT(GPIO_PIN_6) != RESET) {
+    __HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_6);
+    Motor_EncoderEdgeIrq(&motor_left_back);
+  }
+}
+void EXTI15_10_IRQHandler(void)
+{
+  if (__HAL_GPIO_EXTI_GET_IT(GPIO_PIN_15) != RESET) {
+    __HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_15);
+    Motor_EncoderEdgeIrq(&motor_left_front);
+  }
 }
 
 /* USER CODE BEGIN 1 */
