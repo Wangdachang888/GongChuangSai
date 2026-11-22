@@ -703,12 +703,14 @@ function pidAnalysisContext(){
 const PID_HEADER='timestamp_ms,fl_target,fl_actual,fl_output,fr_target,fr_actual,fr_output,rl_target,rl_actual,rl_output,rr_target,rr_actual,rr_output';
 const pidStream={live:[],stored:[],liveCount:0,used:{},lastSeq:null,gaps:0,crc:0,expected:null,stats:'',lastDraw:0,complete:false};
 const pidUpload={active:false,received:0,expected:null,startedAt:0,lastAt:0,rate:0,eta:null,complete:false};
-const pidTest={nextId:1,action:0,runTimer:null,state:'UNKNOWN',session:0,pendingRun:false};
+const pidTest={nextId:1,action:0,runTimer:null,replyTimer:null,pendingCommand:'',state:'UNKNOWN',session:0,pendingRun:false};
 function pidTestText(text){const el=$('pid-test-status-text');if(el)el.textContent=text;}
 async function pidTestCommand(command,action=0){
   if(!bt10.writeCharacteristic){pidTestText('请先点击“直接连接 BT10”；电脑日志源不能发送测试命令。');throw new Error('BT10 未直连');}
   const id=pidTest.nextId++;
   await bt10WriteText(command==='RUN'?`@PID TEST ${id} ${action}\n`:`@PID TEST_${command} ${id}\n`);
+  clearTimeout(pidTest.replyTimer);pidTest.pendingCommand=command;
+  pidTest.replyTimer=setTimeout(()=>{if(pidTest.pendingCommand===command){pidTest.pendingCommand='';pidTestText(`${command} 已发送，但 2 秒内没有收到车辆应答。请检查固件版本、BT10 直连和 USART2 回传。`);}},2000);
   pidTestText(`已发送 ${command}（请求 ${id}），等待车辆应答…`);
   return id;
 }
@@ -776,7 +778,7 @@ function pidCsv(){return Object.values(pidStream.used).map(encodePidUsed).join('
 function receivePidLine(line){
   if(line.startsWith('#BTLOG,PID_ARMED')){resetPidStream();$('pid-live-status').textContent='已开始：持续 200 Hz 实时，网页持续归档；测试结束直接关闭实时流，不自动补传停车缓存。';if(pidTest.pendingRun){pidTest.pendingRun=false;clearTimeout(pidTest.runTimer);pidTestCommand('RUN',pidTest.action).catch(e=>notify('开始动作失败：'+e.message,true));}return true;}
   if(line.startsWith('#BTLOG,PID_REJECTED')){pidTest.pendingRun=false;clearTimeout(pidTest.runTimer);const reason=line.split(',').slice(2).join(',').trim()||'busy_or_not_parked_or_warmup';$('pid-live-status').textContent='启动被拒绝：'+reason+'；请停车、等待开机至少 2 秒，并确认上一轮实时流已结束。';pidTestText('车辆未进入高频采集：'+reason+'。未发送动作，不会让车辆运动。');return true;}
-  if(line.startsWith('#BTLOG,PID_TEST,')){const f=line.trim().split(',');pidTest.state=f[3]||'UNKNOWN';pidTestText(`车辆测试状态：${pidTest.state} · 状态码 ${f[4]||'—'} · 原因 ${f[5]||'—'} · 动作 ${f[6]||'—'}`);return true;}
+  if(line.startsWith('#BTLOG,PID_TEST,')){const f=line.trim().split(',');clearTimeout(pidTest.replyTimer);pidTest.pendingCommand='';pidTest.state=f[3]||'UNKNOWN';pidTestText(`车辆测试状态：${pidTest.state} · 状态码 ${f[4]||'—'} · 原因 ${f[5]||'—'} · 动作 ${f[6]||'—'}`);return true;}
   if(line.startsWith('#BTLOG,PID_BEGIN')){pidStream.stored=[];pidStream.complete=false;const announced=line.match(/count=(\d+)/);Object.assign(pidUpload,{active:true,received:0,expected:announced?Number(announced[1]):2000,startedAt:performance.now(),lastAt:performance.now(),rate:0,eta:null,complete:false});renderPidUpload();return true;}
   const live=line.startsWith('#BTLOG,PID_LIVE,'),stored=line.startsWith('#BTLOG,PID,');
   if(live||stored){

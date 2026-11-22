@@ -111,6 +111,8 @@ static volatile uint8_t s_pid_test_pending;
 static ULogPidTestRequest s_pid_test_request;
 static char s_param_reply[384];
 static uint16_t s_param_reply_len;
+static char s_pid_test_reply[160];
+static uint16_t s_pid_test_reply_len;
 static uint8_t s_param_snapshot_axis=7u;
 static uint8_t s_rx_len, s_rx_bad;
 #endif
@@ -143,16 +145,16 @@ void ULog_ReplyPidTest(uint32_t id, const char *status, uint8_t state,
                        uint8_t reason, uint8_t action)
 {
 #if (ULOG_PID_BURST_ENABLE != 0)
-    char line[128];
     int n;
     if (!status) status = "ERROR";
-    n = snprintf(line, sizeof(line), "#BTLOG,PID_TEST,%lu,%s,%u,%u,%u\r\n",
+    /* Keep the reply until it is accepted by the UART queue.  A direct
+     * best-effort write loses RESET/STARTED replies whenever the ordinary
+     * logger has temporarily filled the 230400-baud queue. */
+    if (s_pid_test_reply_len) return;
+    n = snprintf(s_pid_test_reply, sizeof(s_pid_test_reply), "#BTLOG,PID_TEST,%lu,%s,%u,%u,%u\r\n",
                  (unsigned long)id, status, (unsigned)state,
                  (unsigned)reason, (unsigned)action);
-    if (n > 0 && (size_t)n < sizeof(line)) {
-        if (!ulog_try_write((const uint8_t *)line, (uint16_t)n, 256u))
-            g_ulog_tx_error_count++;
-    }
+    if (n > 0 && (size_t)n < sizeof(s_pid_test_reply)) s_pid_test_reply_len=(uint16_t)n;
 #else
     (void)id; (void)status; (void)state; (void)reason; (void)action;
 #endif
@@ -503,6 +505,10 @@ static void pid_commands(void)
         if (ulog_try_write((uint8_t *)s_param_reply,s_param_reply_len,0u)) s_param_reply_len=0u;
         else return;
     }
+    if (s_pid_test_reply_len) {
+        if (ulog_try_write((uint8_t *)s_pid_test_reply,s_pid_test_reply_len,0u)) s_pid_test_reply_len=0u;
+        else return;
+    }
     while (s_rx_tail != s_rx_head && budget--) {
         ch=(char)s_rx_queue[s_rx_tail];s_rx_tail=(uint8_t)((s_rx_tail+1u)&127u);
         if (ch=='\r') continue;
@@ -554,6 +560,8 @@ static void pid_commands(void)
     }
     if (s_param_reply_len && ulog_try_write((uint8_t *)s_param_reply,s_param_reply_len,0u))
         s_param_reply_len=0u;
+    if (s_pid_test_reply_len && ulog_try_write((uint8_t *)s_pid_test_reply,s_pid_test_reply_len,0u))
+        s_pid_test_reply_len=0u;
 }
 #ifdef ULOG_TEST
 void ULog_TestRx(const char *text)
@@ -748,6 +756,7 @@ void ULog_Init(void)
 #if (ULOG_PID_BURST_ENABLE != 0)
     s_pid_count=0u; s_pid_active=0u; s_pid_pending=0u;
     s_pid_test_pending=0u;
+    s_pid_test_reply_len=0u;
 #if !defined(ULOG_TEST)
     (void)HAL_UART_Receive_IT(&s_huart2,&s_rx_byte,1u);
 #endif

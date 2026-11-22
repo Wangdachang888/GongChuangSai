@@ -1,5 +1,11 @@
 # AI 维护变更日志
 
+## 2026-11-22：修复 PID_TEST 回复在日志拥堵时丢失
+
+- `PID_TEST` 的 `READY`、`NOT_READY`、`STARTED`、`STOPPED` 和 `STATUS` 回复改为可靠排队，UART 队列暂满时保留并重试，不再静默丢包。
+- 网页对 RESET/STOP/STATUS 回复增加 2 秒超时提示；超时会明确指出没有收到车辆应答，不再显示无限等待。
+- 验证：`node viewer/build.cjs`、`node viewer/test.cjs`、`tests/ulog/run.ps1 -Compiler D:\minGW\mingw64\bin\gcc.exe`、`git diff --check` PASS。未烧录，BT10 实车验证 NOT_RUN。
+
 ## 2026-11-22：修复 PID 高频会话 ARM 握手被整车日志拥堵阻塞
 
 - PID 高频会话期间暂停同一 USART2 上低优先级的 43 列整车日志，保留 200 Hz 二进制 PID 实时帧，避免 230400 波特率下队列持续拥堵。
