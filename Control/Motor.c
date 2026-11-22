@@ -171,7 +171,6 @@ void Motor_Init(Motor_t *motor,
                 int8_t motor_dir, int8_t enc_dir)
 {
     motor_dwt_init();
-    motor_encoder_exti_init(enc_tim);
 
     /* 绑定硬件资源 */
     motor->pwm_tim1  = pwm_tim1;
@@ -183,6 +182,7 @@ void Motor_Init(Motor_t *motor,
     motor->enc_tim   = enc_tim;
     motor->motor_dir = motor_dir;
     motor->enc_dir   = enc_dir;
+    motor_encoder_exti_init(enc_tim);
 
     /* 状态初始化 */
     motor->enc_last_cnt = 0;
