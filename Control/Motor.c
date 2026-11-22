@@ -19,6 +19,74 @@
 #include "motor.h"
 #include <math.h>
 
+/* M/T thresholds remain configurable until measured on the vehicle. */
+#ifndef MOTOR_MT_ENTER_COUNTS
+#define MOTOR_MT_ENTER_COUNTS 2u
+#endif
+#ifndef MOTOR_MT_EXIT_COUNTS
+#define MOTOR_MT_EXIT_COUNTS 4u
+#endif
+#ifndef MOTOR_MT_TIMEOUT_MS
+#define MOTOR_MT_TIMEOUT_MS 120u
+#endif
+#ifndef MOTOR_ENCODER_EDGE_COUNTS
+#define MOTOR_ENCODER_EDGE_COUNTS 4.0f /* TI12 counts per CH1 rising edge. */
+#endif
+
+static uint8_t s_dwt_ready;
+
+static void motor_dwt_init(void)
+{
+    if (s_dwt_ready) return;
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CYCCNT = 0u;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    s_dwt_ready = 1u;
+}
+
+static uint32_t motor_now_cycles(void)
+{
+    return DWT->CYCCNT;
+}
+
+static void motor_encoder_exti_init(TIM_HandleTypeDef *enc_tim)
+{
+    uint32_t line;
+    uint32_t exticr_index;
+    uint32_t exticr_shift;
+    uint32_t port_code;
+    IRQn_Type irqn;
+
+    __HAL_RCC_SYSCFG_CLK_ENABLE();
+    if (enc_tim->Instance == TIM2) { line=15u; port_code=0u; irqn=EXTI15_10_IRQn; }
+    else if (enc_tim->Instance == TIM3) { line=4u; port_code=1u; irqn=EXTI4_IRQn; }
+    else if (enc_tim->Instance == TIM4) { line=6u; port_code=1u; irqn=EXTI9_5_IRQn; }
+    else if (enc_tim->Instance == TIM5) { line=0u; port_code=0u; irqn=EXTI0_IRQn; }
+    else return;
+
+    exticr_index = line / 4u;
+    exticr_shift = (line % 4u) * 4u;
+    SYSCFG->EXTICR[exticr_index] &= ~(0x0fu << exticr_shift);
+    SYSCFG->EXTICR[exticr_index] |= port_code << exticr_shift;
+    EXTI->IMR |= (1u << line);
+    EXTI->RTSR |= (1u << line);
+    EXTI->FTSR &= ~(1u << line);
+    EXTI->PR = (1u << line);
+    HAL_NVIC_SetPriority(irqn, 5u, 0u);
+    HAL_NVIC_EnableIRQ(irqn);
+}
+
+void Motor_EncoderEdgeIrq(Motor_t *motor)
+{
+    uint32_t now;
+    if (!motor || !s_dwt_ready) return;
+    now = DWT->CYCCNT;
+    motor->edge_prev_cycles = motor->edge_last_cycles;
+    motor->edge_last_cycles = now;
+    motor->edge_direction = (motor->enc_tim->Instance->CR1 & TIM_CR1_DIR) ? -1 : 1;
+    motor->edge_sequence++;
+}
+
 /* ---------------- 前馈与死区 ---------------- */
 #ifndef MOTOR_FF_GAIN
 #define MOTOR_FF_GAIN       0.30f   /* 每 1 脉冲/秒 对应的 output（满量程 1000） */
@@ -78,12 +146,15 @@ const MotorControlInfo *Motor_GetControlInfo(void)
 static int32_t Encoder_ReadDelta(Motor_t *motor)
 {
     int32_t now_cnt = (int32_t)__HAL_TIM_GET_COUNTER(motor->enc_tim);
-    int32_t delta = now_cnt - motor->enc_last_cnt;
+    int32_t delta;
 
-    if (delta > 32767) {
-        delta -= 65536;
-    } else if (delta < -32768) {
-        delta += 65536;
+    /* TIM2/TIM5 are 32-bit; TIM3/TIM4 are 16-bit. Use the actual counter
+     * width so a wrap is interpreted as a small signed movement. */
+    if (motor->enc_tim->Instance == TIM2 || motor->enc_tim->Instance == TIM5) {
+        delta = (int32_t)((uint32_t)now_cnt - (uint32_t)motor->enc_last_cnt);
+    } else {
+        delta = (int32_t)(int16_t)(uint16_t)((uint16_t)now_cnt -
+                                              (uint16_t)motor->enc_last_cnt);
     }
     motor->enc_last_cnt = now_cnt;
     return delta;
@@ -99,6 +170,8 @@ void Motor_Init(Motor_t *motor,
                 float kp, float ki, float kd,
                 int8_t motor_dir, int8_t enc_dir)
 {
+    motor_dwt_init();
+
     /* 绑定硬件资源 */
     motor->pwm_tim1  = pwm_tim1;
     motor->pwm_ch1   = pwm_ch1;
@@ -109,6 +182,7 @@ void Motor_Init(Motor_t *motor,
     motor->enc_tim   = enc_tim;
     motor->motor_dir = motor_dir;
     motor->enc_dir   = enc_dir;
+    motor_encoder_exti_init(enc_tim);
 
     /* 状态初始化 */
     motor->enc_last_cnt = 0;
@@ -129,6 +203,12 @@ void Motor_Init(Motor_t *motor,
     motor->acc_cnt = 0;
     motor->acc_ms = 0u;
     motor->speed_lpf = 0.0f;
+    motor->edge_prev_cycles = 0u;
+    motor->edge_last_cycles = 0u;
+    motor->edge_sequence = 0u;
+    motor->edge_direction = 0;
+    motor->edge_seen_sequence = 0u;
+    motor->mt_mode = 0u;
 
     motor->output_max = PID_OUTPUT_MAX;
     motor->integral_max = PID_OUTPUT_MAX * 0.8f;
@@ -184,7 +264,37 @@ void Motor_Update(Motor_t *motor, float dt)
     }
 
     dtm = (float)motor->acc_ms * 0.001f;
+    motor->edge_count_snapshot = (uint16_t)(motor->acc_cnt < 0 ?
+        -motor->acc_cnt : motor->acc_cnt);
+    if (motor->mt_mode == 0u &&
+        motor->edge_count_snapshot <= MOTOR_MT_ENTER_COUNTS)
+        motor->mt_mode = 1u;
+    else if (motor->mt_mode != 0u &&
+             motor->edge_count_snapshot >= MOTOR_MT_EXIT_COUNTS)
+        motor->mt_mode = 0u;
+
     raw = (float)motor->acc_cnt / dtm * (float)motor->enc_dir;
+
+    if (motor->mt_mode != 0u) {
+        uint32_t seq = motor->edge_sequence;
+        uint32_t last = motor->edge_last_cycles;
+        uint32_t prev = motor->edge_prev_cycles;
+        uint32_t age = motor_now_cycles() - last;
+        uint32_t period = last - prev;
+        float age_s = (float)age / (float)SystemCoreClock;
+        float period_s = (float)period / (float)SystemCoreClock;
+        if (seq >= 2u && period != 0u && period_s > 0.0f &&
+            age_s <= (float)MOTOR_MT_TIMEOUT_MS * 0.001f) {
+            /* One CH1 rising edge is one quarter of TI12 effective counts. */
+            raw = MOTOR_ENCODER_EDGE_COUNTS / period_s *
+                  (float)motor->edge_direction * (float)motor->enc_dir;
+        } else if (age_s > (float)MOTOR_MT_TIMEOUT_MS * 0.001f) {
+            raw = 0.0f;
+        }
+        /* A repeated/out-of-order timestamp never becomes a fake T estimate;
+         * retain this window's M estimate until a valid edge period arrives. */
+        motor->edge_seen_sequence = seq;
+    }
 
     motor->acc_cnt = 0;
     motor->acc_ms  = 0u;
@@ -335,6 +445,12 @@ void Motor_Stop(Motor_t *motor)
     motor->acc_cnt = 0;
     motor->acc_ms = 0u;
     motor->speed_lpf = 0.0f;
+    motor->edge_prev_cycles = 0u;
+    motor->edge_last_cycles = 0u;
+    motor->edge_sequence = 0u;
+    motor->edge_direction = 0;
+    motor->edge_seen_sequence = 0u;
+    motor->mt_mode = 0u;
 
     __HAL_TIM_SET_COMPARE(motor->pwm_tim1, motor->pwm_ch1, 0);
     __HAL_TIM_SET_COMPARE(motor->pwm_tim2, motor->pwm_ch2, 0);

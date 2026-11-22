@@ -16,6 +16,16 @@
 - 新增主机二轮回归：`TEST_RESET → START → PID_ARMED → TEST` 完成一轮后再次 RESET/START；比赛流程、TIM6、电机默认 PID、USART3 和底盘调度未修改。
 - 主机 `node viewer/build.cjs`、`node viewer/test.cjs`、`tests/ulog/run.ps1 -Compiler D:\minGW\mingw64\bin\gcc.exe`、`tests/race/run.ps1 -Compiler D:\minGW\mingw64\bin\gcc.exe`、`git diff --check` PASS。Keil 编译、烧录、BT10 实车连续轮次和机械安全验收仍为 `NOT_RUN`。
 
+## 35. 四轮 M/T 混合测速（2026-11-22）
+
+- `Control/Motor.c/.h` 保留 TIM2/TIM3/TIM4/TIM5 TI12 编码器接口，在各 CH1 引脚增加 EXTI 上升沿时间戳；ISR 只记录 DWT `CYCCNT`、方向和序号，测速换算仍在 `Motor_Update`。
+- 低速采用 T 法、高速采用 M 法，默认进入/退出阈值为 5 ms 窗口绝对计数 `<=2` / `>=4`，无有效边沿或超过 120 ms 超时判零；异常时间戳回退当前 M 估计。阈值与超时可通过宏覆盖，尚未实车标定。
+- `Encoder_ReadDelta` 按 TIM2/TIM5 32 位、TIM3/TIM4 16 位分别做有符号回绕差分；未改 PID、前馈、死区、输出限幅、运动学、比赛状态机或编码器方向。
+- 新增 `tests/motor_mt/test_mt.py` 合成测试，覆盖正反向、16/32 位回绕、切换滞回、异常时间戳与停脉冲超时；结果 PASS 仅代表主机算法检查，实机 NOT_RUN。
+- `tests/ulog/run.ps1` 固定其旧三档 PID 序列测试使用 `APP_PID_TEST_FREQUENCY=0`，并修正 PowerShell 预处理冲突检查的错误流处理，使现有 ULog 回归在当前频域默认配置下可执行。
+- `tests/race/run.ps1` PASS；`tests/ulog/run.ps1` PASS；Keil ArmCC 5.06 Rebuild PASS（0 error/0 warning）。未烧录、未执行编码器边沿/低速实车验证。
+
+
 ## 2026-11-22：PID_TEST 回复可靠重试与网页超时
 
 - 车辆对 PID_TEST 的控制回复不再使用一次性 best-effort 发送；USART2 队列拥堵时会保留回复并在主循环重试。
@@ -56,6 +66,7 @@
 - 测试进入终态后自动停止 PID Burst，继续走既有停车上传；`TEST_RESET` 在终态、零目标/零输出、低轮速且连续停车 500 ms 后重新装载，不复位 MCU、不改 PID、不自动写参数。
 - 网页 PID 页新增动作选择、准备下一轮、开始、停止、状态按钮，并自动发送 `@PID START` 后再发送动作命令；收到 `PID_END` 后提示可开始下一轮。网页日志源仍为只读，必须直连 BT10。
 - 主机验证：`tests/ulog/run.ps1`、`tests/race/run.ps1`、`node viewer/build.cjs`、`node viewer/test.cjs`、`git diff --check` PASS。Keil 编译、蓝牙实车启动/停止/多轮上传和机械安全验收 NOT_RUN。
+
 
 ## 34. 频域测试动作（2026-11-22）
 

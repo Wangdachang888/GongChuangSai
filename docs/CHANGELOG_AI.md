@@ -15,6 +15,14 @@
 - 新增二轮主机回归，覆盖第一轮结束后 RESET/START 再次收到 ARM；未改变比赛流程、TIM6、电机默认 PID、USART3 或底盘调度。
 - 验证：`node viewer/build.cjs`、`node viewer/test.cjs`、`tests/ulog/run.ps1 -Compiler D:\minGW\mingw64\bin\gcc.exe`、`tests/race/run.ps1 -Compiler D:\minGW\mingw64\bin\gcc.exe`、`git diff --check` PASS。Keil/BT10 实车连续测试 NOT_RUN。
 
+## 2026-11-22：四轮 M/T 混合测速改造
+
+- 保留 TIM2/TIM3/TIM4/TIM5 的 TI12 编码器模式；使用编码器 CH1 的 EXTI 上升沿配合 Cortex-M4 DWT `CYCCNT` 记录高精度边沿时间，ISR 不做浮点运算。
+- 在 `Motor_Update` 增加可配置 M/T 滞回：默认 5 ms 窗口 `<=2` 计数进入 T 法、`>=4` 计数回到 M 法，边沿超时 120 ms 判零，异常周期回退 M 法；修正 16 位/32 位计数器跨界差分。
+- 未修改 PID、前馈、死区、输出限幅、目标斜坡、PWM、编码器方向、底盘运动学或比赛状态机。
+- 新增主机合成测试 `tests/motor_mt/test_mt.py`；Race/ULog 回归与 Keil ArmCC Rebuild 均通过。实机测速质量、EXTI 边沿完整性和阈值标定仍需人工验证。
+
+
 ## 2026-11-22：修复 PID_TEST 回复在日志拥堵时丢失
 
 - `PID_TEST` 的 `READY`、`NOT_READY`、`STARTED`、`STOPPED` 和 `STATUS` 回复改为可靠排队，UART 队列暂满时保留并重试，不再静默丢包。
@@ -42,6 +50,7 @@
 - 新增兼容命令 `@PID CONFIG <id> <revision> <axis> <period_ms> <integral_max> <output_max> <deadzone> <ff_gain>`。只允许 FL/FR/RL/RR 速度环，周期限制 1…20 ms 且为整数，输出/积分/死区/前馈均做范围校验；停车、零输出、低速连续 500 ms 和版本校验沿用原门控，参数只写 RAM。
 - 网页 PID 页增加单轮控制配置和四轮统一配置的一键写入，并对每轮读回、版本和最终值复核；旧 `@PID SET/GET` 保持兼容，位置环仍只写 Kp/Ki/Kd。
 - 主机验证：`tests/ulog/run.ps1`、`tests/race/run.ps1`、`node viewer/build.cjs`、`node viewer/test.cjs`、`git diff --check` PASS；UV4 命令返回 0，PID_Test 输出已更新。BT10 实机写入、参数效果和比赛机械验收 NOT_RUN。
+
 
 ## 2026-11-22：增加伯德图专用独立测试动作
 

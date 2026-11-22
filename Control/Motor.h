@@ -45,6 +45,14 @@ typedef struct {
     uint16_t acc_ms;           /* 窗口已累计时间 */
     float    speed_lpf;        /* 低通后的实测速度 */
     float output_max;
+    /* M/T estimator state; edge timestamps are DWT cycle counts. */
+    volatile uint32_t edge_prev_cycles;
+    volatile uint32_t edge_last_cycles;
+    volatile uint32_t edge_sequence;
+    volatile int8_t edge_direction;
+    uint16_t edge_count_snapshot;
+    uint32_t edge_seen_sequence;
+    uint8_t mt_mode;
     /* Runtime speed-loop configuration; defaults are initialized in Motor_Init. */
     uint16_t speed_window_ms;
     float ff_gain;
@@ -73,6 +81,9 @@ void Motor_SetTargetSpeed(Motor_t *motor, float target_speed);
 void Motor_Update(Motor_t *motor, float dt);
 void Motor_Stop(Motor_t *motor);
 float Motor_GetSpeed(Motor_t *motor);
+
+/* Called only by encoder CH1 EXTI handlers; no floating point. */
+void Motor_EncoderEdgeIrq(Motor_t *motor);
 
 #endif
 

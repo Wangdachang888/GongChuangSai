@@ -52,7 +52,7 @@ Path("tmp/runtime_pid_test.c").write_text(head+extra+constants+stop+block+inputs
 '@ | python -
     if ($LASTEXITCODE) { throw 'Runtime PID fixture extraction failed' }
     foreach ($profile in @('forward','lateral','reverse','lateralreverse','custom','badorder','badnan','badlimit','badzero','creep','creep012')) {
-        $testArgs = @('-DAPP_PID_TEST_ENABLE=1','-DAPP_RUN_MODE=4','-DAPP_PID_TEST_HOST')
+        $testArgs = @('-DAPP_PID_TEST_ENABLE=1','-DAPP_RUN_MODE=4','-DAPP_PID_TEST_HOST','-DAPP_PID_TEST_FREQUENCY=0')
         if ($profile -eq 'lateral') { $testArgs += '-DAPP_PID_TEST_AXIS=1' }
         if ($profile -eq 'reverse') { $testArgs += '-DAPP_PID_TEST_DIRECTION=-1' }
         if ($profile -eq 'lateralreverse') { $testArgs += @('-DAPP_PID_TEST_AXIS=1','-DAPP_PID_TEST_DIRECTION=-1') }
